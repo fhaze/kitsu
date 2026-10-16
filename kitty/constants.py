@@ -27,6 +27,8 @@ _plat = sys.platform.lower()
 is_macos: bool = 'darwin' in _plat
 is_freebsd: bool = 'freebsd' in _plat
 is_windows: bool = _plat == 'win32'
+display_name: str = 'Kitsu' if is_windows else appname
+cli_name: str = 'kitsu' if is_windows else appname
 is_running_from_develop: bool = False
 RC_ENCRYPTION_PROTOCOL_VERSION = '1'
 website_base_url = 'https://sw.kovidgoyal.net/kitty/'
@@ -94,12 +96,12 @@ def kitty_exe() -> str:
         for candidate in filter(None, items):
             if candidate not in seen:
                 seen.add(candidate)
-                if os.access(os.path.join(candidate, 'kitty' + exe_suffix), os.X_OK):
+                if os.access(os.path.join(candidate, cli_name + exe_suffix), os.X_OK):
                     rpath = candidate
                     break
         else:
             raise RuntimeError('kitty binary not found')
-    return os.path.join(rpath, 'kitty' + exe_suffix)
+    return os.path.join(rpath, cli_name + exe_suffix)
 
 
 @run_once
@@ -178,7 +180,7 @@ def wakeup_io_loop() -> None:
 
 
 terminfo_dir = os.path.join(kitty_base_dir, 'terminfo')
-logo_png_file = os.path.join(kitty_base_dir, 'logo', 'kitty.png')
+logo_png_file = os.path.join(kitty_base_dir, 'logo', 'kitsu.png' if is_windows else 'kitty.png')
 beam_cursor_data_file = os.path.join(kitty_base_dir, 'logo', 'beam-cursor.png')
 shell_integration_dir = os.path.join(kitty_base_dir, 'shell-integration')
 fonts_dir = os.path.join(kitty_base_dir, 'fonts')

@@ -18,7 +18,8 @@ if getattr(sys, 'running_from_setup', False):
     def shlex_split(text: str) -> Iterator[str]:
         yield from psplit(text)
 else:
-    from kitty.constants import appname, is_macos
+    from kitty.constants import cli_name as appname
+    from kitty.constants import is_macos
     from kitty.utils import shlex_split as ksplit
 
     def shlex_split(text: str) -> Iterator[str]:
@@ -557,11 +558,11 @@ type=bool-set
             'ans',
             OPTIONS.format(
                 appname=appname,
-                conf_name=appname,
+                conf_name='kitty',
                 listen_on_defn=listen_on_defn,
                 grab_keyboard_docs=grab_keyboard_docs,
                 wait_for_single_instance_defn=wait_for_single_instance_defn,
-                config_help=CONFIG_HELP.format(appname=appname, conf_name=appname),
+                config_help=CONFIG_HELP.format(appname='kitty', conf_name='kitty'),
             ),
         )
     ans: str = getattr(kitty_options_spec, 'ans')

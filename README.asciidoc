@@ -1,16 +1,75 @@
-= kitty - the fast, feature-rich, cross-platform, GPU based terminal
+= Kitsu — a GPU-accelerated terminal for Windows
 
-If you live in the terminal, *kitty* is made for **you**!
+image:logo/kitsu.png[Kitsu, width=240]
 
-See https://sw.kovidgoyal.net/kitty/[the kitty website].
+*Kitsu* is a Windows-focused fork of https://github.com/kovidgoyal/kitty[Kitty],
+with native Win32 windows, ConPTY shells, and WSL integration. It brings Kitty's
+GPU rendering, tabs, layouts, kittens, and terminal protocols to Windows.
 
-image:https://github.com/kovidgoyal/kitty/workflows/CI/badge.svg["Build status", link="https://github.com/kovidgoyal/kitty/actions?query=workflow%3ACI"]
+This is an independent fork maintained by https://github.com/fhaze[FHaze], not
+an official Windows release of Kitty. Kitty was created by Kovid Goyal; upstream
+copyright notices and the link:LICENSE[GPLv3 license] are retained.
 
-https://sw.kovidgoyal.net/kitty/faq/[Frequently Asked Questions]
+== Install
 
-To ask other questions about kitty usage, use either the https://github.com/kovidgoyal/kitty/discussions/[discussions on GitHub] or the
-https://www.reddit.com/r/KittyTerminal[Reddit community]
+Download the Windows x86_64 installer or portable ZIP from
+https://github.com/fhaze/kitty/releases[Releases] (Windows 10 1809 or newer).
 
-Packaging status in various repositories:
+* `kitsu-<version>-windows-x86_64-setup.exe`: recommended. Adds Kitsu to the Start
+  menu and optionally to PATH, and can install the Linux `kitten` helper into WSL.
+* `kitsu-<version>-windows-x86_64.zip`: portable. Extract it and run `bin/kitsu.exe`.
+  WSL helpers are distributed through the installer, not as separate downloads.
 
-image:https://repology.org/badge/vertical-allrepos/kitty-terminal.svg?columns=3&header=kitty["Packaging status", link="https://repology.org/project/kitty-terminal/versions"]
+Run `kitsu` from cmd or PowerShell after enabling the installer's PATH task.
+The `kitsu.com` console shim makes command-line invocations wait and preserves
+their output; `kitsu.exe` launches the GUI without an extra console window.
+
+[source,powershell]
+----
+kitsu --version
+kitsu pwsh.exe
+kitsu cmd.exe
+kitsu +wsl-setup
+kitsu +health-check --mode=quick
+kitsu +update
+----
+
+`+update` works for installer-managed installations, not portable ZIPs.
+For WSL, use the bundled Linux `kitten` inside the distribution, not the Windows
+`kitten.exe`; run `kitsu +wsl-setup` to install it.
+
+== Existing Kitty-for-Windows users
+
+The installer keeps the same application ID, install directory, and selected
+tasks, so Kitsu upgrades existing installations in place. `kitty.exe` and
+`kitty.com` remain compatibility aliases for scripts and shell integrations.
+
+Configuration remains in `%APPDATA%\kitty\kitty.conf` (or `KITTY_CONFIG_DIRECTORY`).
+The `kitty` Python package, `kitten` command, `KITTY_*` environment variables,
+`xterm-kitty` terminfo, and Kitty protocols keep their names for compatibility.
+Existing configuration and WSL setups do not need to be renamed.
+
+== Documentation and support
+
+* link:docs/windows-health-check.rst[Windows diagnostics]
+* https://sw.kovidgoyal.net/kitty/[Upstream Kitty documentation] for shared
+  configuration, key bindings, kittens, and protocols. Where it says `kitty`,
+  use `kitsu` on Windows; configuration keys and filenames stay unchanged.
+* https://github.com/fhaze/kitty/issues[Kitsu issue tracker] for Windows/fork bugs.
+  Please do not send fork-specific Windows reports to upstream Kitty.
+
+== Build from source
+
+Build natively using MSYS2 UCRT64, GCC, Python, and Go:
+
+[source,sh]
+----
+./build-windows.sh --install-deps  # first build on a fresh machine
+./build-windows.sh                 # subsequent builds
+----
+
+See link:AGENTS.md[Windows build notes] for toolchain requirements and environment
+details. Outputs are under `windows-package/`, including the Kitsu ZIP and, when
+Inno Setup is installed, the setup executable. CI builds and scans Windows
+packages only. Non-Windows source is retained from upstream, not shipped as a
+supported Kitsu release.

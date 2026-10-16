@@ -1,1 +1,28 @@
-GLFW_ICON ICON "logo/kitty.ico"
+#include <winver.h>
+#define STRINGIFY_IMPL(x) #x
+#define STRINGIFY(x) STRINGIFY_IMPL(x)
+
+GLFW_ICON ICON "logo/kitsu.ico"
+
+1 VERSIONINFO
+FILEVERSION KITTY_FILE_VERSION
+PRODUCTVERSION KITTY_FILE_VERSION
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "FHaze"
+            VALUE "FileDescription", "Kitsu terminal emulator"
+            VALUE "FileVersion", STRINGIFY(KITTY_VERSION)
+            VALUE "ProductName", "Kitsu"
+            VALUE "ProductVersion", STRINGIFY(KITTY_VERSION)
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

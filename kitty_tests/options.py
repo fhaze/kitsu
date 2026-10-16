@@ -249,7 +249,7 @@ def launcher(self):
 
     kexe = kitty_exe()
     cfgdir = None
-    console_shim = os.path.join(os.path.dirname(kexe), 'kitty.com') if is_windows else ''
+    console_shim = os.path.splitext(kexe)[0] + '.com' if is_windows else ''
 
     def get_report(cmdline: str, launch_services=False, config_dir: str = ''):
         nonlocal cfgdir
@@ -262,12 +262,12 @@ def launcher(self):
         cp = subprocess.run([kexe, '+testing-launcher-code'] + args, env=env, stdout=subprocess.PIPE)
         self.assertEqual(cp.returncode, 0)
         if console_shim:
-            # kitty.com must forward the command line to kitty.exe unchanged
+            # The console shim must forward the command line to the launcher unchanged
             # and wait for it, returning its exit code
             cps = subprocess.run([console_shim, '+testing-launcher-code'] + args, env=env, stdout=subprocess.PIPE)
             self.assertEqual(cps.returncode, 0)
             self.assertEqual(
-                cp.stdout.replace(b'\\', b'/'), cps.stdout.replace(b'\\', b'/'), f'kitty.com output differs from kitty.exe for command line: {cmdline}'
+                cp.stdout.replace(b'\\', b'/'), cps.stdout.replace(b'\\', b'/'), f'{console_shim} output differs from {kexe} for command line: {cmdline}'
             )
         ans = {}
         for line in cp.stdout.decode().split('\n'):

@@ -24,7 +24,7 @@ jobs:
           - name: Download Windows package
             uses: actions/download-artifact@v8.0.1
             with:
-              name: kitty-windows-x86_64
+              name: kitsu-windows-x86_64
               path: windows-artifacts
 
           - name: Download Windows dependency inventory
@@ -36,17 +36,17 @@ jobs:
           - name: Extract the portable package
             run: |
               set -euo pipefail
-              packages=(windows-artifacts/kitty-*-windows-*.zip)
+              packages=(windows-artifacts/kitsu-*-windows-*.zip)
               test "${#packages[@]}" -eq 1
               unzip -q "${packages[0]}" -d windows-package
-              test -f windows-package/kitty/bin/kitty.exe
+              test -f windows-package/kitsu/bin/kitty.exe
 
           - name: Inventory packaged binaries (including WSL kittens)
             run: |
               set -euo pipefail
-              version=$(sha256sum windows-artifacts/kitty-*-windows-*.zip | cut -d' ' -f1)
-              "${{ steps.syft.outputs.cmd }}" dir:windows-package/kitty --source-name kitty-windows --source-version "$version" -o syft-json=windows-binaries.syft.json
-              python3 .github/workflows/windows_dependencies.py --verify-scan-inputs windows-artifacts/kitty-*-windows-*.zip windows-inventory/windows-runtime.cdx.json windows-binaries.syft.json windows-inventory/windows-runtime.vex.json
+              version=$(sha256sum windows-artifacts/kitsu-*-windows-*.zip | cut -d' ' -f1)
+              "${{ steps.syft.outputs.cmd }}" dir:windows-package/kitsu --source-name kitsu-windows --source-version "$version" -o syft-json=windows-binaries.syft.json
+              python3 .github/workflows/windows_dependencies.py --verify-scan-inputs windows-artifacts/kitsu-*-windows-*.zip windows-inventory/windows-runtime.cdx.json windows-binaries.syft.json windows-inventory/windows-runtime.vex.json
 
           - name: Scan packaged binaries (including WSL kittens)
             id: binaries

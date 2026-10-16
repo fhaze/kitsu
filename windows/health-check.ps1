@@ -8,12 +8,12 @@ param(
     [ValidateRange(1, 3600)][int]$ProbeTimeout = 20
 )
 $ErrorActionPreference = 'Stop'
-$exe = Join-Path $PSScriptRoot 'kitty.exe'
+$exe = Join-Path $PSScriptRoot 'kitsu.exe'
 if (-not (Test-Path $exe)) {
-    $exe = Join-Path $PSScriptRoot '..\kitty\launcher\kitty.exe'
+    $exe = Join-Path $PSScriptRoot '..\kitty\launcher\kitsu.exe'
 }
 $process = $null
-$failure = 'Kitty runtime could not initialize. Reinstall this build or rebuild it with its matching runtime DLLs.'
+$failure = 'Kitsu runtime could not initialize. Reinstall this build or rebuild it with its matching runtime DLLs.'
 try {
     $start = New-Object System.Diagnostics.ProcessStartInfo
     $start.FileName = [IO.Path]::GetFullPath($exe)

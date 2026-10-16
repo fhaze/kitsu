@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# License: GPLv3 Copyright: 2026, Kitty contributors
+# License: GPLv3 Copyright: 2026, Kitsu contributors
 
 import argparse
 import importlib
@@ -24,7 +24,7 @@ class Probe:
     id: str
     required: bool = True
     prerequisites: tuple[str, ...] = ()
-    remediation: str = 'Rebuild or reinstall this Kitty build, then repeat the check.'
+    remediation: str = 'Rebuild or reinstall this Kitsu build, then repeat the check.'
 
 
 @dataclass
@@ -72,7 +72,7 @@ def sanitized(value: Any, secrets: tuple[str, ...] = ()) -> Any:
 def render(report: dict[str, Any], json_output: bool) -> str:
     if json_output:
         return json.dumps(report, ensure_ascii=True, indent=2) + '\n'
-    lines = [f'Kitty Windows health check ({report["mode"]}) - exit {report["exit_code"]}']
+    lines = [f'Kitsu Windows health check ({report["mode"]}) - exit {report["exit_code"]}']
     for r in report['results']:
         lines.append(f'{r["status"]:7} {r["id"]}: {r["summary"]}')
         if r['evidence']:
@@ -249,7 +249,7 @@ QUICK = (
     Probe('resources.shell-integration'),
     Probe('resources.wsl'),
     Probe('runtime.conpty', False),
-    Probe('installation.path', False, remediation='Use the matching Kitty bin directory first in PATH; do not mix versions.'),
+    Probe('installation.path', False, remediation='Use the matching Kitsu bin directory first in PATH; do not mix versions.'),
     Probe('installation.kind', False),
     Probe('installation.environment', False, remediation='Use a Windows shell with .COM and .EXE in PATHEXT to run native console helpers.'),
     Probe('configuration.parse', False, remediation='Fix configuration errors; generated includes are deliberately not executed.'),
@@ -378,7 +378,7 @@ def quick_probe(probe_id: str) -> tuple[str, str, dict[str, Any]]:
         evidence = resources(bindir, ('conpty.dll', 'OpenConsole.exe'))
         return ('WARN' if evidence['missing'] else 'PASS'), 'Bundled provider availability only; native checks exercise the selected provider.', evidence
     elif probe_id == 'installation.path':
-        for name in ('kitty.exe', 'kitty.com', 'kitten.exe'):
+        for name in ('kitsu.exe', 'kitsu.com', 'kitty.exe', 'kitty.com', 'kitten.exe'):
             found = shutil.which(name)
             evidence[name] = found
             if found and Path(found).resolve() != (bindir / name).resolve():
@@ -447,7 +447,7 @@ def positive_seconds(value: str) -> float:
 
 
 def main(args: list[str]) -> None:
-    parser = argparse.ArgumentParser(prog='kitty +health-check', description='Read-only Windows diagnostics; native mode opens an isolated test window.')
+    parser = argparse.ArgumentParser(prog='kitsu +health-check', description='Read-only Windows diagnostics; native mode opens an isolated test window.')
     parser.add_argument('--mode', choices=('quick', 'native'), default='quick', help='native includes quick diagnostics')
     parser.add_argument('--format', choices=('text', 'json'), default='text')
     parser.add_argument('--output', type=Path, help='also write the report to this file (no automatic upload)')

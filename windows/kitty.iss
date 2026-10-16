@@ -1,7 +1,7 @@
-; Inno Setup script for the Windows kitty installer.
+; Inno Setup script for the Windows Kitsu installer.
 ;
 ; Built by: python setup.py windows-package (when ISCC.exe is available), which
-; runs iscc with the defines below pointing at the windows-package\kitty tree.
+; runs iscc with the defines below pointing at the windows-package\kitsu tree.
 ;
 ; The installer is self contained and supports in-place upgrades: installing a
 ; newer version over an existing one replaces the old files, keeping the user's
@@ -11,7 +11,7 @@
   #error AppVersion must be defined, for example: iscc /DAppVersion=0.44.0 kitty.iss
 #endif
 #ifndef SourceDir
-  #define SourceDir "..\windows-package\kitty"
+  #define SourceDir "..\windows-package\kitsu"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\windows-package"
@@ -20,10 +20,10 @@
   #define Arch "x86_64"
 #endif
 #ifndef AppURL
-  #define AppURL "https://github.com/kovidgoyal/kitty"
+  #define AppURL "https://github.com/fhaze/kitty"
 #endif
-#define AppName "kitty"
-#define AppExe "bin\kitty.exe"
+#define AppName "Kitsu"
+#define AppExe "bin\kitsu.exe"
 
 [Setup]
 ; Never change the AppId, it is what lets a new installer upgrade an existing installation
@@ -31,8 +31,8 @@ AppId={{7D0F3A2B-5C4E-4F19-9B6A-2E8D1C3F5A70}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
-AppPublisher=Kovid Goyal
-AppPublisherURL=https://sw.kovidgoyal.net/kitty/
+AppPublisher=FHaze
+AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}
 AppUpdatesURL={#AppURL}/releases
 VersionInfoVersion={#AppVersion}
@@ -40,7 +40,7 @@ DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
-SetupIconFile=..\logo\kitty.ico
+SetupIconFile=..\logo\kitsu.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 ; Per-user installation by default (no UAC prompt), with the choice to install for all users
@@ -56,7 +56,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; ConPTY needs Windows 10 1809
 MinVersion=10.0.17763
 OutputDir={#OutputDir}
-OutputBaseFilename={#AppName}-{#AppVersion}-windows-{#Arch}-setup
+OutputBaseFilename=kitsu-{#AppVersion}-windows-{#Arch}-setup
 Compression=lzma2/max
 SolidCompression=yes
 LZMAUseSeparateProcess=yes
@@ -74,11 +74,14 @@ UsePreviousPrivileges=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "addtopath"; Description: "Add kitty and kitten to the &PATH"; GroupDescription: "Integration:"
+Name: "addtopath"; Description: "Add Kitsu and kitten to the &PATH"; GroupDescription: "Integration:"
 Name: "wsl"; Description: "Install the kitten command into &WSL distributions and add it to their PATH"; GroupDescription: "Integration:"; Check: WslAvailable
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [InstallDelete]
+; Remove shortcuts left by the old branding during an in-place upgrade.
+Type: files; Name: "{autoprograms}\kitty.lnk"
+Type: files; Name: "{autodesktop}\kitty.lnk"
 ; Remove the previous version before copying the new files, so that modules,
 ; DLLs and the bundled Python runtime that no longer exist do not linger
 Type: filesandordirs; Name: "{app}\bin"
@@ -94,6 +97,8 @@ Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "The fa
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Registry]
+Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\kitsu.exe"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExe}"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\kitsu.exe"; ValueType: string; ValueName: "Path"; ValueData: "{app}\bin"
 ; Lets Win+R and the start menu run "kitty" without it being on the PATH
 Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\kitty.exe"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExe}"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\kitty.exe"; ValueType: string; ValueName: "Path"; ValueData: "{app}\bin"

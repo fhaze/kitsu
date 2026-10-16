@@ -11,7 +11,8 @@ from typing import Any, NoReturn, TypeVar, cast
 
 from .cli_stub import CLIOptions
 from .conf.utils import resolve_config
-from .constants import appname, config_dir, default_pager_for_help, defconf, helper_process_popen_kwargs, is_macos, str_version, website_url
+from .constants import cli_name as appname
+from .constants import config_dir, default_pager_for_help, defconf, display_name, helper_process_popen_kwargs, is_macos, is_windows, str_version, website_url
 from .fast_data_types import parse_cli_from_spec, wcswidth
 from .options.types import Options as KittyOpts
 from .simple_cli_definitions import (
@@ -325,7 +326,8 @@ def version(add_rev: bool = False) -> str:
     if add_rev:
         if getattr(fast_data_types, 'KITTY_VCS_REV', ''):
             rev = f' ({fast_data_types.KITTY_VCS_REV[:10]})'
-    return '{} {}{} created by {}'.format(italic(appname), green(str_version), rev, title('Kovid Goyal'))
+    credit = 'Windows fork by FHaze, based on kitty by Kovid Goyal' if is_windows else 'created by Kovid Goyal'
+    return '{} {}{} {}'.format(italic(display_name), green(str_version), rev, title(credit))
 
 
 def wrap(text: str, limit: int = 80) -> Iterator[str]:
@@ -713,7 +715,7 @@ def parse_args(
     return ans, parse_cmdline(oc, disabled, ans, args=args, track_seen_options=track_seen_options)
 
 
-SYSTEM_CONF = f'/etc/xdg/{appname}/{appname}.conf'
+SYSTEM_CONF = '/etc/xdg/kitty/kitty.conf'
 
 
 def default_config_paths(conf_paths: Sequence[str]) -> tuple[str, ...]:

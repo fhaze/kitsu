@@ -450,11 +450,15 @@ handle_fast_commandline(CLISpec *cli_spec, const char *instance_group_prefix) {
     }
     if (get_bool_cli_val(cli_spec, "help")) return;
     if (get_bool_cli_val(cli_spec, "version")) {
+#ifdef _WIN32
+        printf("Kitsu %s - Windows fork by FHaze, based on kitty by Kovid Goyal\n", KITTY_VERSION);
+#else
         if (isatty(STDOUT_FILENO)) {
             printf("\x1b[3mkitty\x1b[23m \x1b[32m%s\x1b[39m created by \x1b[1;34mKovid Goyal\x1b[22;39m\n", KITTY_VERSION);
         } else {
             printf("kitty %s created by Kovid Goyal\n", KITTY_VERSION);
         }
+#endif
         exit(0);
     }
     opts.session = get_string_cli_val(cli_spec, "session");

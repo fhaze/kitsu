@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build kitty's Windows package (MSYS2 UCRT64).
+# Build Kitsu's Windows package (MSYS2 UCRT64).
 #
 # Usage:
 #   ./build-windows.sh                  build the package
@@ -60,7 +60,7 @@ inner_build() {
     log "Building (gcc $(gcc -dumpversion), go $(go env GOVERSION), python $(python -c 'import sys; print(sys.version.split()[0])'))"
     cd "$REPO_ROOT"
     python setup.py windows-package "$@"
-    log "Done: $(ls "$REPO_ROOT"/windows-package/kitty-*-windows-*.zip | tail -1)"
+    log "Done: $(ls "$REPO_ROOT"/windows-package/kitsu-*-windows-*.zip | tail -1)"
 }
 
 # --------------------------------------------------------- dependency install

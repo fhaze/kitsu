@@ -64,12 +64,12 @@ def fetch_release(ref: str) -> dict:
 def windows_setup_asset(release: dict) -> 'tuple[str, str, str]':
     tag = release.get('tag_name', '<unknown>')
     for asset in release.get('assets', ()):
-        if re.match(r'^kitty-.+-windows-x86_64-setup\.exe$', asset.get('name', '')):
+        if re.match(r'^(?:kitsu|kitty)-.+-windows-x86_64-setup\.exe$', asset.get('name', '')):
             digest = asset.get('digest') or ''
             if not digest.startswith('sha256:'):
-                raise SystemExit(f'The kitty installer in release {tag} has no SHA-256 digest, refusing to download without verification')
+                raise SystemExit(f'The Kitsu installer in release {tag} has no SHA-256 digest, refusing to download without verification')
             return asset['name'], asset['browser_download_url'], digest[len('sha256:') :]
-    raise SystemExit(f'Release {tag} contains no Windows kitty installer (kitty-*-windows-x86_64-setup.exe)')
+    raise SystemExit(f'Release {tag} contains no Windows Kitsu installer (kitsu-*-windows-x86_64-setup.exe)')
 
 
 def inno_install_prefix() -> 'str | None':
@@ -113,10 +113,10 @@ def download_with_progress(url: str, sha256: str, dest_dir: str, name: str) -> s
 
 
 USAGE = """\
-Usage: kitty +update [--fetch-version <tag|latest>]
+Usage: kitsu +update [--fetch-version <tag|latest>]
 
 Check https://github.com/fhaze/kitty/releases for a newer Windows build of
-kitty, download its installer (with SHA-256 verification) and launch it to
+Kitsu, download its installer (with SHA-256 verification) and launch it to
 upgrade this installation in place.
 
 --fetch-version  Which release to fetch: a tag such as v0.48.2-windows.12 or
@@ -149,10 +149,10 @@ def main(args: list[str]) -> None:
     # the Windows launcher always sets sys.frozen to False, so identify
     # development/source builds via kitty_run_data instead
     if run_data.get('from_source') or not run_data.get('bundle_exe_dir'):
-        raise SystemExit('kitty +update only works in installed builds, not development/source builds.')
+        raise SystemExit('kitsu +update only works in installed builds, not development/source builds.')
     if inno_install_prefix() is None:
         raise SystemExit(
-            f'This kitty was not installed with the kitty installer (portable zip or unknown location). Download the latest installer from {RELEASES_URL}'
+            f'This Kitsu was not installed with the Kitsu installer (portable zip or unknown location). Download the latest installer from {RELEASES_URL}'
         )
 
     release = fetch_release(ref)
@@ -160,12 +160,12 @@ def main(args: list[str]) -> None:
     if info is None:
         raise SystemExit(f'Release has a malformed tag: {release.get("tag_name")!r}, expected something like v0.48.2-windows.12')
     if ref == 'latest' and not is_newer(info, installed_release_info()):
-        print(f'kitty is already up to date ({installed_release_info().tag})')
+        print(f'Kitsu is already up to date ({installed_release_info().tag})')
         return
 
     name, url, sha256 = windows_setup_asset(release)
-    dest_dir = tempfile.mkdtemp(prefix='kitty-update-')
+    dest_dir = tempfile.mkdtemp(prefix='kitsu-update-')
     installer = download_with_progress(url, sha256, dest_dir, name)
-    print(f'kitty {info.tag.lstrip("v")} downloaded. Launching the installer -- it will ask to close running kitty windows; re-open kitty when it finishes.')
+    print(f'Kitsu {info.tag.lstrip("v")} downloaded. Launching the installer -- it will ask to close running Kitsu windows; re-open Kitsu when it finishes.')
     subprocess.Popen([installer])
     raise SystemExit(0)

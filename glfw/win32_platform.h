@@ -201,7 +201,7 @@ typedef VkBool32(APIENTRY *PFN_vkGetPhysicalDeviceWin32PresentationSupportKHR)(V
 #include "wgl_context.h"
 
 #if !defined(_GLFW_WNDCLASSNAME)
-#define _GLFW_WNDCLASSNAME L"kitty"
+#define _GLFW_WNDCLASSNAME L"Kitsu"
 #endif
 
 #define _glfw_dlopen(name) LoadLibraryA(name)

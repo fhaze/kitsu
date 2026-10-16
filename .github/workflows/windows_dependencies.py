@@ -79,11 +79,11 @@ def runtime_components(package: Path, msys_root: Path, package_prefix: str) -> l
 def verify_scan_inputs(archive: Path, runtime: dict[str, Any], binaries: dict[str, Any], vex: dict[str, Any]) -> None:
     with archive.open('rb') as f:
         version = hashlib.file_digest(f, 'sha256').hexdigest()
-    product = f'pkg:generic/kitty-windows@{version}'
+    product = f'pkg:generic/kitsu-windows@{version}'
     component = runtime['metadata']['component']
-    if component['purl'] != product or component['version'] != version or component['name'] != 'kitty-windows':
+    if component['purl'] != product or component['version'] != version or component['name'] != 'kitsu-windows':
         raise ValueError('The runtime inventory does not describe this ZIP')
-    if binaries['source']['name'] != 'kitty-windows' or binaries['source']['version'] != version:
+    if binaries['source']['name'] != 'kitsu-windows' or binaries['source']['version'] != version:
         raise ValueError('The binary inventory does not describe this ZIP')
     if {s['vulnerability']['name'] for s in vex['statements']} != {'CVE-2025-15367', 'CVE-2026-12345'}:
         raise ValueError('Unexpected Python security attestations')
@@ -120,7 +120,7 @@ def main() -> None:
     if go_version is None or int(go_version[1]) < 26:
         raise ValueError('The cleanup helper must use Go >= 1.26 with Windows symlink-race protection')
     artifact_version = sha256(archive)
-    product = f'pkg:generic/kitty-windows@{artifact_version}'
+    product = f'pkg:generic/kitsu-windows@{artifact_version}'
     msys_root = Path(sys.executable).parent.parent.parent
     components = runtime_components(package, msys_root, os.environ['MINGW_PACKAGE_PREFIX'])
     python = next(c for c in components if c['name'] == 'python')
@@ -131,7 +131,7 @@ def main() -> None:
                 'bomFormat': 'CycloneDX',
                 'specVersion': '1.5',
                 'version': 1,
-                'metadata': {'component': {'type': 'application', 'name': 'kitty-windows', 'version': artifact_version, 'purl': product}},
+                'metadata': {'component': {'type': 'application', 'name': 'kitsu-windows', 'version': artifact_version, 'purl': product}},
                 'components': components,
             },
             indent=2,

@@ -63,10 +63,10 @@ class WindowsDependenciesTest(unittest.TestCase):
             archive = Path(tmp) / 'kitty.zip'
             archive.write_bytes(b'tested package')
             version = hashlib.sha256(archive.read_bytes()).hexdigest()
-            product = f'pkg:generic/kitty-windows@{version}'
+            product = f'pkg:generic/kitsu-windows@{version}'
             python_product = f'pkg:generic/python@3.14.8?kitty_package={version}'
             runtime: dict[str, Any] = {
-                'metadata': {'component': {'name': 'kitty-windows', 'version': version, 'purl': product}},
+                'metadata': {'component': {'name': 'kitsu-windows', 'version': version, 'purl': product}},
                 'components': [
                     {
                         'name': 'python',
@@ -77,7 +77,7 @@ class WindowsDependenciesTest(unittest.TestCase):
                 ],
             }
             binaries: dict[str, Any] = {
-                'source': {'name': 'kitty-windows', 'version': version},
+                'source': {'name': 'kitsu-windows', 'version': version},
                 'artifacts': [{'name': 'Python', 'version': '3.14.8', 'locations': [{'path': '/bin/libpython3.14.dll'}]}],
             }
             vex: dict[str, Any] = {
