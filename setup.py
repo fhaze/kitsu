@@ -1749,7 +1749,7 @@ def build_launcher(args: Options, launcher_dir: str = '.', bundle_type: str = 's
             '--output-format=coff',
             '--include-dir=.',
             f'-DKITTY_FILE_VERSION={",".join(map(str, (*version, 0)))}',
-            f'-DKITTY_VERSION="{".".join(map(str, version))}"',
+            f'-DKITTY_VERSION={".".join(map(str, version))}',
             resource_src,
             resource_obj,
         ]
@@ -1835,6 +1835,7 @@ def bundle_windows_runtime(ddir: str, launcher_dir: str) -> None:
     from pathlib import Path
 
     from windows.python_runtime import harden_python
+
     harden_python(Path(stdlib_dest))
     compileall.compile_dir(stdlib_dest, force=True, optimize=2, quiet=1, workers=0, invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH, ddir='')
 

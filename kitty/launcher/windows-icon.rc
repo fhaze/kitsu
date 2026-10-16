@@ -1,4 +1,6 @@
 #include <winver.h>
+#define STRINGIFY_IMPL(x) #x
+#define STRINGIFY(x) STRINGIFY_IMPL(x)
 
 GLFW_ICON ICON "logo/kitsu.ico"
 
@@ -14,9 +16,9 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "FHaze"
             VALUE "FileDescription", "Kitsu terminal emulator"
-            VALUE "FileVersion", KITTY_VERSION
+            VALUE "FileVersion", STRINGIFY(KITTY_VERSION)
             VALUE "ProductName", "Kitsu"
-            VALUE "ProductVersion", KITTY_VERSION
+            VALUE "ProductVersion", STRINGIFY(KITTY_VERSION)
         END
     END
     BLOCK "VarFileInfo"
