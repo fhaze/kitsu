@@ -16,6 +16,7 @@ The fast, feature-rich, GPU based terminal emulator.
     performance
     changelog
     integrations
+    windows-health-check
     protocol-extensions
     custom-shaders
     press-mentions

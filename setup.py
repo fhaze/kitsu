@@ -2553,6 +2553,7 @@ def package(args: Options, bundle_type: str, do_build_all: bool = True) -> None:
             os.chmod(path, 0o755 if should_be_executable(path) else 0o644)
     if bundle_type == 'windows-package':
         # must happen before building the shaders, which runs the packaged kitty.exe
+        shutil.copy2(os.path.join('windows', 'health-check.ps1'), launcher_dir)
         bundle_windows_runtime(ddir, launcher_dir)
         bundle_conpty(launcher_dir)
         bundle_slangc(launcher_dir)

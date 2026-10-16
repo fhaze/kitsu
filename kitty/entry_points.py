@@ -91,6 +91,12 @@ def wsl_setup(args: list[str]) -> None:
     wsl_main(args)
 
 
+def health_check(args: list[str]) -> None:
+    from kitty.health_check import main
+
+    main(args)
+
+
 def run_kitten(args: list[str]) -> None:
     try:
         kitten = args[1]
@@ -140,6 +146,7 @@ namespaced_entry_points['open'] = open_urls
 namespaced_entry_points['kitten'] = run_kitten
 namespaced_entry_points['shebang'] = shebang
 namespaced_entry_points['wsl-setup'] = wsl_setup
+namespaced_entry_points['health-check'] = health_check
 
 
 def setup_openssl_environment(ext_dir: str) -> None:

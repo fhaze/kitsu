@@ -3026,6 +3026,11 @@ pygpu_driver_version_string(PyObject *self UNUSED, PyObject *args UNUSED) {
     return PyUnicode_FromString(global_state.gl_version ? gl_version_string() : "");
 }
 
+static PyObject *
+pygpu_renderer_string(PyObject *self UNUSED, PyObject *args UNUSED) {
+    return PyUnicode_FromString(global_state.gl_version ? (const char*)glGetString(GL_RENDERER) : "");
+}
+
 static void
 free_custom_shader_pipeline(CustomShaderPipeline *p) {
     for (size_t i = 0; i < p->num_groups; i++) {
@@ -3344,6 +3349,7 @@ static PyMethodDef module_methods[] = {
     M(sprite_map_set_limits, METH_VARARGS),
     MW(create_vao, METH_NOARGS),
     MW(gpu_driver_version_string, METH_NOARGS),
+    MW(gpu_renderer_string, METH_NOARGS),
     MW(bind_vertex_array, METH_O),
     MW(unbind_vertex_array, METH_NOARGS),
     MW(unmap_vao_buffer, METH_VARARGS),
