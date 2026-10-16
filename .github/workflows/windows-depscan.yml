@@ -54,6 +54,31 @@ jobs:
               add-cpes-if-none: true
               by-cve: true
 
+          - name: Summarize vulnerability reports
+            if: always()
+            run: |
+              python3 - <<'PY'
+              import json
+              import os
+              from pathlib import Path
+
+              lines = ['## Windows dependency scan', '', '| Report | Package | Version | Vulnerability | Severity | Fixed in |', '| --- | --- | --- | --- | --- | --- |']
+              for path in sorted(Path('.').glob('windows-*.grype.json')):
+                  report = json.loads(path.read_text())
+                  rows = set()
+                  for match in report['matches']:
+                      package, vuln = match['artifact'], match['vulnerability']
+                      rows.add((package['name'], package['version'], vuln['id'], vuln['severity'], ', '.join(vuln.get('fix', {}).get('versions', []))))
+                  for row in sorted(rows):
+                      lines.append('| ' + ' | '.join((path.name, *row)) + ' |')
+                  if not rows:
+                      lines.append(f'| {path.name} | No fixed vulnerabilities found | | | | |')
+              summary = '\n'.join(lines) + '\n'
+              print(summary)
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+                  f.write(summary)
+              PY
+
           - name: Upload vulnerability reports
             if: always()
             uses: actions/upload-artifact@v7.0.1

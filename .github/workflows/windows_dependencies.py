@@ -53,18 +53,20 @@ def runtime_components(package: Path, msys_root: Path, package_prefix: str) -> l
         installed_version = fields['VERSION'][0]
         version = installed_version.split(':')[-1].rsplit('-', 1)[0]
         upstream_name = name.removeprefix(package_prefix + '-')
-        components.append({
-            'type': 'library',
-            'bom-ref': name,
-            'name': upstream_name,
-            'version': version,
-            'purl': f'pkg:generic/{quote(upstream_name, safe="")}@{quote(version, safe="")}',
-            'properties': [
-                {'name': 'msys2:package', 'value': name},
-                {'name': 'msys2:version', 'value': installed_version},
-                *({'name': 'kitty:packaged-file', 'value': filename} for filename in sorted(locations)),
-            ],
-        })
+        components.append(
+            {
+                'type': 'library',
+                'bom-ref': name,
+                'name': upstream_name,
+                'version': version,
+                'purl': f'pkg:generic/{quote(upstream_name, safe="")}@{quote(version, safe="")}',
+                'properties': [
+                    {'name': 'msys2:package', 'value': name},
+                    {'name': 'msys2:version', 'value': installed_version},
+                    *({'name': 'kitty:packaged-file', 'value': filename} for filename in sorted(locations)),
+                ],
+            }
+        )
     if not any(component['name'] == 'python' for component in components):
         raise ValueError('The packaged MSYS2 Python runtime was not identified')
     return components
@@ -74,12 +76,19 @@ def main() -> None:
     package, output = map(Path, sys.argv[1:])
     msys_root = Path(sys.executable).parent.parent.parent
     components = runtime_components(package, msys_root, os.environ['MINGW_PACKAGE_PREFIX'])
-    output.write_text(json.dumps({
-        'bomFormat': 'CycloneDX',
-        'specVersion': '1.5',
-        'version': 1,
-        'components': components,
-    }, indent=2) + '\n', encoding='utf-8')
+    output.write_text(
+        json.dumps(
+            {
+                'bomFormat': 'CycloneDX',
+                'specVersion': '1.5',
+                'version': 1,
+                'components': components,
+            },
+            indent=2,
+        )
+        + '\n',
+        encoding='utf-8',
+    )
     print(f'Recorded {len(components)} shipped MSYS2 runtime packages in {output}')
 
 
