@@ -51,7 +51,9 @@ class TestBranding(unittest.TestCase):
                     for i in range(count):
                         expected = struct.unpack_from('<BBBBHHII', ico, 6 + 16 * i)
                         actual = struct.unpack_from('<BBBBHHIH', group, 6 + 14 * i)
-                        self.assertEqual(actual[:7], expected[:7])
+                        self.assertEqual(actual[:4], expected[:4])
+                        # windres normalizes zero planes in PNG-backed ICO entries to one.
+                        self.assertEqual(actual[4:7], (expected[4] or 1, *expected[5:7]))
                         self.assertEqual(resource(ctypes.cast(actual[7], wintypes.LPCWSTR), 3), ico[expected[7] : expected[7] + expected[6]])
                 finally:
                     kernel.FreeLibrary(module)
