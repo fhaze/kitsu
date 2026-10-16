@@ -73,13 +73,19 @@ class TestBranding(unittest.TestCase):
     def test_runtime_identity(self) -> None:
         code = (
             'from pathlib import Path; from kitty.constants import cli_name, display_name, appname, defconf, kitty_exe, logo_png_file; '
+            'from kitty.main import get_icon128_path; from kitty.fast_data_types import load_png_data, set_default_window_icon; '
             'assert cli_name == "kitsu" and display_name == "Kitsu" and appname == "kitty"; '
             'assert Path(kitty_exe()).name == "kitsu.exe"; assert Path(defconf).name == "kitty.conf"; '
-            'assert Path(logo_png_file).name == "kitsu.png"; print(logo_png_file)'
+            'assert Path(logo_png_file).name == "kitsu.png"; '
+            'small_logo = Path(get_icon128_path(logo_png_file)); assert small_logo.name == "kitsu-128.png"; '
+            'assert load_png_data(small_logo.read_bytes())[1:] == (128, 128); '
+            'set_default_window_icon(str(small_logo)); print(logo_png_file)'
         )
         env = dict(os.environ, KITTY_CONFIG_DIRECTORY=str(PACKAGE / 'test-config'))
-        result = subprocess.run([str(PACKAGE / 'bin/kitsu.exe'), '+runpy', code], capture_output=True, text=True, timeout=30, check=True, env=env)
+        result = subprocess.run([str(PACKAGE / 'bin/kitsu.exe'), '+runpy', code], capture_output=True, text=True, timeout=30, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(Path(result.stdout.strip()).read_bytes(), ICON.with_suffix('.png').read_bytes())
+        self.assertEqual(Path(result.stdout.strip()).with_name('kitsu-128.png').read_bytes(), ICON.with_name('kitsu-128.png').read_bytes())
 
 
 if __name__ == '__main__':

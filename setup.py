@@ -2511,6 +2511,7 @@ def package(args: Options, bundle_type: str, do_build_all: bool = True) -> None:
     shutil.copy2('logo/kitty.png', os.path.join(libdir, 'logo'))
     if is_windows:
         shutil.copy2('logo/kitsu.png', os.path.join(libdir, 'logo'))
+        shutil.copy2('logo/kitsu-128.png', os.path.join(libdir, 'logo'))
     shutil.copy2('logo/beam-cursor.png', os.path.join(libdir, 'logo'))
     shutil.copy2('logo/beam-cursor@2x.png', os.path.join(libdir, 'logo'))
     copy_shell_integration(os.path.join(libdir, 'shell-integration'), bundle_type == 'windows-package')
