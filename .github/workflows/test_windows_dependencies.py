@@ -1,8 +1,11 @@
+import copy
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
-from windows_dependencies import read_fields, runtime_components
+from windows_dependencies import read_fields, runtime_components, verify_scan_inputs
 
 
 class WindowsDependenciesTest(unittest.TestCase):
@@ -54,6 +57,60 @@ class WindowsDependenciesTest(unittest.TestCase):
             path = Path(tmp) / 'desc'
             path.write_text('%NAME%\npython\n\n%LICENSE%\nPSF\nBSD\n\n', encoding='utf-8')
             self.assertEqual(read_fields(path), {'NAME': ['python'], 'LICENSE': ['PSF', 'BSD']})
+
+    def test_scan_attestations_are_bound_to_zip_and_python_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / 'kitty.zip'
+            archive.write_bytes(b'tested package')
+            version = hashlib.sha256(archive.read_bytes()).hexdigest()
+            product = f'pkg:generic/kitty-windows@{version}'
+            python_product = f'pkg:generic/python@3.14.8?kitty_package={version}'
+            runtime: dict[str, Any] = {
+                'metadata': {'component': {'name': 'kitty-windows', 'version': version, 'purl': product}},
+                'components': [
+                    {
+                        'name': 'python',
+                        'version': '3.14.8',
+                        'purl': python_product,
+                        'properties': [{'name': 'kitty:packaged-file', 'value': 'bin/libpython3.14.dll'}],
+                    }
+                ],
+            }
+            binaries: dict[str, Any] = {
+                'source': {'name': 'kitty-windows', 'version': version},
+                'artifacts': [{'name': 'Python', 'version': '3.14.8', 'locations': [{'path': '/bin/libpython3.14.dll'}]}],
+            }
+            vex: dict[str, Any] = {
+                'statements': [
+                    {'vulnerability': {'name': cve}, 'products': [{'@id': product}, {'@id': python_product}], 'status': 'fixed'}
+                    for cve in ('CVE-2025-15367', 'CVE-2026-12345')
+                ]
+            }
+            verify_scan_inputs(archive, runtime, binaries, vex)
+
+            altered = copy.deepcopy(binaries)
+            altered['artifacts'][0]['version'] = '3.13.0'
+            with self.assertRaisesRegex(ValueError, 'additional Python binary'):
+                verify_scan_inputs(archive, runtime, altered, vex)
+            altered = copy.deepcopy(binaries)
+            altered['artifacts'][0]['locations'][0]['path'] = '/extra/python.dll'
+            with self.assertRaisesRegex(ValueError, 'additional Python binary'):
+                verify_scan_inputs(archive, runtime, altered, vex)
+            altered = copy.deepcopy(binaries)
+            altered['artifacts'].clear()
+            with self.assertRaisesRegex(ValueError, 'not identified'):
+                verify_scan_inputs(archive, runtime, altered, vex)
+            altered = copy.deepcopy(vex)
+            altered['statements'][0]['products'][0]['@id'] = 'pkg:generic/python@3.14.8'
+            with self.assertRaisesRegex(ValueError, 'not restricted'):
+                verify_scan_inputs(archive, runtime, binaries, altered)
+            altered = copy.deepcopy(vex)
+            altered['statements'][0]['status'] = 'not_affected'
+            with self.assertRaisesRegex(ValueError, 'not restricted'):
+                verify_scan_inputs(archive, runtime, binaries, altered)
+            archive.write_bytes(b'a different package')
+            with self.assertRaisesRegex(ValueError, 'does not describe this ZIP'):
+                verify_scan_inputs(archive, runtime, binaries, vex)
 
 
 if __name__ == '__main__':

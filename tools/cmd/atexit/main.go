@@ -80,6 +80,20 @@ func do_test() (err error) {
 
 func EntryPoint(root *cli.Command) {
 	root.AddSubCommand(&cli.Command{
+		Name:            "__remove_tree__",
+		Hidden:          true,
+		OnlyArgsAllowed: true,
+		Run: func(cmd *cli.Command, args []string) (int, error) {
+			if len(args) != 1 {
+				return 1, fmt.Errorf("Usage: __remove_tree__ path")
+			}
+			if err := os.RemoveAll(args[0]); err != nil {
+				return 1, err
+			}
+			return 0, nil
+		},
+	})
+	root.AddSubCommand(&cli.Command{
 		Name:            "__atexit__",
 		Hidden:          true,
 		OnlyArgsAllowed: true,

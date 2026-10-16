@@ -83,7 +83,9 @@ jobs:
               (Get-Item "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe").VersionInfo.ProductVersion
 
           - name: Test dependency inventory
-            run: python -m unittest discover -s .github/workflows -p 'test_windows_dependencies.py'
+            run: |
+              python -m unittest discover -s .github/workflows -p 'test_windows_dependencies.py'
+              python -m unittest discover -s windows -p 'test_python_runtime.py'
 
           - name: Build Windows package
             id: pkg
@@ -115,14 +117,20 @@ jobs:
               if not exist ..\lib\kitty\windows\wsl\kitten-linux-arm64 exit /b 1
               python -c "from pathlib import Path; bad = [str(p) for p in Path(r'..\lib\kitty\shell-integration').rglob('*') if p.is_file() and b'\r\n' in p.read_bytes()]; assert not bad, bad"
 
+          - name: Test bundled Python security fixes
+            shell: cmd
+            run: start "" /b /wait windows-package\kitty\bin\kitty.exe +runpy "import runpy; runpy.run_path('.github/workflows/test_windows_runtime.py', run_name='__main__')"
+
           - name: Record shipped MSYS2 dependencies
-            run: python .github/workflows/windows_dependencies.py windows-package/kitty windows-runtime.cdx.json
+            run: python .github/workflows/windows_dependencies.py windows-package/kitty windows-runtime.cdx.json "${{ steps.pkg.outputs.zip }}"
 
           - name: Upload Windows dependency inventory
             uses: actions/upload-artifact@v7.0.1
             with:
               name: windows-runtime-sbom
-              path: windows-runtime.cdx.json
+              path: |
+                windows-runtime.cdx.json
+                windows-runtime.vex.json
               if-no-files-found: error
 
           - name: Health-check quick diagnostics (packaged runtime)
