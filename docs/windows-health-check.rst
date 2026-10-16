@@ -32,9 +32,12 @@ uses a clean temporary configuration/cache, a random authenticated loopback
 endpoint, absolute executables and an owned Windows process job. It never connects
 to your existing Kitty instances. The job includes ConPTY and descendant processes
 and is terminated and checked empty on completion, timeout or cancellation. Worker
-processes wait for job assignment before doing any work. Temporary files and
-passwords are deleted; no repairs, uploads or persistent configuration changes are
-performed. The overall timeout limits probes; bounded process cleanup can take a
+processes wait for job assignment before doing any work. Authentication stays in
+memory: the GUI worker consumes and removes its private credential environment
+entry before starting the terminal child, and RC clients receive the password via
+stdin. Passwords are never written to files or OS command lines. Temporary files
+are deleted; no repairs, uploads or persistent configuration changes are performed.
+The overall timeout limits probes; bounded process cleanup can take a
 few additional seconds. Ctrl-C emits a partial report and returns 130.
 
 Native probes exercise:

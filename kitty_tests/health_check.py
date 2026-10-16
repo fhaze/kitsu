@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kitty.health_check import QUICK, Deadline, Result, RunDirectory, Worker, exit_code, main, positive_seconds, quick_probe, render, resources, sanitized
-from kitty.health_check_native import NATIVE, NativeSession, colored_fixture_present, ps_quote
+from kitty.health_check_native import NATIVE, RC_ACTIONS, RC_PASSWORD_ENV, NativeSession, colored_fixture_present, gui_worker, ps_quote
 
 from .base import BaseTest
 
@@ -211,6 +211,61 @@ class TestHealthCheck(BaseTest):
             session = NativeSession('kitty.exe', Path(tmp))
             session.endpoint = 'tcp:0.0.0.0:1234'
             self.assertRaises(AssertionError, session.rc, ['ls'], Deadline(1))
+
+    def test_health_password_stays_out_of_files_and_process_arguments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = NativeSession('kitty.exe', root)
+            self.ae(list(root.iterdir()), [])
+            state = {
+                'endpoint': 'tcp:127.0.0.1:1234',
+                'window_id': '1',
+                'public_key': 'public',
+                'size': [80, 24],
+                'credential_in_environment': False,
+            }
+            with patch('kitty.health_check_native.Worker') as worker, patch.object(session, 'state', return_value=state):
+                session.probe('native.startup', Deadline(1))
+            args = worker.call_args.args
+            self.assertNotIn(session.password, repr(args[:-1]))
+            self.ae(args[-1][RC_PASSWORD_ENV], session.password)
+            self.assertNotIn(RC_PASSWORD_ENV, session.env)
+            self.ae([p.name for p in root.iterdir()], ['health.conf'])
+            self.assertNotIn(session.password, (root / 'health.conf').read_text(encoding='utf-8'))
+
+    def test_health_gui_worker_consumes_credential_before_main(self):
+        password = 'health_test_credential'
+        argv = ['worker', '--config', 'health.conf']
+        data = {'cli_flags': {}}
+        with patch.dict(os.environ, {RC_PASSWORD_ENV: password}), patch('sys.argv', argv), patch('sys.kitty_run_data', data, create=True):
+            with patch('kitty.main.main') as app:
+                gui_worker()
+                app.assert_called_once_with()
+                self.assertNotIn(RC_PASSWORD_ENV, os.environ)
+                self.assertNotIn('cli_flags', data)
+                self.ae(argv, ['kitty', '--override', f'remote_control_password={password} {RC_ACTIONS}', '--config', 'health.conf'])
+
+    def test_health_remote_password_uses_stdin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = NativeSession('kitty.exe', Path(tmp))
+            session.endpoint = 'tcp:127.0.0.1:1234'
+            cp = subprocess.CompletedProcess([], 0, b'[]', b'')
+            with patch('kitty.health_check_native.command', return_value=cp) as run:
+                session.rc(['ls'], Deadline(1))
+                args, kwargs = run.call_args.args[0], run.call_args.kwargs
+                self.assertNotIn(session.password, repr(args))
+                self.ae(args[4:7], ['--use-password=always', '--password-file', '-'])
+                self.ae(kwargs['input'], session.password.encode('utf-8'))
+                self.assertNotIn(RC_PASSWORD_ENV, kwargs['env'])
+                session.rc(['ls'], Deadline(1), authenticated=False)
+                self.ae(run.call_args.kwargs['input'], b'')
+                self.assertIn('--use-password=never', run.call_args.args[0])
+
+    def test_health_refuses_credential_leak_to_terminal_child(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = NativeSession('kitty.exe', Path(tmp))
+            with patch('kitty.health_check_native.Worker'), patch.object(session, 'state', return_value={'credential_in_environment': True}):
+                self.assertRaises(AssertionError, session.probe, 'native.startup', Deadline(1))
 
     @unittest.skipUnless(sys.platform == 'win32', 'Windows console shim')
     def test_health_console_shim(self):

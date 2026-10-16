@@ -14,6 +14,9 @@ from typing import Any
 
 from .health_check import Deadline, Probe, Worker, command, require
 
+RC_PASSWORD_ENV = 'KITTY_HEALTH_CHECK_RC_PASSWORD'
+RC_ACTIONS = 'ls get-text launch close-window close-tab focus-window focus-tab resize-os-window screenshot kitten'
+
 NATIVE = (
     Probe('native.console'),
     Probe('native.startup', prerequisites=('runtime.identity', 'runtime.imports', 'runtime.glfw', 'runtime.shader')),
@@ -34,10 +37,13 @@ def write_json(path: Path, value: Any) -> None:
 
 
 def gui_worker() -> None:
+    password = os.environ.pop(RC_PASSWORD_ENV)
     from kitty.main import main
 
     getattr(sys, 'kitty_run_data').pop('cli_flags', None)
     sys.argv[0] = 'kitty'
+    # Python-only argv: the credential never appears in the OS process command line.
+    sys.argv[1:1] = ['--override', f'remote_control_password={password} {RC_ACTIONS}']
     main()
 
 
@@ -105,6 +111,7 @@ def run_terminal_fixture(root: Path) -> None:
                 'endpoint': os.environ.get('KITTY_LISTEN_ON', ''),
                 'window_id': os.environ.get('KITTY_WINDOW_ID', ''),
                 'public_key': os.environ.get('KITTY_PUBLIC_KEY', ''),
+                'credential_in_environment': RC_PASSWORD_ENV in os.environ,
                 **evidence,
             },
         )
@@ -195,8 +202,6 @@ class NativeSession:
 
         if not kitty_run_data.get('from_source'):
             self.env['SLANGC'] = str(Path(exe).parent / 'slangc.exe')
-        self.password_file = root / 'password'
-        self.password_file.write_text(self.password, encoding='utf-8')
 
     def close(self) -> None:
         if self.worker is not None:
@@ -224,8 +229,14 @@ class NativeSession:
 
     def rc(self, args: list[str], deadline: Deadline, *, authenticated: bool = True) -> subprocess.CompletedProcess[bytes]:
         require(self.endpoint.startswith('tcp:127.0.0.1:'), 'Refusing non-private remote control endpoint')
-        auth = ['--use-password=always', '--password-file', str(self.password_file)] if authenticated else ['--use-password=never']
-        cp = command([self.kitten, '@', '--to', self.endpoint, *auth, *args], timeout=deadline.remaining(), env=self.env, cwd=self.root)
+        auth = ['--use-password=always', '--password-file', '-'] if authenticated else ['--use-password=never']
+        cp = command(
+            [self.kitten, '@', '--to', self.endpoint, *auth, *args],
+            timeout=deadline.remaining(),
+            env=self.env,
+            cwd=self.root,
+            input=self.password.encode('utf-8') if authenticated else b'',
+        )
         if authenticated:
             require(cp.returncode == 0, f'Owned-session remote command failed: {args[0]} (raw response withheld)')
         return cp
@@ -265,9 +276,7 @@ class NativeSession:
         elif probe_id == 'native.startup':
             config = self.root / 'health.conf'
             config.write_text(
-                'allow_remote_control password\nremote_control_password '
-                + self.password
-                + ' ls get-text launch close-window close-tab focus-window focus-tab resize-os-window screenshot kitten\n'
+                'allow_remote_control password\n'
                 'shell_integration disabled\nupdate_check_interval 0\nconfirm_os_window_close 0\n'
                 'remember_window_size no\ninitial_window_width 80c\ninitial_window_height 24c\n'
                 'background #000000\nforeground #ffffff\nwindow_padding_width 0\nwindow_border_width 0\n'
@@ -284,8 +293,10 @@ class NativeSession:
                 'from kitty.health_check_native import terminal_fixture; terminal_fixture()',
                 str(self.root),
             ]
-            self.worker = Worker(self.exe, 'from kitty.health_check_native import gui_worker; gui_worker()', args, self.root, self.env)
+            env = {**self.env, RC_PASSWORD_ENV: self.password}
+            self.worker = Worker(self.exe, 'from kitty.health_check_native import gui_worker; gui_worker()', args, self.root, env)
             state = self.state(deadline)
+            require(not state['credential_in_environment'], 'Private credential reached the terminal child environment')
             self.endpoint, self.window_id = state['endpoint'], state['window_id']
             self.env['KITTY_PUBLIC_KEY'] = state['public_key']
             require(self.endpoint.startswith('tcp:127.0.0.1:') and self.window_id.isdecimal(), 'Owned-session handshake invalid')
