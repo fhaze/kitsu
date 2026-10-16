@@ -5,7 +5,6 @@
 import glob
 import io
 import json
-import lzma
 import os
 import platform
 import shlex
@@ -245,84 +244,8 @@ def install_bundle(dest: str = '', which: str = '') -> None:
     os.chdir(cwd)
 
 
-def install_grype(exe: str = '/tmp/grype') -> str:
-    raw = download_with_retry('https://download.calibre-ebook.com/ci/grype.xz')
-    raw = lzma.decompress(raw)
-    with open(exe, 'wb') as f:
-        f.write(raw)
-        os.fchmod(f.fileno(), 0o755)
-    subprocess.check_call([exe, 'db', 'update'])
-    return exe
-
-
-IGNORED_DEPENDENCY_CVES = [
-    # Python stdlib
-    'CVE-2025-8194',  # DoS in tarfile
-    'CVE-2025-6069',  # DoS in HTMLParser
-    'CVE-2025-13836',  # DoS in http client reading from malicious server
-    'CVE-2025-12084',  # DoS in xml.dom.minidom unused in kitty
-    'CVE-2025-13837',  # DoS in plistlib reading plist. We only use plistlib for writing
-    'CVE-2025-6075',  # Quadratic complexity in os.path.expandvars()
-    # python stdlib all these are erroneously marked as fixed in python 3.15
-    # when it hasnt even been released. Sigh.
-    'CVE-2026-1299',
-    'CVE-2026-0865',
-    'CVE-2025-15282',
-    'CVE-2026-0672',
-    'CVE-2025-15366',
-    'CVE-2025-15367',
-    'CVE-2025-12781',
-    'CVE-2025-11468',
-    'CVE-2026-2297',
-    'CVE-2026-3644',
-    'CVE-2026-4224',
-    'CVE-2026-4519',
-    'CVE-2026-1502',
-    'CVE-2026-7210',  # DoS in unused XML parser
-    'CVE-2026-3276',  # DoS in unicodedata.normalize()
-    'CVE-2026-7774',  # tarfile.data_filter path traversal bypass
-    'CVE-2026-12003',  # bug in release builds irrelevant to us
-    'CVE-2026-15308',  # bug in stdlib html parser irrelevant to us
-    'CVE-2026-11940',  # tarfile, unused
-    'CVE-2026-11972',  # tarfile, unused
-    'CVE-2026-0864',  # configparser unused
-    'CVE-2026-17084',  # idna encoding, unused
-    'CVE-2026-15806',  # HTTPPasswordMgr unused
-    'CVE-2026-15310',  # DoS in unzip
-    # github.com/nwaples/rardecode/v2
-    'CVE-2025-11579',  # rardecode is version 2.2.1, not vulnerable
-    'CVE-2026-2673',  # openssl fix not released
-    'CVE-2026-14456',  # openssl fix not released
-]
-
-
 def check_dependencies() -> None:
-    grype = install_grype()
-    with open((gc := os.path.expanduser('~/.grype.yml')), 'w') as f:
-        print('ignore:', file=f)
-        for x in IGNORED_DEPENDENCY_CVES:
-            print('  - vulnerability:', x, file=f)
-    dest = os.path.join(SW, 'linux')
-    os.makedirs(dest, exist_ok=True)
-    install_bundle(dest, os.path.basename(dest))
-    dest = os.path.join(SW, 'macos')
-    os.makedirs(dest, exist_ok=True)
-    install_bundle(dest, os.path.basename(dest))
-    cmdline = [grype, '--by-cve', '--config', gc, '--fail-on', 'medium', '--only-fixed', '--add-cpes-if-none']
-    if (subprocess.run(cmdline + ['dir:' + SW])).returncode != 0:
-        raise SystemExit('grype found problems during filesystem scan')
-    # Now test against the SBOM
-    import runpy
-
-    orig = sys.argv, sys.stdout
-    sys.argv = ['bypy', 'sbom', 'kovidgoyal/kitty', '1.0.0']
-    buf = io.StringIO()
-    sys.stdout = buf
-    runpy.run_path('bypy-src')
-    sys.argv, sys.stdout = orig
-    print(buf.getvalue())
-    if (subprocess.run(cmdline, input=buf.getvalue().encode())).returncode != 0:
-        raise SystemExit('grype found problems during SBOM scan')
+    raise SystemExit('Dependency scans now run on built Windows packages via .github/workflows/depscan.yml (workflow_dispatch).')
 
 
 def main() -> None:
