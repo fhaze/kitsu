@@ -6,6 +6,7 @@ import os
 import sys
 from functools import cache
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 
@@ -21,7 +22,7 @@ def read_fields(path: Path) -> dict[str, list[str]]:
     return fields
 
 
-def runtime_components(package: Path, msys_root: Path, package_prefix: str) -> list[dict[str, object]]:
+def runtime_components(package: Path, msys_root: Path, package_prefix: str) -> list[dict[str, Any]]:
     @cache
     def digest(path: Path) -> bytes:
         with path.open('rb') as f:
@@ -33,7 +34,7 @@ def runtime_components(package: Path, msys_root: Path, package_prefix: str) -> l
             binaries.setdefault(path.name.lower(), []).append(path)
     if not binaries:
         raise ValueError(f'No packaged Windows binaries found in {package}')
-    components = []
+    components: list[dict[str, Any]] = []
     for entry in sorted((msys_root / 'var/lib/pacman/local').iterdir()):
         if not (entry / 'desc').is_file():
             continue

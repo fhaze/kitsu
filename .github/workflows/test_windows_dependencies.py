@@ -14,7 +14,7 @@ class WindowsDependenciesTest(unittest.TestCase):
             (root / 'ucrt64/bin').mkdir(parents=True)
 
             def installed(name: str, version: str, filename: str, content: bytes) -> None:
-                entry = root / 'var/lib/pacman/local' / f'{name}-{version}'
+                entry = root / 'var/lib/pacman/local' / name
                 entry.mkdir(parents=True)
                 (entry / 'desc').write_text(f'%NAME%\nmingw-w64-ucrt-x86_64-{name}\n\n%VERSION%\n{version}\n', encoding='utf-8')
                 (entry / 'files').write_text(f'%FILES%\nucrt64/bin/{filename}\n', encoding='utf-8')
