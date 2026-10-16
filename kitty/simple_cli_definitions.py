@@ -18,7 +18,8 @@ if getattr(sys, 'running_from_setup', False):
     def shlex_split(text: str) -> Iterator[str]:
         yield from psplit(text)
 else:
-    from kitty.constants import appname, is_macos
+    from kitty.constants import cli_name as appname
+    from kitty.constants import is_macos
     from kitty.utils import shlex_split as ksplit
 
     def shlex_split(text: str) -> Iterator[str]:

@@ -1,16 +1,16 @@
 Windows health check
 ====================
 
-Run ``kitty +health-check`` from cmd or PowerShell for read-only quick diagnostics.
+Run ``kitsu +health-check`` from cmd or PowerShell for read-only quick diagnostics.
 Use the matching ``kitty.com`` if invoking it from a script that must wait. No
 test suite, Python installation, network connection, downloads or administrator
 access is needed in a release package.
 
 .. code-block:: powershell
 
-    kitty +health-check
-    kitty +health-check --format=json --output health.json
-    kitty +health-check --mode=native --timeout=180 --probe-timeout=20
+    kitsu +health-check
+    kitsu +health-check --format=json --output health.json
+    kitsu +health-check --mode=native --timeout=180 --probe-timeout=20
     powershell -NoProfile -File 'C:\path\to\kitty\bin\health-check.ps1' -Format json
 
 The PowerShell bootstrap is for a runtime that cannot initialize, not a second
@@ -30,7 +30,7 @@ required, not silently skipped. Installation/PATH/config warnings are advisory.
 Native mode includes quick checks and opens a **visible disposable window**. It
 uses a clean temporary configuration/cache, a random authenticated loopback
 endpoint, absolute executables and an owned Windows process job. It never connects
-to your existing Kitty instances. The job includes ConPTY and descendant processes
+to your existing Kitsu instances. The job includes ConPTY and descendant processes
 and is terminated and checked empty on completion, timeout or cancellation. Worker
 processes wait for job assignment before doing any work. Authentication stays in
 memory: the GUI worker consumes and removes its private credential environment
@@ -50,7 +50,7 @@ Native probes exercise:
   arguments, and observed child status/output (not merely RC command success).
 * Pane creation/focus/close, tabs, live child dimensions after OS-window resize.
 * A generated two-color image streamed using ``icat`` in the child terminal and
-  coarse screenshot pixel sampling from Kitty's rendered framebuffer.
+  coarse screenshot pixel sampling from Kitsu's rendered framebuffer.
 * Renderer identity and the **selected** system/bundled ConPTY provider, separately
   from DLL presence. Software rendering is a warning, not a GPU certification.
 

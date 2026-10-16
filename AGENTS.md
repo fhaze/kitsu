@@ -3,13 +3,13 @@
 ## Building on Windows (local dev)
 
 This fork builds natively on Windows via MSYS2 UCRT64. The canonical recipe is the
-`Build kitty.exe (MSYS2 UCRT64)` job in `.github/workflows/windows-build.yml`, which runs
+`Build Kitsu (MSYS2 UCRT64)` job in `.github/workflows/windows-build.yml`, which runs
 `python setup.py windows-package`.
 
 Use the helper script instead of invoking anything by hand:
 
 ```sh
-./build-windows.sh                  # build → windows-package/kitty-*-windows-x86_64.zip
+./build-windows.sh                  # build → windows-package/kitsu-*-windows-x86_64.zip
 ./build-windows.sh --install-deps   # install toolchain + deps on a fresh machine
 ```
 

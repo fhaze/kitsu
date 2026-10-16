@@ -21,7 +21,7 @@ utility_distro_prefixes = ('docker-desktop', 'rancher-desktop', 'podman-machine'
 distro_timeout = 180
 
 usage = """\
-Usage: kitty +wsl-setup [options] [distribution ...]
+Usage: kitsu +wsl-setup [options] [distribution ...]
 
 Install the kitten binary into WSL distributions and add it to the PATH of the
 login shell in each. All distributions are set up when none are specified.
@@ -116,7 +116,7 @@ def main(args: Sequence[str]) -> None:
     if not is_windows:
         raise SystemExit('kitty +wsl-setup only works on Windows')
     if not os.path.exists(install_script):
-        raise SystemExit(f'{install_script} is missing, this kitty installation was not packaged for Windows')
+        raise SystemExit(f'{install_script} is missing, this Kitsu installation was not packaged for Windows')
     if not distros:
         distros = list_distros()
         if not distros:

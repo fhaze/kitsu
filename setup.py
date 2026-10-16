@@ -1442,7 +1442,7 @@ def build_ref_map(skip_generation: bool = False) -> str:
 def build_cli_parser_specs(skip_generation: bool = False) -> str:
     dest = 'kitty/launcher/cli-parser-data_generated.h'
     if not skip_generation:
-        m = runpy.run_path('kitty/simple_cli_definitions.py', {'appname': appname})
+        m = runpy.run_path('kitty/simple_cli_definitions.py', {'appname': 'kitsu' if is_windows else appname})
         h = '\n'.join(m['generate_c_parsers']())
         update_if_changed(dest, h)
     return dest
@@ -1737,7 +1737,7 @@ def build_launcher(args: Options, launcher_dir: str = '.', bundle_type: str = 's
         )
     if is_windows:
         resource_src = 'kitty/launcher/windows-icon.rc'
-        resource_icon = 'logo/kitty.ico'
+        resource_icon = 'logo/kitsu.ico'
         resource_obj = os.path.join(build_dir, 'kitty-launcher-kitty-resource.o')
         objects.append(resource_obj)
         resource_compiler = shutil.which('windres')
@@ -1748,6 +1748,8 @@ def build_launcher(args: Options, launcher_dir: str = '.', bundle_type: str = 's
             '--input-format=rc',
             '--output-format=coff',
             '--include-dir=.',
+            f'-DKITTY_FILE_VERSION={",".join(map(str, (*version, 0)))}',
+            f'-DKITTY_VERSION="{".".join(map(str, version))}"',
             resource_src,
             resource_obj,
         ]
@@ -1758,7 +1760,8 @@ def build_launcher(args: Options, launcher_dir: str = '.', bundle_type: str = 's
             key=CompileKey(resource_src, os.path.basename(resource_obj)),
             keyfile=resource_src,
         )
-    dest = kitty_exe = os.path.join(launcher_dir, 'kitty' + exe_ext)
+    launcher_name = 'kitsu' if is_windows else 'kitty'
+    dest = kitty_exe = os.path.join(launcher_dir, launcher_name + exe_ext)
     link_targets.append(os.path.abspath(dest))
     desc = f'Linking {emphasis("launcher")} ...'
     if is_windows:
@@ -1774,7 +1777,7 @@ def build_launcher(args: Options, launcher_dir: str = '.', bundle_type: str = 's
         # and so wait for kitty @ ..., kitty +kitten ..., --version etc.
         shim_src = 'kitty/launcher/win32-console-shim.c'
         shim_obj = os.path.join(build_dir, shim_src.replace('/', '-').replace('.c', '.o'))
-        shim_dest = os.path.join(launcher_dir, 'kitty.com')
+        shim_dest = os.path.join(launcher_dir, 'kitsu.com')
         link_targets.append(os.path.abspath(shim_dest))
         cmd = env.cc + cppflags + cflags + ['-c', shim_src, '-o', shim_obj]
         args.compilation_database.add_command(
@@ -1794,6 +1797,9 @@ def build_launcher(args: Options, launcher_dir: str = '.', bundle_type: str = 's
         dsym = f'{dest}.dSYM/Contents/Resources/DWARF/{os.path.basename(dest)}'
         args.compilation_database.add_command(desc, ['dsymutil', dest], partial(newer, dsym, dest), key=LinkKey(dsym), is_post_link=True)
     args.compilation_database.build_all()
+    if is_windows:
+        for ext in ('.exe', '.com'):
+            shutil.copy2(os.path.join(launcher_dir, 'kitsu' + ext), os.path.join(launcher_dir, 'kitty' + ext))
     return kitty_exe
 
 
@@ -1951,7 +1957,7 @@ def bundle_conpty(launcher_dir: str) -> None:
 def create_windows_zip(ddir: str) -> str:
     arch = windows_package_arch()
     ver = '.'.join(map(str, version))
-    base_name = os.path.join(os.path.dirname(os.path.abspath(ddir)), f'kitty-{ver}-windows-{arch}')
+    base_name = os.path.join(os.path.dirname(os.path.abspath(ddir)), f'kitsu-{ver}-windows-{arch}')
     ans = shutil.make_archive(base_name, 'zip', root_dir=os.path.dirname(os.path.abspath(ddir)), base_dir=os.path.basename(ddir))
     print(f'Created {emphasis(os.path.relpath(ans))}')
     return ans
@@ -2018,7 +2024,7 @@ def create_windows_installer(ddir: str, required: bool = False) -> str:
     cp = subprocess.run(cmd)
     if cp.returncode != 0:
         raise SystemExit(f'Inno Setup failed with exit code {cp.returncode}')
-    ans = os.path.join(outdir, f'kitty-{ver}-windows-{arch}-setup.exe')
+    ans = os.path.join(outdir, f'kitsu-{ver}-windows-{arch}-setup.exe')
     if not os.path.exists(ans):
         raise SystemExit(f'Inno Setup did not create {ans}')
     print(f'Created {emphasis(os.path.relpath(ans))}')
@@ -2502,6 +2508,8 @@ def package(args: Options, bundle_type: str, do_build_all: bool = True) -> None:
     shutil.copy2('__main__.py', libdir)
     shutil.copy2('logo/kitty-128.png', os.path.join(libdir, 'logo'))
     shutil.copy2('logo/kitty.png', os.path.join(libdir, 'logo'))
+    if is_windows:
+        shutil.copy2('logo/kitsu.png', os.path.join(libdir, 'logo'))
     shutil.copy2('logo/beam-cursor.png', os.path.join(libdir, 'logo'))
     shutil.copy2('logo/beam-cursor@2x.png', os.path.join(libdir, 'logo'))
     copy_shell_integration(os.path.join(libdir, 'shell-integration'), bundle_type == 'windows-package')
@@ -2586,7 +2594,7 @@ def package(args: Options, bundle_type: str, do_build_all: bool = True) -> None:
 
 
 def clean_launcher_dir(launcher_dir: str) -> None:
-    for x in glob.glob(os.path.join(launcher_dir, 'kitt*')):
+    for x in glob.glob(os.path.join(launcher_dir, 'kitt*')) + glob.glob(os.path.join(launcher_dir, 'kitsu*')):
         if os.path.isdir(x):
             shutil.rmtree(x)
         else:
@@ -2906,7 +2914,7 @@ def do_build(args: Options) -> None:
             if not is_windows:
                 raise SystemExit('windows-package can only be built on Windows')
             if args.prefix == os.path.abspath(Options.prefix):
-                args.prefix = os.path.abspath(os.path.join('windows-package', 'kitty'))
+                args.prefix = os.path.abspath(os.path.join('windows-package', 'kitsu'))
             build(args, native_optimizations=False)
             package(args, bundle_type='windows-package')
         elif args.action == 'kitty.app':

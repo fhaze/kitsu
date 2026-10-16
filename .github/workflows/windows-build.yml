@@ -11,7 +11,7 @@ permissions:
 
 jobs:
     build:
-        name: Build kitty.exe (MSYS2 UCRT64)
+        name: Build Kitsu (MSYS2 UCRT64)
         runs-on: windows-latest
         defaults:
             run:
@@ -93,19 +93,22 @@ jobs:
               KITTY_RELEASE_TAG: ${{ github.ref_name }}
             run: |
               python setup.py windows-package
-              zip=$(ls windows-package/kitty-*-windows-*.zip)
+              zip=$(ls windows-package/kitsu-*-windows-*.zip)
               echo "zip=$zip" >> "$GITHUB_OUTPUT"
-              setup=$(ls windows-package/kitty-*-windows-*-setup.exe)
+              setup=$(ls windows-package/kitsu-*-windows-*-setup.exe)
               echo "setup=$setup" >> "$GITHUB_OUTPUT"
+
+          - name: Verify Kitsu branding and embedded executable icons
+            run: python windows/test_branding.py windows-package/kitsu
 
           - name: Smoke test the packaged executables
             shell: cmd
             run: |
-              cd windows-package\kitty\bin
-              rem kitty.exe is a GUI subsystem executable, cmd.exe only waits for it with start /wait
-              start "" /b /wait kitty.exe --version || exit /b 1
+              cd windows-package\kitsu\bin
+              rem kitsu.exe is a GUI subsystem executable, cmd.exe only waits for it with start /wait
+              start "" /b /wait kitsu.exe --version || exit /b 1
               kitten.exe --version || exit /b 1
-              start "" /b /wait kitty.exe +runpy "import ssl, sqlite3, kitty.fast_data_types" || exit /b 1
+              start "" /b /wait kitsu.exe +runpy "import ssl, sqlite3, kitty.fast_data_types" || exit /b 1
               rem custom shaders are compiled at runtime by the bundled slangc
               slangc.exe -version || exit /b 1
               rem WSL distros look up the terminfo under x\ not the hex encoded 78\ that tic writes on Windows
@@ -119,10 +122,10 @@ jobs:
 
           - name: Test bundled Python security fixes
             shell: cmd
-            run: start "" /b /wait windows-package\kitty\bin\kitty.exe +runpy "import runpy; runpy.run_path('.github/workflows/test_windows_runtime.py', run_name='__main__')"
+            run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import runpy; runpy.run_path('.github/workflows/test_windows_runtime.py', run_name='__main__')"
 
           - name: Record shipped MSYS2 dependencies
-            run: python .github/workflows/windows_dependencies.py windows-package/kitty windows-runtime.cdx.json "${{ steps.pkg.outputs.zip }}"
+            run: python .github/workflows/windows_dependencies.py windows-package/kitsu windows-runtime.cdx.json "${{ steps.pkg.outputs.zip }}"
 
           - name: Upload Windows dependency inventory
             uses: actions/upload-artifact@v7.0.1
@@ -136,7 +139,7 @@ jobs:
           - name: Health-check quick diagnostics (packaged runtime)
             shell: pwsh
             run: |
-              & ./windows-package/kitty/bin/health-check.ps1 -Format json > health-check.json
+              & ./windows-package/kitsu/bin/health-check.ps1 -Format json > health-check.json
               if ($LASTEXITCODE -ne 0) { Get-Content health-check.json; exit $LASTEXITCODE }
 
           - name: Upload health-check report
@@ -153,7 +156,7 @@ jobs:
               MSYS2_ARG_CONV_EXCL: '*'
             run: |
               set -ex
-              setup=$(ls windows-package/kitty-*-windows-*-setup.exe)
+              setup=$(ls windows-package/kitsu-*-windows-*-setup.exe)
               tmp=$(cygpath -w "$RUNNER_TEMP")
               dir="$tmp\\kitty-install"
               uninstall_key='HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\{7D0F3A2B-5C4E-4F19-9B6A-2E8D1C3F5A70}_is1'
@@ -166,8 +169,8 @@ jobs:
               # A newer installer must upgrade in place: same directory and tasks, stale files removed
               echo stale > "$dir\\lib\\stale.py"
               iscc=$(cygpath -u "$(python -c 'import setup; print(setup.find_iscc())')")
-              "$iscc" /Qp /DAppVersion=99.0.0 /DArch=x86_64 "/DSourceDir=$(cygpath -aw windows-package/kitty)" "/DOutputDir=$tmp" "$(cygpath -aw windows/kitty.iss)"
-              "$tmp\\kitty-99.0.0-windows-x86_64-setup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /LOG="$tmp\\kitty-setup-2.log"
+              "$iscc" /Qp /DAppVersion=99.0.0 /DArch=x86_64 "/DSourceDir=$(cygpath -aw windows-package/kitsu)" "/DOutputDir=$tmp" "$(cygpath -aw windows/kitty.iss)"
+              "$tmp\\kitsu-99.0.0-windows-x86_64-setup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /LOG="$tmp\\kitty-setup-2.log"
               test ! -e "$dir\\lib\\stale.py"
               "$dir\\bin\\kitten.exe" --version
               reg query "$uninstall_key" /v DisplayVersion | grep -F 99.0.0
@@ -187,7 +190,7 @@ jobs:
           - name: Upload package artifact
             uses: actions/upload-artifact@v7.0.1
             with:
-              name: kitty-windows-x86_64
+              name: kitsu-windows-x86_64
               path: |
                 ${{ steps.pkg.outputs.zip }}
                 ${{ steps.pkg.outputs.setup }}

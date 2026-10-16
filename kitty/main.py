@@ -20,6 +20,8 @@ from .config import cached_values_for
 from .constants import (
     appname,
     beam_cursor_data_file,
+    cli_name,
+    display_name,
     glfw_path,
     helper_process_popen_kwargs,
     is_macos,
@@ -336,7 +338,7 @@ def _run_app(opts: Options, args: CLIOptions, bad_lines: Sequence[BadLine] = (),
             window_id = create_os_window(
                 run_app.initial_window_size_func(get_os_window_sizing_data(opts, startup_sessions[0] if startup_sessions else None), cached_values),
                 pre_show_callback,
-                args.title or appname,
+                args.title or display_name,
                 winname,
                 wincls,
                 wstate,
@@ -590,7 +592,7 @@ def kitty_main(called_from_panel: bool = False) -> None:
     cli_flags = None
     if getattr(sys, 'cmdline_args_for_open', False):
         usage: str | None = 'file_or_url ...'
-        appname: str | None = 'kitty +open'
+        appname: str | None = f'{cli_name} +open'
         msg: str | None = (
             'Run kitty and open the specified files or URLs in it, using launch-actions.conf. For details'
             ' see https://sw.kovidgoyal.net/kitty/open_actions/#scripting-the-opening-of-files-with-kitty-on-macos'

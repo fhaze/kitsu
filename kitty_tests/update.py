@@ -2,12 +2,24 @@
 # License: GPLv3 Copyright: 2025, Kovid Goyal <kovid at kovidgoyal.net>
 
 from kitty.constants import Version
-from kitty.update import ReleaseInfo, is_newer, parse_release_tag
+from kitty.update import ReleaseInfo, is_newer, parse_release_tag, windows_setup_asset
 
 from .base import BaseTest
 
 
 class TestUpdate(BaseTest):
+    def test_windows_setup_asset(self):
+        for name in ('kitsu-0.49.2-windows-x86_64-setup.exe', 'kitty-0.49.2-windows-x86_64-setup.exe'):
+            asset = {'name': name, 'browser_download_url': 'https://example.org/' + name, 'digest': 'sha256:' + 'a' * 64}
+            release = {'tag_name': 'v0.49.2-windows.1', 'assets': [asset]}
+            self.assertEqual(windows_setup_asset(release), (name, asset['browser_download_url'], 'a' * 64))
+            asset.pop('digest')
+            with self.assertRaisesRegex(SystemExit, 'no SHA-256 digest'):
+                windows_setup_asset(release)
+        for name in ('kitsu-0.49.2-windows-arm64-setup.exe', 'kitsu-0.49.2-windows-x86_64.zip'):
+            with self.assertRaisesRegex(SystemExit, 'no Windows Kitsu installer'):
+                windows_setup_asset({'assets': [{'name': name}]})
+
     def test_parse_release_tag(self):
         def t(tag, base, build):
             info = parse_release_tag(tag)

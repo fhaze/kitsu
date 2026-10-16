@@ -28,14 +28,14 @@ jobs:
           - name: Download Windows package artifact
             uses: actions/download-artifact@v8.0.1
             with:
-              name: kitty-windows-x86_64
+              name: kitsu-windows-x86_64
 
           - name: Create release
             env:
               GH_TOKEN: ${{ github.token }}
             run: |
-              gh release create "$GITHUB_REF_NAME" kitty-*-windows-*-setup.exe kitty-*-windows-*.zip \
+              gh release create "$GITHUB_REF_NAME" kitsu-*-windows-*-setup.exe kitsu-*-windows-*.zip \
                 --repo "$GITHUB_REPOSITORY" \
-                --title "kitty $GITHUB_REF_NAME" \
-                --notes 'Windows downloads: use the .exe installer for installation and WSL kitten setup, or the .zip for portable use. Standalone kitten binaries are not published; use the installer and kitty +wsl-setup for WSL.' \
+                --title "Kitsu $GITHUB_REF_NAME" \
+                --notes 'Windows downloads: use the .exe installer for installation and WSL kitten setup, or the .zip for portable use. Standalone kitten binaries are not published; use the installer and kitsu +wsl-setup for WSL.' \
                 --generate-notes
