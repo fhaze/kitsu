@@ -1,0 +1,65 @@
+name: Windows dependency scan
+on:
+    workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+    scan:
+        name: Scan shipped Windows dependencies
+        runs-on: ubuntu-latest
+        steps:
+          - name: Download Windows package
+            uses: actions/download-artifact@v8.0.1
+            with:
+              name: kitty-windows-x86_64
+              path: windows-artifacts
+
+          - name: Download Windows dependency inventory
+            uses: actions/download-artifact@v8.0.1
+            with:
+              name: windows-runtime-sbom
+              path: windows-inventory
+
+          - name: Extract the portable package
+            run: |
+              set -euo pipefail
+              packages=(windows-artifacts/kitty-*-windows-*.zip)
+              test "${#packages[@]}" -eq 1
+              unzip -q "${packages[0]}" -d windows-package
+              test -f windows-package/kitty/bin/kitty.exe
+
+          - name: Scan packaged binaries (including WSL kittens)
+            id: binaries
+            uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+            with:
+              path: windows-package/kitty
+              output-format: json
+              output-file: windows-binaries.grype.json
+              severity-cutoff: medium
+              only-fixed: true
+              add-cpes-if-none: true
+              by-cve: true
+
+          - name: Scan shipped MSYS2 runtime versions
+            if: ${{ !cancelled() && steps.binaries.outcome != 'skipped' }}
+            uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+            with:
+              sbom: windows-inventory/windows-runtime.cdx.json
+              output-format: json
+              output-file: windows-runtime.grype.json
+              severity-cutoff: medium
+              only-fixed: true
+              add-cpes-if-none: true
+              by-cve: true
+
+          - name: Upload vulnerability reports
+            if: always()
+            uses: actions/upload-artifact@v7.0.1
+            with:
+              name: windows-depscan-reports
+              path: |
+                windows-inventory/windows-runtime.cdx.json
+                windows-*.grype.json
+              if-no-files-found: warn

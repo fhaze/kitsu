@@ -16,3 +16,8 @@ jobs:
     windows:
         name: Windows
         uses: ./.github/workflows/windows-build.yml
+
+    depscan:
+        name: Windows dependencies
+        needs: windows
+        uses: ./.github/workflows/windows-depscan.yml
