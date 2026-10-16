@@ -32,9 +32,11 @@ class TestBranding(unittest.TestCase):
         ico = ICON.read_bytes()
         _, kind, count = struct.unpack_from('<HHH', ico)
         self.assertEqual(kind, 1)
-        for name in ('kitsu.exe', 'kitsu.com', 'kitty.exe', 'kitty.com'):
-            with self.subTest(binary=name):
-                module = kernel.LoadLibraryExW(str(PACKAGE / 'bin' / name), None, 0x22)
+        binaries = [(PACKAGE / 'bin' / name, 'GLFW_ICON') for name in ('kitsu.exe', 'kitsu.com', 'kitty.exe', 'kitty.com')]
+        binaries.extend((path, 'MAINICON') for path in PACKAGE.parent.glob('kitsu-*-windows-*-setup.exe'))
+        for path, icon_name in binaries:
+            with self.subTest(binary=path.name):
+                module = kernel.LoadLibraryExW(str(path), None, 0x22)
                 self.assertTrue(module, ctypes.get_last_error())
                 try:
 
@@ -46,14 +48,15 @@ class TestBranding(unittest.TestCase):
                         self.assertTrue(ptr)
                         return ctypes.string_at(ptr, size)
 
-                    group = resource('GLFW_ICON', 14)
+                    group = resource(icon_name, 14)
                     self.assertEqual(struct.unpack_from('<HHH', group), (0, 1, count))
                     for i in range(count):
                         expected = struct.unpack_from('<BBBBHHII', ico, 6 + 16 * i)
                         actual = struct.unpack_from('<BBBBHHIH', group, 6 + 14 * i)
                         self.assertEqual(actual[:4], expected[:4])
-                        # windres normalizes zero planes in PNG-backed ICO entries to one.
-                        self.assertEqual(actual[4:7], (expected[4] or 1, *expected[5:7]))
+                        # windres normalizes zero planes to one; Inno preserves the ICO header.
+                        self.assertIn(actual[4], (expected[4], expected[4] or 1))
+                        self.assertEqual(actual[5:7], expected[5:7])
                         self.assertEqual(resource(ctypes.cast(actual[7], wintypes.LPCWSTR), 3), ico[expected[7] : expected[7] + expected[6]])
                 finally:
                     kernel.FreeLibrary(module)
