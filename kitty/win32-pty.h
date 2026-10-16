@@ -32,3 +32,4 @@ bool win32_pty_resize(int master_fd, unsigned short rows, unsigned short cols);
 bool win32_pty_signal_pid(pid_t pid, int sig);
 
 void win32_pty_init(void);
+const char *win32_pty_provider(void);

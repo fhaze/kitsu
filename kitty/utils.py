@@ -792,7 +792,7 @@ def system_paths_on_macos() -> tuple[str, ...]:
 
 
 def which(name: str, only_system: bool = False) -> str | None:
-    if os.sep in name:
+    if os.path.dirname(name):
         return name
     import shutil
 

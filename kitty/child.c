@@ -370,9 +370,17 @@ spawn(PyObject *self UNUSED, PyObject *args) {
 }
 #endif
 
+#ifdef _WIN32
+static PyObject*
+win32_conpty_provider(PyObject *self UNUSED, PyObject *args UNUSED) {
+    return PyUnicode_FromString(win32_pty_provider());
+}
+#endif
+
 static PyMethodDef module_methods[] = {
     METHODB(spawn, METH_VARARGS),
 #ifdef _WIN32
+    METHODB(win32_conpty_provider, METH_NOARGS),
     METHODB(openpty, METH_VARARGS),
     METHODB(set_blocking, METH_VARARGS),
     METHODB(open_directory, METH_VARARGS),

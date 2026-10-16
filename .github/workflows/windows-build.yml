@@ -112,6 +112,20 @@ jobs:
               if not exist ..\lib\kitty\windows\wsl\kitten-linux-arm64 exit /b 1
               python -c "from pathlib import Path; bad = [str(p) for p in Path(r'..\lib\kitty\shell-integration').rglob('*') if p.is_file() and b'\r\n' in p.read_bytes()]; assert not bad, bad"
 
+          - name: Health-check quick diagnostics (packaged runtime)
+            shell: pwsh
+            run: |
+              & ./windows-package/kitty/bin/health-check.ps1 -Format json > health-check.json
+              if ($LASTEXITCODE -ne 0) { Get-Content health-check.json; exit $LASTEXITCODE }
+
+          - name: Upload health-check report
+            if: always()
+            uses: actions/upload-artifact@v7.0.1
+            with:
+              name: windows-health-check
+              path: health-check.json
+              if-no-files-found: ignore
+
           - name: Smoke test the installer (install, upgrade, uninstall)
             env:
               # keep /VERYSILENT etc. from being turned into paths by the MSYS2 shell

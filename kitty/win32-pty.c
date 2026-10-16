@@ -32,6 +32,7 @@ pid_t win32_pty_spawn(int master_fd, const char *exe, const char *cwd, char *con
 bool win32_pty_resize(int master_fd, unsigned short rows, unsigned short cols);
 bool win32_pty_signal_pid(pid_t pid, int sig);
 void win32_pty_init(void);
+const char *win32_pty_provider(void);
 
 // The in-box conhost.exe that kernel32's CreatePseudoConsole() spawns drops
 // escape sequences it does not understand, which includes the APC based kitty
@@ -46,6 +47,12 @@ static struct {
     resize_pseudo_console_func resize;
     close_pseudo_console_func close;
 } conpty_api = {0};
+
+const char *
+win32_pty_provider(void) {
+    if (!conpty_api.create) return "uninitialized";
+    return conpty_api.create == CreatePseudoConsole ? "system" : "bundled";
+}
 
 static void
 load_conpty_api(void) {
