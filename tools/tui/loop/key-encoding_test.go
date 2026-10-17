@@ -11,6 +11,18 @@ import (
 
 var _ = fmt.Print
 
+func TestKeyEventAsCSIUnicode(t *testing.T) {
+	ev := KeyEvent{Type: PRESS, Key: "é", ShiftedKey: "É", AlternateKey: "😀", Mods: SHIFT, Text: "É"}
+	encoded := ev.AsCSI()
+	if encoded != "\x1b[233:201:128512;2;201u" {
+		t.Fatalf("Unicode keys were not encoded as codepoints: %q", encoded)
+	}
+	ev.CSI = encoded[2:]
+	if diff := cmp.Diff(&ev, KeyEventFromCSI(encoded[2:])); diff != "" {
+		t.Fatalf("Unicode key event did not round trip:\n%s", diff)
+	}
+}
+
 func TestKeyEventFromCSI(t *testing.T) {
 
 	test_text := func(csi string, expected, alternate string) {

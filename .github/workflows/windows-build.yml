@@ -98,6 +98,11 @@ jobs:
               setup=$(ls windows-package/kitsu-*-windows-*-setup.exe)
               echo "setup=$setup" >> "$GITHUB_OUTPUT"
 
+          - name: Test Windows console and TUI key handling
+            run: |
+              go test ./tools/tty ./tools/tui/loop ./tools/tui/readline ./kittens/choose_files
+              go vet ./tools/tty ./tools/tui/loop ./tools/tui/readline ./kittens/choose_files
+
           - name: Verify Kitsu branding and embedded executable icons
             run: python windows/test_branding.py windows-package/kitsu
 

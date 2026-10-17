@@ -10,6 +10,7 @@ import (
 )
 
 func TestWindowsConsoleKeys(t *testing.T) {
+	const vk_packet = 0xe7
 	for _, tc := range []struct {
 		name, shortcut, text string
 		vk                   uint16
@@ -37,7 +38,7 @@ func TestWindowsConsoleKeys(t *testing.T) {
 		{name: "shift text", shortcut: "shift+a", vk: 'A', char: 'A', text: "A", state: windows.SHIFT_PRESSED},
 		{name: "alt text", shortcut: "alt+a", vk: 'A', char: 'a', text: "a", state: windows.LEFT_ALT_PRESSED},
 		{name: "locks", shortcut: "enter", vk: windows.VK_RETURN, char: '\r', state: windows.CAPSLOCK_ON | windows.NUMLOCK_ON},
-		{name: "unicode packet", shortcut: "é", vk: windows.VK_PACKET, char: 'é', text: "é"},
+		{name: "unicode packet", shortcut: "é", vk: vk_packet, char: 'é', text: "é"},
 		{name: "altgr", shortcut: "e", vk: 'E', char: '€', text: "€", state: windows.RIGHT_ALT_PRESSED | windows.LEFT_CTRL_PRESSED},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
