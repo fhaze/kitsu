@@ -221,7 +221,7 @@ class TestGraphics(BaseTest):
             parse_bytes(s, b'\x1b[?9001h' if mode else b'\x1b[?9001l')
             for command, payload, response in (
                 ('a=q,i=1,f=24,s=1,v=1', b'123', b'\x1b_Gi=1;OK\x1b\\'),
-                ('a=q,i=2,f=24,s=1,v=1', b'1', b'\x1b_Gi=2;ENODATA:Insufficient image data 1 < 3\x1b\\'),
+                ('a=q,i=2,f=24,s=1,v=1', b'1', b'\x1b_Gi=2;ENODATA:Insufficient image data: 1 < 3\x1b\\'),
             ):
                 with self.subTest(mode=mode, command=command):
                     expected = response
