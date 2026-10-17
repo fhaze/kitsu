@@ -14,6 +14,32 @@ PACKAGE = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 else Path('window
 ICON = Path(__file__).resolve().parents[1] / 'logo/kitsu.ico'
 
 
+class TestIconAssets(unittest.TestCase):
+    def test_png_dimensions(self) -> None:
+        for name in ('kitsu.png', 'kitsu-128.png'):
+            with self.subTest(icon=name):
+                data = ICON.with_name(name).read_bytes()
+                self.assertEqual(data[:8], b'\x89PNG\r\n\x1a\n')
+                width, height = struct.unpack_from('>II', data, 16)
+                self.assertGreater(width, 0)
+                self.assertEqual(width, height)
+                if name == 'kitsu-128.png':
+                    self.assertEqual((width, height), (128, 128))
+
+    def test_ico_dimensions(self) -> None:
+        data = ICON.read_bytes()
+        sizes = (16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
+        self.assertEqual(struct.unpack_from('<HHH', data), (0, 1, len(sizes)))
+        for i, size in enumerate(sizes):
+            with self.subTest(size=size):
+                width, height, _, _, _, _, length, offset = struct.unpack_from('<BBBBHHII', data, 6 + 16 * i)
+                self.assertEqual((width or 256, height or 256), (size, size))
+                frame = data[offset : offset + length]
+                self.assertEqual(len(frame), length)
+                self.assertEqual(frame[:8], b'\x89PNG\r\n\x1a\n')
+                self.assertEqual(struct.unpack_from('>II', frame, 16), (size, size))
+
+
 @unittest.skipUnless(sys.platform == 'win32', 'Windows resources')
 class TestBranding(unittest.TestCase):
     def test_embedded_icons(self) -> None:
