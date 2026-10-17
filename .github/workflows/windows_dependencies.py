@@ -145,8 +145,8 @@ def main() -> None:
     }
     vex = {
         '@context': 'https://openvex.dev/ns/v0.2.0',
-        '@id': f'https://github.com/fhaze/kitty/security/vex/{artifact_version}',
-        'author': 'https://github.com/fhaze/kitty',
+        '@id': f'https://github.com/fhaze/kitsu/security/vex/{artifact_version}',
+        'author': 'https://github.com/fhaze/kitsu',
         'timestamp': datetime.now(timezone.utc).isoformat(),
         'version': 1,
         'statements': [

@@ -13,8 +13,8 @@ from urllib.request import Request, urlopen
 
 from .constants import Version, is_windows, kitty_base_dir, kitty_exe, str_version, version
 
-RELEASES_URL = 'https://github.com/fhaze/kitty/releases/latest'
-RELEASES_API_URL = 'https://api.github.com/repos/fhaze/kitty/releases'
+RELEASES_URL = 'https://github.com/fhaze/kitsu/releases/latest'
+RELEASES_API_URL = 'https://api.github.com/repos/fhaze/kitsu/releases'
 # AppId from windows/kitty.iss -- must never change
 INNO_UNINSTALL_KEY = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\{7D0F3A2B-5C4E-4F19-9B6A-2E8D1C3F5A70}_is1'
 
@@ -115,7 +115,7 @@ def download_with_progress(url: str, sha256: str, dest_dir: str, name: str) -> s
 USAGE = """\
 Usage: kitsu +update [--fetch-version <tag|latest>]
 
-Check https://github.com/fhaze/kitty/releases for a newer Windows build of
+Check https://github.com/fhaze/kitsu/releases for a newer Windows build of
 Kitsu, download its installer (with SHA-256 verification) and launch it to
 upgrade this installation in place.
 

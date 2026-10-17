@@ -14,7 +14,7 @@ from .fast_data_types import add_timer, get_boss, monitor_pid
 from .update import fetch_release, installed_release_info, is_newer, parse_release_tag
 from .utils import log_error, open_url
 
-FORK_RELEASES_URL = 'https://github.com/fhaze/kitty/releases/latest'
+FORK_RELEASES_URL = 'https://github.com/fhaze/kitsu/releases/latest'
 CHANGELOG_URL = website_url('changelog')
 RELEASED_VERSION_URL = website_url() + 'current-version.txt'
 CHECK_INTERVAL = 24 * 60 * 60.0

@@ -13,7 +13,7 @@ copyright notices and the link:LICENSE[GPLv3 license] are retained.
 == Install
 
 Download the Windows x86_64 installer or portable ZIP from
-https://github.com/fhaze/kitty/releases[Releases] (Windows 10 1809 or newer).
+https://github.com/fhaze/kitsu/releases[Releases] (Windows 10 1809 or newer).
 
 * `kitsu-<version>-windows-x86_64-setup.exe`: recommended. Adds Kitsu to the Start
   menu and optionally to PATH, and can install the Linux `kitten` helper into WSL.
@@ -55,7 +55,7 @@ Existing configuration and WSL setups do not need to be renamed.
 * https://sw.kovidgoyal.net/kitty/[Upstream Kitty documentation] for shared
   configuration, key bindings, kittens, and protocols. Where it says `kitty`,
   use `kitsu` on Windows; configuration keys and filenames stay unchanged.
-* https://github.com/fhaze/kitty/issues[Kitsu issue tracker] for Windows/fork bugs.
+* https://github.com/fhaze/kitsu/issues[Kitsu issue tracker] for Windows/fork bugs.
   Please do not send fork-specific Windows reports to upstream Kitty.
 
 == Build from source

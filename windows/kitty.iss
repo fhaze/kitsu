@@ -20,7 +20,7 @@
   #define Arch "x86_64"
 #endif
 #ifndef AppURL
-  #define AppURL "https://github.com/fhaze/kitty"
+  #define AppURL "https://github.com/fhaze/kitsu"
 #endif
 #define AppName "Kitsu"
 #define AppExe "bin\kitsu.exe"
