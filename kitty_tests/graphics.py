@@ -215,6 +215,24 @@ def make_send_command(screen):
 
 
 class TestGraphics(BaseTest):
+    def test_win32_graphics_replies(self):
+        s = self.create_screen()
+        for mode in (False, True, False):
+            parse_bytes(s, b'\x1b[?9001h' if mode else b'\x1b[?9001l')
+            for command, payload, response in (
+                ('a=q,i=1,f=24,s=1,v=1', b'123', b'\x1b_Gi=1;OK\x1b\\'),
+                ('a=q,i=2,f=24,s=1,v=1', b'1', b'\x1b_Gi=2;ENODATA:Insufficient image data 1 < 3\x1b\\'),
+            ):
+                with self.subTest(mode=mode, command=command):
+                    expected = response
+                    if mode and sys.platform == 'win32':
+                        expected = b''.join(f'\x1b[0;0;{ch};1;0;1_'.encode() for ch in response)
+                    self.ae(send_command(s, command, payload), expected)
+            # ConPTY must still receive raw CPR for cursor synchronization.
+            s.callbacks.clear()
+            parse_bytes(s, b'\x1b[3;4H\x1b[6n')
+            self.ae(s.callbacks.wtcbuf, b'\x1b[3;4R')
+
     def test_cursor_report_after_image(self):
         s = self.create_screen(cols=80, lines=24, cell_width=10, cell_height=20)
         data = b'x' * 30 * 80 * 3

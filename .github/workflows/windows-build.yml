@@ -129,6 +129,10 @@ jobs:
             shell: cmd
             run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import runpy; runpy.run_path('.github/workflows/test_windows_runtime.py', run_name='__main__')"
 
+          - name: Test Windows graphics replies
+            shell: cmd
+            run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','--module','graphics']; main()"
+
           - name: Record shipped MSYS2 dependencies
             run: python .github/workflows/windows_dependencies.py windows-package/kitsu windows-runtime.cdx.json "${{ steps.pkg.outputs.zip }}"
 

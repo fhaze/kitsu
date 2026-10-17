@@ -1768,6 +1768,20 @@ write_escape_code_to_child(Screen *self, unsigned char which, const char *data) 
     bool written = false;
     const char *prefix, *suffix;
     get_prefix_and_suffix_for_escape_code(which, &prefix, &suffix);
+    if (which == ESC_APC && self->modes.mWIN32_INPUT) {
+        // ConPTY interprets raw APC delimiters as Alt keys outside VT input mode.
+        // Leave CSI replies raw: ConPTY needs CPR for its own synchronization.
+        size_t text_size = strlen(prefix) + strlen(data) + strlen(suffix) + 1;
+        RAII_ALLOC(char, text, malloc(text_size));
+        if (!text) return false;
+        snprintf(text, text_size, "%s%s%s", prefix, data, suffix);
+        GLFWkeyevent ev = {.text = text, .action = GLFW_PRESS};
+        size_t size = encode_win32_key_event(&ev, NULL, 0);
+        RAII_ALLOC(char, encoded, malloc(size + 1));
+        if (!encoded) return false;
+        encode_win32_key_event(&ev, encoded, size + 1);
+        return write_to_child(self, encoded, size);
+    }
     if (self->window_id) {
         if (suffix[0]) {
             written = schedule_write_to_child(self->window_id, 3, prefix, strlen(prefix), data, strlen(data), suffix, strlen(suffix));
