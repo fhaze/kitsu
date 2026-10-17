@@ -207,6 +207,20 @@ send_key_to_child(id_type window_id, Screen *screen, const GLFWkeyevent *ev) {
     if ((screen->scrolled_by || screen->pixel_scroll_offset_y != 0) && action == GLFW_PRESS && !is_no_action_key(key, native_key)) {
         screen_history_scroll(screen, SCROLL_FULL, false); // scroll back to bottom
     }
+    if (screen->modes.mWIN32_INPUT && (ev->win32_vk || text[0])) {
+        char buf[KEY_BUFFER_SIZE];
+        size_t size = encode_win32_key_event(ev, buf, sizeof(buf));
+        if (size < sizeof(buf)) {
+            schedule_write_to_child(window_id, 1, buf, size);
+        } else {
+            RAII_ALLOC(char, large_buf, malloc(size + 1));
+            if (large_buf) {
+                encode_win32_key_event(ev, large_buf, size + 1);
+                schedule_write_to_child(window_id, 1, large_buf, size);
+            }
+        }
+        return;
+    }
     char encoded_key[KEY_BUFFER_SIZE] = {0};
     int size = encode_glfw_key_event(ev, screen->modes.mDECCKM, screen_current_key_encoding_flags(screen), encoded_key);
     if (size == SEND_TEXT_TO_CHILD) {
@@ -398,14 +412,63 @@ PYWRAP1(key_for_native_key_name) {
 
 static PyObject *
 pyencode_key_for_tty(PyObject *self UNUSED, PyObject *args, PyObject *kw) {
-    static char *kwds[] = {"key", "shifted_key", "alternate_key", "mods", "action", "key_encoding_flags", "text", "cursor_key_mode", NULL};
+    static char *kwds[] = {
+        "key",
+        "shifted_key",
+        "alternate_key",
+        "mods",
+        "action",
+        "key_encoding_flags",
+        "text",
+        "cursor_key_mode",
+        "win32_input_mode",
+        "native_key",
+        "win32_vk",
+        "win32_char",
+        "win32_control_state",
+        NULL};
     unsigned int key = 0, shifted_key = 0, alternate_key = 0, mods = 0, action = GLFW_PRESS, key_encoding_flags = 0;
     const char *text = NULL;
     int cursor_key_mode = 0;
+    int win32_input_mode = 0, native_key = 0;
+    unsigned int win32_vk = 0, win32_char = 0, win32_control_state = 0;
     if (!PyArg_ParseTupleAndKeywords(
-            args, kw, "I|IIIIIzp", kwds, &key, &shifted_key, &alternate_key, &mods, &action, &key_encoding_flags, &text, &cursor_key_mode))
+            args,
+            kw,
+            "I|IIIIIzppiIII",
+            kwds,
+            &key,
+            &shifted_key,
+            &alternate_key,
+            &mods,
+            &action,
+            &key_encoding_flags,
+            &text,
+            &cursor_key_mode,
+            &win32_input_mode,
+            &native_key,
+            &win32_vk,
+            &win32_char,
+            &win32_control_state))
         return NULL;
-    GLFWkeyevent ev = {.key = key, .shifted_key = shifted_key, .alternate_key = alternate_key, .text = text, .action = action, .mods = mods};
+    GLFWkeyevent ev = {
+        .key = key,
+        .shifted_key = shifted_key,
+        .alternate_key = alternate_key,
+        .text = text,
+        .action = action,
+        .mods = mods,
+        .native_key = native_key,
+        .win32_vk = win32_vk,
+        .win32_char = win32_char,
+        .win32_control_state = win32_control_state};
+    if (win32_input_mode) {
+        size_t size = encode_win32_key_event(&ev, NULL, 0);
+        RAII_ALLOC(char, buf, malloc(size + 1));
+        if (!buf) return PyErr_NoMemory();
+        encode_win32_key_event(&ev, buf, size + 1);
+        return PyUnicode_FromStringAndSize(buf, size);
+    }
     char output[KEY_BUFFER_SIZE + 1] = {0};
     int num = encode_glfw_key_event(&ev, cursor_key_mode, key_encoding_flags, output);
     if (num == SEND_TEXT_TO_CHILD) return PyUnicode_FromString(text);

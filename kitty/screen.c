@@ -2041,7 +2041,14 @@ set_mode_from_const(Screen *self, unsigned int mode, bool val) {
             else if (!val && self->linebuf != self->main_linebuf) screen_toggle_screen_buffer(self, mode == ALTERNATE_SCREEN, mode == ALTERNATE_SCREEN);
             break;
         case 7727 << 5: log_error("Application escape mode is not supported, the extended keyboard protocol should be used instead"); break;
-        case 9001 << 5: break; // win32-input-mode, sent by ConPTY; we only speak VT input
+        case 9001 << 5:
+#ifdef _WIN32
+            // ConPTY distinguishes cursor reports from F3 only after receiving native key events.
+            // A zero-repeat key-up establishes the input format even before the first user key.
+            if (val && !self->modes.mWIN32_INPUT) write_escape_code_to_child(self, ESC_CSI, "0;0;0;0;0;0_");
+            self->modes.mWIN32_INPUT = val;
+#endif
+            break;
         case PENDING_MODE << 5:
             if (!screen_pause_rendering(self, val, 0)) {
                 log_error("Pending mode change to already current mode (%d) requested. Either pending mode expired or there is an application bug.", val);
@@ -3296,6 +3303,9 @@ report_mode_status(Screen *self, unsigned int which, bool private) {
         case MOUSE_UTF8_MODE: ans = self->modes.mouse_tracking_protocol == UTF8_PROTOCOL ? 1 : 2; break;
         case MOUSE_SGR_PIXEL_MODE: ans = self->modes.mouse_tracking_protocol == SGR_PIXEL_PROTOCOL ? 1 : 2; break;
         case PENDING_UPDATE: ans = self->paused_rendering.expires_at ? 1 : 2; break;
+#ifdef _WIN32
+        case 9001 << 5: ans = self->modes.mWIN32_INPUT ? 1 : 2; break;
+#endif
     }
     int sz = snprintf(buf, sizeof(buf) - 1, "%s%u;%u$y", (private ? "?" : ""), which, ans);
     if (sz > 0) write_escape_code_to_child(self, ESC_CSI, buf);

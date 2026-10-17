@@ -804,6 +804,11 @@ typedef enum {
  *  [window hint](@ref GLFW_BLUR_RADIUS).
  */
 #define GLFW_BLUR_RADIUS 0x0002305
+/*! @brief Windows specific blur mode for GLFW_BLUR_RADIUS: plain blur-behind
+ *  (focus-independent) or acrylic system backdrop (stripped by DWM when the
+ *  window loses focus).
+ *  [window hint](@ref GLFW_WIN32_BLUR_MODE_hint).
+ */
 #define GLFW_WIN32_BLUR_MODE 0x00023006
 #define GLFW_WIN32_BLUR_BLURBEHIND 0
 #define GLFW_WIN32_BLUR_ACRYLIC 1
@@ -1068,6 +1073,9 @@ typedef struct GLFWkeyevent {
 
     // True if this is a synthesized event on focus change
     bool fake_event_on_focus_change;
+
+    // Original Windows KEY_EVENT_RECORD fields, before VT keyboard normalization.
+    uint32_t win32_vk, win32_char, win32_control_state;
 } GLFWkeyevent;
 
 typedef enum { GLFW_LAYER_SHELL_NONE, GLFW_LAYER_SHELL_BACKGROUND, GLFW_LAYER_SHELL_PANEL, GLFW_LAYER_SHELL_TOP, GLFW_LAYER_SHELL_OVERLAY } GLFWLayerShellType;

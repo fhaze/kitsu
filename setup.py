@@ -1876,8 +1876,8 @@ def bundle_windows_runtime(ddir: str, launcher_dir: str) -> None:
 # The in-box conhost.exe drops escape sequences it does not understand, which
 # includes the kitty graphics protocol. The MIT licensed ConPTY from the Windows
 # Terminal project relays them, kitty/win32-pty.c uses it when it is next to kitty.exe.
-CONPTY_NUGET_VERSION = '1.24.260710001'
-CONPTY_NUGET_SHA256 = '175640566a3b59c4b132070ee96c2c77e5ab7edd2e92732a5eb3610bbf63d90e'
+CONPTY_NUGET_VERSION = '1.25.260930003'
+CONPTY_NUGET_SHA256 = '02b07b349af66d801159bdf9e440d4a1ce78bb951f37fc8609731665afdae7ee'
 
 
 # Custom shaders are compiled at runtime by running slangc, which kitty looks up

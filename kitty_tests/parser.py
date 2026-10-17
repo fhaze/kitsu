@@ -2,6 +2,7 @@
 # License: GPL v3 Copyright: 2016, Kovid Goyal <kovid at kovidgoyal.net>
 
 import random
+import sys
 from binascii import hexlify
 from functools import partial
 
@@ -54,6 +55,32 @@ class CmdDump(list):
 
 
 class TestParser(BaseTest):
+    def test_win32_input_mode(self):
+        s = self.create_screen()
+        c = s.callbacks
+
+        def check(expected):
+            c.clear()
+            parse_bytes(s, b'\x1b[?9001$p')
+            self.ae(c.wtcbuf, f'\x1b[?9001;{expected}$y'.encode())
+
+        check(2 if sys.platform == 'win32' else 0)
+        c.clear()
+        parse_bytes(s, b'\x1b[?9001h')
+        self.ae(c.wtcbuf, b'\x1b[0;0;0;0;0;0_' if sys.platform == 'win32' else b'')
+        c.clear()
+        parse_bytes(s, b'\x1b[?9001h')
+        self.ae(c.wtcbuf, b'')
+        check(1 if sys.platform == 'win32' else 0)
+        # Replies must remain raw VT: ConPTY also uses CPR for its own cursor synchronization.
+        c.clear()
+        parse_bytes(s, b'\x1b[3;4H\x1b[6n')
+        self.ae(c.wtcbuf, b'\x1b[3;4R')
+        parse_bytes(s, b'\x1b[?9001l')
+        check(2 if sys.platform == 'win32' else 0)
+        parse_bytes(s, b'\x1b[?9001h\x1bc')
+        check(2 if sys.platform == 'win32' else 0)
+
     def create_write_buffer(self, screen):
         return screen.test_create_write_buffer()
 

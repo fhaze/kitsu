@@ -215,6 +215,17 @@ def make_send_command(screen):
 
 
 class TestGraphics(BaseTest):
+    def test_cursor_report_after_image(self):
+        s = self.create_screen(cols=80, lines=24, cell_width=10, cell_height=20)
+        data = b'x' * 30 * 80 * 3
+        self.assertIsNone(parse_response(send_command(s, 'a=T,f=24,s=30,v=80', data)))
+        self.ae((s.cursor.x, s.cursor.y), (3, 3))
+        s.callbacks.clear()
+        parse_bytes(s, b'\x1b[6n')
+        self.ae(s.callbacks.wtcbuf, b'\x1b[4;4R')
+        parse_bytes(s, b'\x1b[Hafter fastfetch')
+        self.ae(str(s.line(0)), 'after fastfetch')
+
     def test_disk_cache(self):
         s = self.create_screen()
         dc = s.grman.disk_cache
@@ -1728,9 +1739,10 @@ class TestGraphics(BaseTest):
             def stat(path, *args, **kwargs):
                 return SimpleNamespace(**metadata) if path == src else original_stat(path, *args, **kwargs)
 
-            with patch('kitty.render_cache.os.stat', side_effect=stat), patch.object(
-                cache, 'render_image', side_effect=lambda src, dest: Path(dest).write_bytes(b'rgba')
-            ) as render:
+            with (
+                patch('kitty.render_cache.os.stat', side_effect=stat),
+                patch.object(cache, 'render_image', side_effect=lambda src, dest: Path(dest).write_bytes(b'rgba')) as render,
+            ):
                 outputs = {cache.render(src)}
                 for field, value in (('st_dev', 2**64 - 1), ('st_ino', 2**128 - 1), ('st_size', 6), ('st_mtime_ns', -1)):
                     metadata[field] = value

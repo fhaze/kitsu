@@ -351,6 +351,11 @@ def encode_key_for_tty(
     key_encoding_flags: int = 0,
     text: str = '',
     cursor_key_mode: bool = False,
+    win32_input_mode: bool = False,
+    native_key: int = 0,
+    win32_vk: int = 0,
+    win32_char: int = 0,
+    win32_control_state: int = 0,
 ) -> str:
     pass
 
