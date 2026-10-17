@@ -8,6 +8,25 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func TestRawConsoleKeyMode(t *testing.T) {
+	for _, initial := range []uint32{0, 0x3a8, ^uint32(0)} {
+		raw := Termios{InMode: initial, OutMode: initial}
+		SetRaw(&raw)
+		keys := Termios{InMode: initial, OutMode: initial}
+		SetRawWithKeyEvents(&keys)
+		if raw.InMode&windows.ENABLE_VIRTUAL_TERMINAL_INPUT == 0 {
+			t.Fatal("byte-oriented raw mode lost VT input")
+		}
+		if keys.InMode&windows.ENABLE_VIRTUAL_TERMINAL_INPUT != 0 {
+			t.Fatal("VT input would turn native keys into synthetic text")
+		}
+		raw.InMode &^= windows.ENABLE_VIRTUAL_TERMINAL_INPUT
+		if keys != raw {
+			t.Fatalf("key mode changed unrelated console flags: raw=%+v keys=%+v", raw, keys)
+		}
+	}
+}
+
 func TestConsoleKeyRecords(t *testing.T) {
 	term := &Term{}
 	var calls int

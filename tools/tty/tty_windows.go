@@ -108,6 +108,13 @@ var SetRaw TermiosOperation = func(t *Termios) {
 	t.OutMode &^= windows.ENABLE_WRAP_AT_EOL_OUTPUT
 }
 
+// SetRawWithKeyEvents keeps native console key records instead of VT text.
+var SetRawWithKeyEvents TermiosOperation = func(t *Termios) {
+	SetRaw(t)
+	// VT input turns even real keys into synthetic records with no key identity.
+	t.InMode &^= windows.ENABLE_VIRTUAL_TERMINAL_INPUT
+}
+
 var SetNoEcho TermiosOperation = func(t *Termios) {
 	t.InMode &^= windows.ENABLE_ECHO_INPUT
 }
@@ -327,8 +334,8 @@ func (self *Term) ReadWithTimeout(b []byte, d time.Duration) (n int, err error) 
 	return self.read_with_timeout(b, d, nil)
 }
 
-// ReadKeyEvents preserves native key identity for TUI consumers, without changing
-// the byte-oriented input used by other terminal readers.
+// ReadKeyEvents encodes native keys from a console in SetRawWithKeyEvents mode,
+// without changing the byte-oriented input used by other terminal readers.
 func (self *Term) ReadKeyEvents(b []byte, encode KeyEventEncoder) (n int, err error) {
 	return self.read_with_timeout(b, -1, encode)
 }

@@ -39,6 +39,8 @@ func TestWindowsConsoleKeys(t *testing.T) {
 		{name: "alt text", shortcut: "alt+a", vk: 'A', char: 'a', text: "a", state: windows.LEFT_ALT_PRESSED},
 		{name: "locks", shortcut: "enter", vk: windows.VK_RETURN, char: '\r', state: windows.CAPSLOCK_ON | windows.NUMLOCK_ON},
 		{name: "unicode packet", shortcut: "é", vk: vk_packet, char: 'é', text: "é"},
+		{name: "cjk packet", shortcut: "中", vk: vk_packet, char: '中', text: "中"},
+		{name: "emoji packet", shortcut: "😀", vk: vk_packet, char: '😀', text: "😀"},
 		{name: "altgr", shortcut: "e", vk: 'E', char: '€', text: "€", state: windows.RIGHT_ALT_PRESSED | windows.LEFT_CTRL_PRESSED},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

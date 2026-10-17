@@ -425,7 +425,7 @@ func (self *Loop) on_SIGHUP() error {
 
 func (self *Loop) run() (err error) {
 	signal_channel := make(chan os.Signal, 256)
-	controlling_term, err := tty.OpenControllingTerm(tty.SetRaw)
+	controlling_term, err := tty.OpenControllingTerm(tty.SetRawWithKeyEvents)
 	if err != nil {
 		return err
 	}
