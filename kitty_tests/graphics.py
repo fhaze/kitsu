@@ -1710,6 +1710,36 @@ class TestGraphics(BaseTest):
         self.assertIsNotNone(g.image_for_client_id(1), 'non-transient image should survive')
         self.assertIsNotNone(g.image_for_client_id(3), 'newly added image should survive')
 
+    def test_image_cache_large_file_metadata(self):
+        from pathlib import Path
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from kitty.render_cache import ImageRenderCacheForTesting
+
+        with tempfile.TemporaryDirectory() as cache_path:
+            src = os.path.join(cache_path, 'source.png')
+            Path(src).write_bytes(b'image')
+            cache = ImageRenderCacheForTesting(cache_path)
+            cache.max_entries = 8
+            original_stat = os.stat
+            metadata = dict(st_dev=0, st_ino=0, st_size=5, st_mtime_ns=0)
+
+            def stat(path, *args, **kwargs):
+                return SimpleNamespace(**metadata) if path == src else original_stat(path, *args, **kwargs)
+
+            with patch('kitty.render_cache.os.stat', side_effect=stat), patch.object(
+                cache, 'render_image', side_effect=lambda src, dest: Path(dest).write_bytes(b'rgba')
+            ) as render:
+                outputs = {cache.render(src)}
+                for field, value in (('st_dev', 2**64 - 1), ('st_ino', 2**128 - 1), ('st_size', 6), ('st_mtime_ns', -1)):
+                    metadata[field] = value
+                    output = cache.render(src)
+                    self.assertNotIn(output, outputs)
+                    outputs.add(output)
+                    self.ae(cache.render(src), output)
+                    self.ae(render.call_count, len(outputs))
+
     @unittest.skipIf(Image is None, 'PIL not available, skipping PNG tests')
     def test_cached_rgba_conversion(self):
         from kitty.render_cache import ImageRenderCacheForTesting

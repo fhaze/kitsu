@@ -18,12 +18,12 @@ from .base import BaseTest
 
 class TestBuild(BaseTest):
     def test_exe(self) -> None:
-        from kitty.constants import kitten_exe, kitty_exe, slangc, str_version
+        from kitty.constants import cli_name, kitten_exe, kitty_exe, slangc, str_version
 
         exe = kitty_exe()
         self.assertTrue(os.access(exe, os.X_OK))
         self.assertTrue(os.path.isfile(exe))
-        self.assertIn('kitty', os.path.basename(exe))
+        self.assertIn(cli_name, os.path.basename(exe))
         exe = kitten_exe()
         self.assertTrue(os.access(exe, os.X_OK))
         self.assertTrue(os.path.isfile(exe))
