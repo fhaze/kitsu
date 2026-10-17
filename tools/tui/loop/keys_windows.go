@@ -56,9 +56,11 @@ func encode_windows_key_event(vk uint16, char rune, state uint32) string {
 		}
 		ev.Key = string(unicode.ToLower(r))
 		if char >= 32 && char != 127 {
-			ev.Text = string(char)
 			if state&(windows.RIGHT_ALT_PRESSED|windows.LEFT_CTRL_PRESSED) == windows.RIGHT_ALT_PRESSED|windows.LEFT_CTRL_PRESSED {
 				ev.Mods &^= CTRL | ALT // AltGr produces text, not a Ctrl+Alt shortcut.
+			}
+			if ev.Mods&(CTRL|ALT) == 0 {
+				ev.Text = string(char)
 			}
 			if ev.Mods&SHIFT != 0 && char != unicode.ToLower(r) {
 				ev.ShiftedKey = string(char)

@@ -36,7 +36,10 @@ func TestWindowsConsoleKeys(t *testing.T) {
 		{name: "f24", shortcut: "f24", vk: windows.VK_F24},
 		{name: "text", shortcut: "a", vk: 'A', char: 'a', text: "a"},
 		{name: "shift text", shortcut: "shift+a", vk: 'A', char: 'A', text: "A", state: windows.SHIFT_PRESSED},
-		{name: "alt text", shortcut: "alt+a", vk: 'A', char: 'a', text: "a", state: windows.LEFT_ALT_PRESSED},
+		{name: "alt shortcut", shortcut: "alt+a", vk: 'A', char: 'a', state: windows.LEFT_ALT_PRESSED},
+		{name: "alt backslash from conpty APC reply", shortcut: "alt+\\", vk: 0xdc, char: '\\', state: windows.LEFT_ALT_PRESSED},
+		{name: "ctrl printable shortcut", shortcut: "ctrl+2", vk: '2', char: '2', state: windows.LEFT_CTRL_PRESSED},
+		{name: "ctrl alt shortcut", shortcut: "ctrl+alt+e", vk: 'E', char: '€', state: windows.LEFT_CTRL_PRESSED | windows.LEFT_ALT_PRESSED},
 		{name: "locks", shortcut: "enter", vk: windows.VK_RETURN, char: '\r', state: windows.CAPSLOCK_ON | windows.NUMLOCK_ON},
 		{name: "unicode packet", shortcut: "é", vk: vk_packet, char: 'é', text: "é"},
 		{name: "cjk packet", shortcut: "中", vk: vk_packet, char: '中', text: "中"},
@@ -49,7 +52,6 @@ func TestWindowsConsoleKeys(t *testing.T) {
 			var text string
 			lp.OnKeyEvent = func(ev *KeyEvent) error {
 				got = ev
-				ev.Handled = tc.text == ""
 				return nil
 			}
 			lp.OnText = func(s string, from_key, in_paste bool) error {
