@@ -380,6 +380,20 @@ collect_key_text(_GLFWwindow *window, char *text, size_t text_capacity, bool *is
     text[len] = 0;
 }
 
+static DWORD
+win32_control_key_state(bool extended) {
+    DWORD state = extended ? ENHANCED_KEY : 0;
+    if (GetKeyState(VK_RMENU) & 0x8000) state |= RIGHT_ALT_PRESSED;
+    if (GetKeyState(VK_LMENU) & 0x8000) state |= LEFT_ALT_PRESSED;
+    if (GetKeyState(VK_RCONTROL) & 0x8000) state |= RIGHT_CTRL_PRESSED;
+    if (GetKeyState(VK_LCONTROL) & 0x8000) state |= LEFT_CTRL_PRESSED;
+    if (GetKeyState(VK_SHIFT) & 0x8000) state |= SHIFT_PRESSED;
+    if (GetKeyState(VK_NUMLOCK) & 1) state |= NUMLOCK_ON;
+    if (GetKeyState(VK_CAPITAL) & 1) state |= CAPSLOCK_ON;
+    if (GetKeyState(VK_SCROLL) & 1) state |= SCROLLLOCK_ON;
+    return state;
+}
+
 static void
 handle_key_message(_GLFWwindow *window, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     const bool is_release = (HIWORD(lParam) & KF_UP) != 0;
@@ -425,6 +439,19 @@ handle_key_message(_GLFWwindow *window, UINT uMsg, WPARAM wParam, LPARAM lParam)
     }
 
     GLFWkeyevent ev = {.native_key = scancode, .native_key_id = (uint32_t)scancode, .action = is_release ? GLFW_RELEASE : GLFW_PRESS, .mods = mods};
+    ev.win32_vk = vk;
+    if (vk == VK_LSHIFT || vk == VK_RSHIFT) ev.win32_vk = VK_SHIFT;
+    if (vk == VK_LCONTROL || vk == VK_RCONTROL) ev.win32_vk = VK_CONTROL;
+    if (vk == VK_LMENU || vk == VK_RMENU) ev.win32_vk = VK_MENU;
+    ev.win32_control_state = win32_control_key_state(extended);
+    BYTE key_state[256];
+    WCHAR chars[8];
+    if (GetKeyboardState(key_state)) {
+        int n = ToUnicode(vk, (UINT)scancode, key_state, chars, sizeof(chars) / sizeof(WCHAR), 0x4);
+        if (n > 0) ev.win32_char = first_codepoint(chars, n);
+        // VK_PACKET can deliver half a surrogate pair; collect_key_text assembles the full character.
+        if (ev.win32_char >= 0xd800 && ev.win32_char <= 0xdfff) ev.win32_char = 0;
+    }
     // Keypad keys report a different vk depending on numlock, use the scancode table for them
     ev.key = functional_key_for_vk(vk, extended);
     if (!ev.key && scancode < 512) {
@@ -465,6 +492,9 @@ handle_key_message(_GLFWwindow *window, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
         ev.text = text;
     }
+
+    // Wait for complete packet text (including surrogate pairs), but keep releases for repeat tracking.
+    if (vk == VK_PACKET && !is_release && !text[0]) return;
 
     if (is_release && (vk == VK_LSHIFT || vk == VK_RSHIFT)) {
         // HACK: Release both Shift keys on Shift up event, as when both
@@ -2141,6 +2171,8 @@ _glfwPlatformPollEvents(void) {
 
                 GLFWkeyevent ev = {
                     .key = keys[i].key, .native_key = keys[i].scancode, .native_key_id = keys[i].scancode, .action = GLFW_RELEASE, .mods = getKeyMods()};
+                ev.win32_vk = keys[i].vk == VK_LSHIFT || keys[i].vk == VK_RSHIFT ? VK_SHIFT : keys[i].vk;
+                ev.win32_control_state = win32_control_key_state((keys[i].scancode & 0x100) != 0);
                 _glfwInputKeyboard(window, &ev);
             }
         }

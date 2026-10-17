@@ -13,6 +13,23 @@ from .base import BaseTest
 
 
 class TestKeys(BaseTest):
+    def test_encode_win32_key_event(self):
+        enc = partial(defines.encode_key_for_tty, key=0, win32_input_mode=True)
+        self.ae(enc(win32_vk=65, native_key=30, text='a'), '\x1b[65;30;97;1;0;1_')
+        self.ae(enc(win32_vk=65, native_key=30, text='A', win32_control_state=16), '\x1b[65;30;65;1;16;1_')
+        for action in (defines.GLFW_PRESS, defines.GLFW_REPEAT, defines.GLFW_RELEASE):
+            down = int(action != defines.GLFW_RELEASE)
+            self.ae(enc(win32_vk=13, native_key=28, win32_char=13, action=action), f'\x1b[13;28;13;{down};0;1_')
+        # Ctrl+C and extended keys retain their Win32 identity instead of VT encoding.
+        self.ae(enc(win32_vk=67, native_key=46, win32_char=3, win32_control_state=8), '\x1b[67;46;3;1;8;1_')
+        self.ae(enc(win32_vk=38, native_key=0x148, win32_control_state=256), '\x1b[38;72;0;1;256;1_')
+        self.ae(enc(win32_vk=114, native_key=61), '\x1b[114;61;0;1;0;1_')  # F3 is no longer a CPR lookalike.
+        self.ae(enc(text='\u00e9\U0001f408'), '\x1b[0;0;233;1;0;1_\x1b[0;0;55357;1;0;1_\x1b[0;0;56328;1;0;1_')
+        self.ae(enc(text='a' * 100), '\x1b[0;0;97;1;0;1_' * 100)
+        self.ae(enc(win32_char=0), '\x1b[0;0;0;1;0;1_')
+        # The existing VT encoder remains the default, even when native metadata is available.
+        self.ae(defines.encode_key_for_tty(key=ord('a'), text='a', win32_vk=65, native_key=30), 'a')
+
     def test_encode_key_event(self):
         enc = defines.encode_key_for_tty
         ae = self.assertEqual

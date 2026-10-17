@@ -468,3 +468,39 @@ encode_glfw_key_event(const GLFWkeyevent *e, const bool cursor_key_mode, const u
     convert_glfw_mods(e->mods, &ev, key_encoding_flags);
     return encode_key(&ev, output);
 }
+
+size_t
+encode_win32_key_event(const GLFWkeyevent *e, char *output, size_t capacity) {
+    const char *text = e->text ? e->text : "";
+    size_t used = 0;
+    UTF8State state = UTF8_ACCEPT;
+    uint32_t ch = e->win32_char;
+    do {
+        if (*text) {
+            while (*text) {
+                if (decode_utf8(&state, &ch, (uint8_t)*text++) == UTF8_ACCEPT) break;
+            }
+            if (state != UTF8_ACCEPT) break;
+        }
+        uint32_t units[2] = {ch, 0};
+        unsigned count = 1;
+        if (ch > 0xffff) {
+            units[0] = 0xd800 + ((ch - 0x10000) >> 10);
+            units[1] = 0xdc00 + ((ch - 0x10000) & 0x3ff);
+            count = 2;
+        }
+        for (unsigned i = 0; i < count; i++) {
+            int n = snprintf(
+                used < capacity ? output + used : NULL,
+                used < capacity ? capacity - used : 0,
+                "\x1b[%u;%u;%u;%u;%u;1_",
+                e->win32_vk,
+                (unsigned)e->native_key & 0xff,
+                units[i],
+                e->action != GLFW_RELEASE,
+                e->win32_control_state);
+            if (n > 0) used += n;
+        }
+    } while (*text);
+    return used;
+}

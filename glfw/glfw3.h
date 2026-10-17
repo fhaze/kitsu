@@ -1333,6 +1333,9 @@ typedef struct GLFWkeyevent {
 
     // True if this is a synthesized event on focus change
     bool fake_event_on_focus_change;
+
+    // Original Windows KEY_EVENT_RECORD fields, before VT keyboard normalization.
+    uint32_t win32_vk, win32_char, win32_control_state;
 } GLFWkeyevent;
 
 typedef enum { GLFW_LAYER_SHELL_NONE, GLFW_LAYER_SHELL_BACKGROUND, GLFW_LAYER_SHELL_PANEL, GLFW_LAYER_SHELL_TOP, GLFW_LAYER_SHELL_OVERLAY } GLFWLayerShellType;

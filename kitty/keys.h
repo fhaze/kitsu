@@ -16,5 +16,6 @@
 #define debug debug_input
 
 int encode_glfw_key_event(const GLFWkeyevent *e, const bool cursor_key_mode, const unsigned flags, char *output);
+size_t encode_win32_key_event(const GLFWkeyevent *e, char *output, size_t capacity);
 
 bool is_modifier_key(const uint32_t key);
