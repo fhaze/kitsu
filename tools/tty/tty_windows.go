@@ -32,8 +32,7 @@ type Winsize struct {
 	Row, Col, Xpixel, Ypixel uint16
 }
 
-// Term is a handle to the console. Input is read via ReadConsoleInputW with
-// virtual terminal input enabled so that keys arrive as VT escape sequences,
+// Term is a handle to the console. Input is read via ReadConsoleInputW,
 // output is written via WriteConsoleW.
 type Term struct {
 	in, out    windows.Handle
@@ -107,6 +106,13 @@ var SetRaw TermiosOperation = func(t *Termios) {
 	t.InMode |= windows.ENABLE_VIRTUAL_TERMINAL_INPUT | windows.ENABLE_WINDOW_INPUT | windows.ENABLE_EXTENDED_FLAGS
 	t.OutMode |= windows.ENABLE_PROCESSED_OUTPUT | windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING | windows.DISABLE_NEWLINE_AUTO_RETURN
 	t.OutMode &^= windows.ENABLE_WRAP_AT_EOL_OUTPUT
+}
+
+// SetRawWithKeyEvents keeps native console key records instead of VT text.
+var SetRawWithKeyEvents TermiosOperation = func(t *Termios) {
+	SetRaw(t)
+	// VT input turns even real keys into synthetic records with no key identity.
+	t.InMode &^= windows.ENABLE_VIRTUAL_TERMINAL_INPUT
 }
 
 var SetNoEcho TermiosOperation = func(t *Termios) {
@@ -266,8 +272,15 @@ func (self *Term) wait_for_input(d time.Duration) error {
 	return fmt.Errorf("unexpected result from WaitForMultipleObjects: %d", ev)
 }
 
-func (self *Term) append_utf16(u uint16) {
-	r := rune(u)
+// KeyEventEncoder converts native console keys to terminal input. Returning an
+// empty string preserves the character, including synthetic VT input records.
+type KeyEventEncoder func(virtual_key_code uint16, char rune, control_key_state uint32) string
+
+func (self *Term) append_key_event(k *key_event_record, encode KeyEventEncoder) {
+	if k.key_down == 0 {
+		return
+	}
+	r := rune(k.unicode_char)
 	if utf16.IsSurrogate(r) {
 		if self.pending_hi != 0 {
 			r = utf16.DecodeRune(self.pending_hi, r)
@@ -277,11 +290,21 @@ func (self *Term) append_utf16(u uint16) {
 			return
 		}
 	}
-	self.pending = utf8.AppendRune(self.pending, r)
+	var encoded string
+	if encode != nil {
+		encoded = encode(k.virtual_key_code, r, k.control_key_state)
+	}
+	for i := uint16(0); i < max(k.repeat_count, 1); i++ {
+		if encoded != "" {
+			self.pending = append(self.pending, encoded...)
+		} else if r != 0 {
+			self.pending = utf8.AppendRune(self.pending, r)
+		}
+	}
 }
 
 // Drain all available console input records into self.pending
-func (self *Term) fill_pending() error {
+func (self *Term) fill_pending(encode KeyEventEncoder) error {
 	var records [64]input_record
 	n, err := read_console_input(self.in, records[:])
 	if err != nil {
@@ -291,12 +314,7 @@ func (self *Term) fill_pending() error {
 		switch rec.event_type {
 		case key_event:
 			k := (*key_event_record)(unsafe.Pointer(&rec.data[0]))
-			if k.key_down == 0 || k.unicode_char == 0 {
-				continue
-			}
-			for i := uint16(0); i < max(k.repeat_count, 1); i++ {
-				self.append_utf16(k.unicode_char)
-			}
+			self.append_key_event(k, encode)
 		case window_buffer_size_event:
 			self.lock.Lock()
 			ch, sig := self.resize_ch, self.resize_sig
@@ -313,6 +331,16 @@ func (self *Term) fill_pending() error {
 }
 
 func (self *Term) ReadWithTimeout(b []byte, d time.Duration) (n int, err error) {
+	return self.read_with_timeout(b, d, nil)
+}
+
+// ReadKeyEvents encodes native keys from a console in SetRawWithKeyEvents mode,
+// without changing the byte-oriented input used by other terminal readers.
+func (self *Term) ReadKeyEvents(b []byte, encode KeyEventEncoder) (n int, err error) {
+	return self.read_with_timeout(b, -1, encode)
+}
+
+func (self *Term) read_with_timeout(b []byte, d time.Duration, encode KeyEventEncoder) (n int, err error) {
 	for len(self.pending) == 0 {
 		if err = self.wait_for_input(d); err != nil {
 			return 0, err
@@ -320,7 +348,7 @@ func (self *Term) ReadWithTimeout(b []byte, d time.Duration) (n int, err error) 
 		if !IsTerminal(uintptr(self.in)) {
 			return self.read_file(b)
 		}
-		if err = self.fill_pending(); err != nil {
+		if err = self.fill_pending(encode); err != nil {
 			return 0, err
 		}
 	}

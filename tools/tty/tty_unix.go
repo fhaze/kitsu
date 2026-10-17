@@ -90,6 +90,9 @@ var SetRaw TermiosOperation = func(t *unix.Termios) {
 	t.Cc[unix.VTIME] = 0
 }
 
+// SetRawWithKeyEvents is equivalent to SetRaw on Unix terminals.
+var SetRawWithKeyEvents = SetRaw
+
 var SetNoEcho TermiosOperation = func(t *unix.Termios) {
 	t.Lflag &^= unix.ECHO
 }

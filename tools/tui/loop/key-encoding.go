@@ -439,7 +439,8 @@ func csi_number_for_name(key_name string) int {
 	}
 	fn, ok := name_to_functional_number_map[key_name]
 	if !ok {
-		return int(rune(key_name[0]))
+		r, _ := utf8.DecodeRuneInString(key_name)
+		return int(r)
 	}
 	ans, ok := functional_to_csi_number_map[fn]
 	if ok {
