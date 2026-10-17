@@ -47,7 +47,7 @@ func read_from_tty(pipe_r *os.File, term *tty.Term, results_channel chan<- []byt
 		if len(buf) < 64 {
 			buf = make([]byte, bufsize)
 		}
-		n, err := read_ignoring_temporary_errors(term, buf)
+		n, err := term.ReadKeyEvents(buf, encode_windows_key_event)
 		if err != nil {
 			if errors.Is(err, tty.ErrInterrupted) && quit.Load() {
 				break
