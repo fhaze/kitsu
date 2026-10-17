@@ -74,15 +74,14 @@ var kitty_os = sync.OnceValue(func() string {
 
 func geninclude(path string) (string, error) {
 	cmd := exec.Command(path)
-	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env, "KITTY_OS="+kitty_os())
-	if strings.HasSuffix(path, ".py") && utils.Access(path, utils.X_OK) != nil {
+	if strings.HasSuffix(path, ".py") && (runtime.GOOS == "windows" || utils.Access(path, utils.X_OK) != nil) {
 		if utils.KittyExe() == "" || strings.HasPrefix(path, ":") {
 			cmd = exec.Command("python", path)
 		} else {
 			cmd = exec.Command(utils.KittyExe(), "+launch", path)
 		}
 	}
+	cmd.Env = append(os.Environ(), "KITTY_OS="+kitty_os())
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err

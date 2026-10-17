@@ -202,6 +202,11 @@ Detailed list of changes
 0.49.2 [2026-10-01]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+- Windows: Update the Kitsu application and installer icons
+
+- Windows: Fix image caching failing with large filesystem identifiers and
+  Python generated configuration includes failing when Python is in PATHEXT
+
 - Windows: Fix custom shaders failing to build with "The system cannot find
   the file specified" because the slang shader compiler was not bundled, and
   the builtin shaders defined by pipeline files, such as the cursor trails,

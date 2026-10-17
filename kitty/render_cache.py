@@ -93,11 +93,11 @@ class ImageRenderCache:
             return width, height, os.dup(f.fileno())
 
     def render(self, src_path: str) -> str:
-        import struct
         from hashlib import sha256
 
         src_info = os.stat(src_path)
-        output_name = sha256(struct.pack('@qqqq', src_info.st_dev, src_info.st_ino, src_info.st_size, src_info.st_mtime_ns)).hexdigest()
+        metadata = (src_info.st_dev, src_info.st_ino, src_info.st_size, src_info.st_mtime_ns)
+        output_name = sha256(str(metadata).encode('ascii')).hexdigest()
 
         with self:
             output_path = os.path.join(self.cache_dir, output_name)

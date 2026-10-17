@@ -6,12 +6,27 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 )
 
 var _ = fmt.Print
+
+func TestGenincludePython(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "generated.py")
+	if err := os.WriteFile(path, []byte("print('generated value')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	text, err := geninclude(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(text) != "generated value" {
+		t.Fatalf("Unexpected generated config: %q", text)
+	}
+}
 
 func TestConfigParsing(t *testing.T) {
 	tdir := t.TempDir()
