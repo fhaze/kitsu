@@ -493,8 +493,8 @@ handle_key_message(_GLFWwindow *window, UINT uMsg, WPARAM wParam, LPARAM lParam)
         ev.text = text;
     }
 
-    // Unicode packets have no physical key identity; wait for complete text, including surrogate pairs.
-    if (vk == VK_PACKET && (is_release || !text[0])) return;
+    // Wait for complete packet text (including surrogate pairs), but keep releases for repeat tracking.
+    if (vk == VK_PACKET && !is_release && !text[0]) return;
 
     if (is_release && (vk == VK_LSHIFT || vk == VK_RSHIFT)) {
         // HACK: Release both Shift keys on Shift up event, as when both
