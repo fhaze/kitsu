@@ -92,7 +92,7 @@ class TestUpdateCheck(BaseTest):
             self.addCleanup(p.stop)
 
     def test_check_cache_and_creation(self):
-        update_check.process_current_release('v0.49.2-windows.9')
+        update_check.process_current_release('v0.49.2-windows.9\r\n')
         state = update_check.read_update_check_state()
         self.ae((state.last_check, state.latest_tag, state.last_notified_tag), (self.now, 'v0.49.2-windows.9', ''))
         self.ae(self.notifications[0][0], '0.49.2-windows.9')

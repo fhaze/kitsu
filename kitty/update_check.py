@@ -65,6 +65,7 @@ def read_update_check_state() -> UpdateCheckState:
             data = json.load(f)
         if not isinstance(data, dict):
             return UpdateCheckState()
+
         def timestamp(key: str) -> float:
             value = data.get(key, 0)
             try:
@@ -178,6 +179,7 @@ def save_notification(key: str) -> None:
 
 
 def process_current_release(raw: str) -> None:
+    raw = raw.strip()
     if is_windows:
         info = parse_release_tag(raw)
         if info is not None:
