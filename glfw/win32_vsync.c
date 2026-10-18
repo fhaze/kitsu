@@ -318,6 +318,24 @@ _glfwVSyncDisplayChangedWin32(void) {
     ReleaseSRWLockExclusive(&vs.lock);
     // HMONITOR values can be reused for a different display after a change
     for (size_t i = 0; i < vs.count; i++) vs.sources[i].monitor = NULL;
+    for (_GLFWwindow *w = _glfw.windowListHead; w; w = w->next) w->win32.refresh.monitor = NULL;
+}
+
+// How often the window renders: the spacing of its render frames, or the refresh
+// interval of its monitor when it does not use them
+monotonic_t
+_glfwFrameIntervalWin32(_GLFWwindow *window) {
+    if (window->win32.frame_request.spacing > 0) return window->win32.frame_request.spacing;
+    HMONITOR monitor = MonitorFromWindow(window->win32.handle, MONITOR_DEFAULTTONEAREST);
+    if (monitor != window->win32.refresh.monitor) {
+        window->win32.refresh.monitor = monitor;
+        window->win32.refresh.interval = VSYNC_DEFAULT_INTERVAL;
+        MONITORINFOEXW mi;
+        memset(&mi, 0, sizeof(mi));
+        mi.cbSize = sizeof(mi);
+        if (monitor && GetMonitorInfoW(monitor, (MONITORINFO *)&mi)) window->win32.refresh.interval = refresh_interval(mi.szDevice);
+    }
+    return window->win32.refresh.interval;
 }
 
 void
@@ -360,6 +378,7 @@ glfwWin32RequestRenderFrame(GLFWwindow *handle, monotonic_t min_interval, GLFWwi
         // No vertical blank source, so pace on the watchdog alone
         r->source = VSYNC_MAX_SOURCES;
         r->deadline = now + min_interval;
+        r->spacing = min_interval;
         return;
     }
     AcquireSRWLockShared(&vs.lock);
@@ -372,6 +391,7 @@ glfwWin32RequestRenderFrame(GLFWwindow *handle, monotonic_t min_interval, GLFWwi
     if (refreshes < 1) refreshes = 1;
     r->source = s->index;
     r->fire_at = sequence + refreshes;
-    r->deadline = now + (monotonic_t)refreshes * interval + VSYNC_WATCHDOG_GRACE;
+    r->spacing = (monotonic_t)refreshes * interval;
+    r->deadline = now + r->spacing + VSYNC_WATCHDOG_GRACE;
     arm_source(s, r->fire_at);
 }

@@ -211,6 +211,8 @@ typedef struct _GLFWframeRequestWin32 {
     uint64_t fire_at;
     // When the watchdog fires the request if the vertical blank never arrived
     monotonic_t deadline;
+    // How far apart the last request spaced frames, 0 if render frames were never requested
+    monotonic_t spacing;
     size_t source;
     bool pending;
 } _GLFWframeRequestWin32;
@@ -267,6 +269,18 @@ typedef struct _GLFWwindowWin32 {
 
     // The last received cursor position, regardless of source
     int lastCursorPosX, lastCursorPosY;
+    // Mouse moves are delivered at most once per frame, see deliverCursorPos()
+    struct {
+        bool pending;
+        int x, y;
+        // When the next mouse move may be delivered straight away
+        monotonic_t next_at;
+    } motion;
+    // The refresh interval of the monitor the window was last on, for when it does not use render frames
+    struct {
+        HMONITOR monitor;
+        monotonic_t interval;
+    } refresh;
     // The last received high surrogate when decoding pairs of UTF-16 messages
     WCHAR highSurrogate;
 
@@ -332,6 +346,12 @@ typedef struct _GLFWlibraryWin32 {
     bool keep_going, wakeup_pending;
     // Whether timeBeginPeriod(1) succeeded and must be undone at exit
     bool timer_period_raised;
+    // Delivers mouse moves that arrived too soon after the previous one
+    struct {
+        unsigned long long id;
+        monotonic_t fires_at;
+        bool enabled;
+    } motion_timer;
 
     struct {
         HINSTANCE instance;
@@ -419,5 +439,6 @@ DWORD _glfwTimerWaitTimeoutWin32(void);
 void _glfwFreeTimersWin32(void);
 
 void _glfwDispatchVSyncWin32(WPARAM which);
+monotonic_t _glfwFrameIntervalWin32(_GLFWwindow *window);
 void _glfwVSyncDisplayChangedWin32(void);
 void _glfwTerminateVSyncWin32(void);

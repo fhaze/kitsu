@@ -1001,6 +1001,78 @@ maximizeWindowManually(_GLFWwindow *window) {
         window->win32.handle, HWND_TOP, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED);
 }
 
+// A high polling rate mouse sends a WM_MOUSEMOVE every millisecond or less. Only one of
+// them per frame can ever be rendered, but every one is reported to programs that track
+// the mouse, which then fall further and further behind, since ConPTY cannot keep up with
+// a redraw per report. So deliver at most one mouse move per frame, the way macOS coalesces
+// them, and deliver a pending one before any other input, so that clicks, scrolls and
+// leaving the window all happen where the mouse actually is.
+
+static bool armMotionTimer(monotonic_t at);
+
+static void
+deliverCursorPos(_GLFWwindow *window, monotonic_t now) {
+    const monotonic_t interval = _glfwFrameIntervalWin32(window);
+    // While the mouse keeps moving, keep to the cadence rather than restarting it from now,
+    // so that timers firing a little late do not make it fall below one move per frame.
+    // Restart it after a pause, or when delivering early because other input arrived.
+    monotonic_t next = window->win32.motion.next_at + interval;
+    if (next <= now || next > now + interval) next = now + interval;
+    window->win32.motion.next_at = next;
+    window->win32.motion.pending = false;
+    _glfwInputCursorPos(window, window->win32.motion.x, window->win32.motion.y);
+}
+
+static void
+flushCursorPos(_GLFWwindow *window) {
+    if (window->win32.motion.pending) deliverCursorPos(window, monotonic());
+}
+
+static void
+motionTimerFired(unsigned long long timer_id UNUSED, void *data UNUSED) {
+    _glfw.win32.motion_timer.enabled = false;
+    const monotonic_t now = monotonic();
+    monotonic_t soonest = MONOTONIC_T_MAX;
+    for (_GLFWwindow *w = _glfw.windowListHead, *next; w; w = next) {
+        next = w->next;
+        if (!w->win32.motion.pending) continue;
+        if (now >= w->win32.motion.next_at) deliverCursorPos(w, now);
+        else if (w->win32.motion.next_at < soonest) soonest = w->win32.motion.next_at;
+    }
+    if (soonest < MONOTONIC_T_MAX) armMotionTimer(soonest);
+    else _glfwPlatformUpdateTimer(_glfw.win32.motion_timer.id, ms_to_monotonic_t(1000ll), false);
+}
+
+// Makes sure the motion timer fires no later than at, returns false if it could not be created
+static bool
+armMotionTimer(monotonic_t at) {
+    if (_glfw.win32.motion_timer.enabled && _glfw.win32.motion_timer.fires_at <= at) return true;
+    const monotonic_t delay = MAX(0, at - monotonic());
+    if (!_glfw.win32.motion_timer.id) {
+        _glfw.win32.motion_timer.id = _glfwPlatformAddTimer(delay, true, motionTimerFired, NULL, NULL);
+        if (!_glfw.win32.motion_timer.id) return false;
+    } else _glfwPlatformUpdateTimer(_glfw.win32.motion_timer.id, delay, true);
+    _glfw.win32.motion_timer.enabled = true;
+    _glfw.win32.motion_timer.fires_at = at;
+    return true;
+}
+
+static void
+coalesceCursorPos(_GLFWwindow *window, int x, int y) {
+    window->win32.motion.x = x;
+    window->win32.motion.y = y;
+    window->win32.motion.pending = true;
+    const monotonic_t now = monotonic();
+    // Without a timer to deliver it later, deliver it now rather than lose it
+    if (now >= window->win32.motion.next_at || !armMotionTimer(window->win32.motion.next_at)) deliverCursorPos(window, now);
+}
+
+static bool
+isInputMessage(UINT uMsg) {
+    return (uMsg >= WM_KEYFIRST && uMsg <= WM_KEYLAST) || (uMsg >= WM_MOUSEFIRST && uMsg <= WM_MOUSELAST) ||
+           uMsg == WM_MOUSELEAVE || uMsg == WM_SETFOCUS || uMsg == WM_KILLFOCUS;
+}
+
 // Window callback function (handles window messages)
 //
 static LRESULT CALLBACK
@@ -1044,6 +1116,8 @@ windowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
         return DefWindowProcW(hWnd, uMsg, wParam, lParam);
     }
+
+    if (window->win32.motion.pending && uMsg != WM_MOUSEMOVE && isInputMessage(uMsg)) flushCursorPos(window);
 
     switch (uMsg) {
         case WM_MOUSEACTIVATE: {
@@ -1246,7 +1320,7 @@ windowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 if (window->rawMouseMotion) break;
 
                 _glfwInputCursorPos(window, window->virtualCursorPosX + dx, window->virtualCursorPosY + dy);
-            } else _glfwInputCursorPos(window, x, y);
+            } else coalesceCursorPos(window, x, y);
 
             window->win32.lastCursorPosX = x;
             window->win32.lastCursorPosY = y;
@@ -2124,6 +2198,10 @@ _glfwPlatformPollEvents(void) {
     MSG msg;
     HWND handle;
     _GLFWwindow *window;
+    // A mouse with a very high polling rate can keep the queue from ever running dry, which
+    // would hold off timers and the main loop tick, and so rendering, until it stops moving.
+    // Leave the rest for the next loop iteration, which does not wait while input is queued.
+    const monotonic_t drain_until = monotonic() + ms_to_monotonic_t(2ll);
 
     while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
         if (msg.message == WM_QUIT) {
@@ -2140,6 +2218,7 @@ _glfwPlatformPollEvents(void) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        if (monotonic() >= drain_until) break;
     }
 
     // HACK: Release modifier keys that the system did not emit KEYUP for
