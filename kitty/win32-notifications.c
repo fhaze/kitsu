@@ -525,6 +525,22 @@ win32_close_notification(PyObject *self, PyObject *arg) {
     if (!ident) return NULL;
     LiveToast *t = take_toast(ident);
     HRESULT hr = t && notifier ? IToastNotifier_Hide(notifier, t->toast) : E_FAIL;
+    if (!t && notifier) {
+        HSTRING klass = NULL, tag = NULL, group = NULL, app = NULL;
+        IToastNotificationManagerStatics2 *manager = NULL;
+        IToastNotificationHistory *history = NULL;
+        wchar_t pid[32]; swprintf(pid, 32, L"%lu", GetCurrentProcessId());
+        hr = make_string(L"Windows.UI.Notifications.ToastNotificationManager", &klass);
+        if (SUCCEEDED(hr)) hr = RoGetActivationFactory(klass, &IID_IToastNotificationManagerStatics2, (void**)&manager);
+        if (SUCCEEDED(hr)) hr = IToastNotificationManagerStatics2_get_History(manager, &history);
+        if (SUCCEEDED(hr)) hr = make_string(ident, &tag);
+        if (SUCCEEDED(hr)) hr = make_string(pid, &group);
+        if (SUCCEEDED(hr)) hr = make_string(AUMID, &app);
+        if (SUCCEEDED(hr)) hr = IToastNotificationHistory_RemoveGroupedTagWithId(history, tag, group, app);
+        if (history) IToastNotificationHistory_Release(history);
+        if (manager) IToastNotificationManagerStatics2_Release(manager);
+        WindowsDeleteString(klass); WindowsDeleteString(tag); WindowsDeleteString(group); WindowsDeleteString(app);
+    }
     if (t) {
         // Keep the record until the queued close event is delivered.
         t->next = live_toasts; live_toasts = t;

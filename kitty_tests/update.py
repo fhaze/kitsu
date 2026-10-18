@@ -3,6 +3,7 @@
 
 import json
 import os
+import subprocess
 import tempfile
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -15,6 +16,16 @@ from .base import BaseTest
 
 
 class TestUpdate(BaseTest):
+    def test_lazy_update_check_imports(self):
+        from kitty.constants import kitty_exe
+
+        code = (
+            'import sys, kitty.boss; before=set(sys.modules); import kitty.update_check; '
+            'added=set(sys.modules)-before; assert not added.intersection({"ssl", "http.client", "urllib.request"}), added'
+        )
+        result = subprocess.run([kitty_exe(), '+runpy', code], capture_output=True, timeout=30)
+        self.ae(result.returncode, 0, result.stderr.decode('utf-8', 'replace'))
+
     def test_windows_setup_asset(self):
         for name in ('kitsu-0.49.2-windows-x86_64-setup.exe', 'kitty-0.49.2-windows-x86_64-setup.exe'):
             asset = {'name': name, 'browser_download_url': 'https://example.org/' + name, 'digest': 'sha256:' + 'a' * 64}
@@ -165,3 +176,19 @@ class TestUpdateCheck(BaseTest):
         with patch.object(update_check.subprocess, 'Popen') as spawn:
             self.assertTrue(update_check.update_check())
             spawn.assert_not_called()
+
+    def test_filtered_notifications_can_retry(self):
+        with patch.object(self.boss.notification_manager, 'send_new_version_notification', return_value=None):
+            update_check.process_current_release('v0.49.2-windows.9')
+        self.assertFalse(update_check.notification_pending)
+        self.ae(update_check.read_update_check_state().last_notified, 0)
+        update_check.notify_cached_release(update_check.read_update_check_state())
+        self.ae(len(self.notifications), 1)
+
+    def test_notification_failure_does_not_overwrite_later_success(self):
+        update_check.process_current_release('v0.49.2-windows.9')
+        self.notifications[-1][1]()
+        current = update_check.read_update_check_state()._replace(last_notified=self.now + 5, last_notified_tag='v0.49.2-windows.10')
+        update_check.save_update_check_state(current)
+        self.notifications[-1][2]()
+        self.ae(update_check.read_update_check_state(), current)
