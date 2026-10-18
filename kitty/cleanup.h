@@ -9,6 +9,7 @@
 typedef void (*kitty_cleanup_at_exit_func)(void);
 
 typedef enum {
+    WIN32_NOTIFICATIONS_CLEANUP_FUNC,
     STATE_CLEANUP_FUNC,
     GLFW_CLEANUP_FUNC,
     DESKTOP_CLEANUP_FUNC,

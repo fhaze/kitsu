@@ -93,7 +93,7 @@ Type: filesandordirs; Name: "{app}\share"
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "The fast, feature-rich, GPU based terminal emulator"
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; AppUserModelID: "fhaze.Kitsu"; Comment: "The fast, feature-rich, GPU based terminal emulator"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Registry]

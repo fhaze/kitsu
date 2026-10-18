@@ -5,6 +5,7 @@
 import os
 import re
 import tempfile
+from unittest.mock import patch
 from base64 import standard_b64encode
 
 from kitty.notifications import Channel, DesktopIntegration, IconDataCache, NotificationManager, UIState, Urgency
@@ -176,7 +177,9 @@ def do_test(self: 'TestNotifications', tdir: str) -> None:
     reset()
 
     nm.send_new_version_notification('moose')
-    self.ae(di.notifications, [n('kitty update available!', 'kitty version moose released')])
+    from kitty.constants import display_name
+
+    self.ae(di.notifications, [n(f'{display_name} update available', "Version moose is ready. Click to see what's new.")])
     activate()
     self.assertTrue(di.new_version_activated)
     reset()
@@ -359,6 +362,54 @@ def do_test(self: 'TestNotifications', tdir: str) -> None:
 
 
 class TestNotifications(BaseTest):
+    def test_windows_notification_events(self):
+        from kitty import fast_data_types as fdt
+        from kitty.notifications import WindowsIntegration
+
+        with tempfile.TemporaryDirectory() as tdir:
+            with patch.object(fdt, 'win32_set_notification_activated_callback', create=True) as set_callback:
+                di = WindowsIntegration(None)
+                callback = set_callback.call_args.args[0]
+            ch = Channel()
+            nm = NotificationManager(di, ch, lambda *a: None, base_cache_dir=tdir)
+            di.notification_manager = nm
+            with patch.object(fdt, 'win32_send_notification', create=True) as send, patch.object(fdt, 'win32_close_notification', create=True) as close:
+                h = lambda raw: nm.handle_notification_cmd(42, 99, raw)
+                h('i=test:c=1:d=0;Hello <&>')
+                h('i=test:p=buttons;Yes\u2028No')
+                ident = send.call_args.args[0]
+                self.assertFalse(di.live_notifications)
+                callback('created', ident, '')
+                self.ae(di.live_notifications, {int(ident)})
+                self.assertTrue(nm.in_progress_notification_commands[int(ident)].created_by_desktop)
+                callback('button', ident, '2')
+                self.assertFalse(di.live_notifications)
+                self.assertIn('99;i=test;2', ch.responses)
+                self.assertIn('99;i=test:p=close;', ch.responses)
+                h('i=test;Replacement')
+                second = send.call_args.args[0]
+                callback('creation_failed', second, '')
+                self.assertNotIn(int(second), nm.in_progress_notification_commands)
+                h('i=test;Close me')
+                third = send.call_args.args[0]
+                callback('created', third, '')
+                self.assertTrue(di.close_notification(int(third)))
+                close.assert_called_with(third)
+                callback('closed', third, '')
+                self.assertFalse(di.live_notifications)
+
+    def test_notification_created_callback_runs_once(self):
+        with tempfile.TemporaryDirectory() as tdir:
+            di = DesktopIntegration(None)
+            nm = NotificationManager(di, Channel(), lambda *a: None, base_cache_dir=tdir)
+            di.notification_manager = nm
+            created = []
+            nm.send_new_version_notification('1.2.3', lambda: created.append(True))
+            self.assertFalse(created)
+            nm.notification_created(1)
+            nm.notification_created(1)
+            self.ae(created, [True])
+
     def test_desktop_notify(self):
         with tempfile.TemporaryDirectory() as tdir:
             do_test(self, tdir)

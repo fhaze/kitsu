@@ -1,15 +1,15 @@
 #!/usr/bin/env python
 # License: GPLv3 Copyright: 2025, Kovid Goyal <kovid at kovidgoyal.net>
 
-import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
-import tempfile
-from typing import NamedTuple
-from urllib.request import Request, urlopen
+from typing import TYPE_CHECKING, NamedTuple
+
+if TYPE_CHECKING:
+    from urllib.request import Request
 
 from .constants import Version, is_windows, kitty_base_dir, kitty_exe, str_version, version
 
@@ -49,11 +49,15 @@ def is_newer(candidate: ReleaseInfo, installed: ReleaseInfo) -> bool:
     return candidate.base > installed.base or (candidate.base == installed.base and candidate.build > installed.build)
 
 
-def github_request(url: str) -> Request:
+def github_request(url: str) -> 'Request':
+    from urllib.request import Request
+
     return Request(url, headers={'User-Agent': 'kitty-update', 'Accept': 'application/vnd.github+json'})
 
 
 def fetch_release(ref: str) -> dict:
+    from urllib.request import urlopen
+
     url = f'{RELEASES_API_URL}/latest' if ref == 'latest' else f'{RELEASES_API_URL}/tags/{ref}'
     try:
         return json.loads(urlopen(github_request(url), timeout=30).read())
@@ -88,6 +92,9 @@ def inno_install_prefix() -> 'str | None':
 
 
 def download_with_progress(url: str, sha256: str, dest_dir: str, name: str) -> str:
+    import hashlib
+    from urllib.request import urlopen
+
     dest = os.path.join(dest_dir, name)
     with urlopen(github_request(url), timeout=30) as response:
         total = int(response.headers.get('Content-Length') or 0)
@@ -126,6 +133,8 @@ upgrade this installation in place.
 
 
 def main(args: list[str]) -> None:
+    import tempfile
+
     ref = 'latest'
     rest = args[1:] if args and args[0] == 'update' else args
     i = 0
