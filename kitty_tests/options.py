@@ -32,6 +32,26 @@ class TestConfParsing(BaseTest):
     def test_launcher(self):
         launcher(self)
 
+    def test_icat_launcher(self):
+        from kitty.constants import is_windows
+
+        if not is_windows:
+            self.skipTest('Windows process delegation')
+        kexe = kitty_exe()
+        for exe in (kexe, os.path.splitext(kexe)[0] + '.com'):
+            for prefix in (['icat'], ['+icat'], ['+', 'icat'], ['+kitten', 'icat'], ['+', 'kitten', 'icat']):
+                with self.subTest(exe=exe, prefix=prefix):
+                    filename = 'image with spaces.jpg'
+                    cp = subprocess.run(
+                        [exe, '+testing-launcher-code', *prefix, filename, '--stdin=no'], capture_output=True, timeout=30
+                    )
+                    self.ae(cp.returncode, 0, cp.stderr)
+                    self.assertIn('kitten_exe:', cp.stdout.decode())
+                    self.assertIn(f'argv:\x1ekitten\x1eicat\x1e{filename}\x1e--stdin=no\n', cp.stdout.decode())
+                    cp = subprocess.run([exe, *prefix, '--kitsu-regression-invalid-option'], capture_output=True, timeout=30)
+                    self.assertNotEqual(cp.returncode, 0, 'The launcher must wait for and return the kitten exit code')
+                    self.assertIn(b'Unknown option: --kitsu-regression-invalid-option', cp.stderr)
+
     def test_cli_parsing(self):
         cli_parsing(self)
 
