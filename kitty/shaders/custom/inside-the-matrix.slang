@@ -115,7 +115,8 @@ rain(float3 ro3, float3 rd3, float time) {
     float t2 = 0.0f;
     int2 next_cell = int2(floor(ro2 / XYCELL_SIZE));
 
-    [ForceUnroll]
+    // Not unrolled: unrolling all ITERATIONS bloats the GLSL to ~450KB, which
+    // takes the OpenGL driver seconds to compile when kitty starts.
     for (int iter = 0; iter < ITERATIONS; iter++) {
         int2 cell = next_cell;
         float t2s = t2;

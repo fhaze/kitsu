@@ -22,7 +22,7 @@ from itertools import chain, product
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Iterator, Literal, NamedTuple, TypedDict, TypeGuard
 
-from kitty.constants import read_kitty_resource, shaders_dir, slangc
+from kitty.constants import HelperProcessPopenKwargs, helper_process_popen_kwargs, kitty_exe, read_kitty_resource, shaders_dir, slangc
 from kitty.fast_data_types import (
     ANIMATION_SAMPLE_WAIT,
     BGIMAGE_PROGRAM,
@@ -54,8 +54,12 @@ from kitty.fast_data_types import (
     STRIKETHROUGH,
     TINT_PROGRAM,
     TRAIL_PROGRAM,
+    add_timer,
     compile_program,
+    get_boss,
     get_options,
+    mark_os_window_dirty,
+    remove_timer,
 )
 from kitty.options.types import Options, defaults
 from kitty.options.utils import EasingFunction
@@ -78,9 +82,39 @@ def get_custom_pipeline_src(name: str) -> bytes:
     return read_kitty_resource(f'{name}.pipeline', 'kitty.shaders.custom')
 
 
+def slangc_popen_kwargs() -> HelperProcessPopenKwargs:
+    # On Windows kitty is a GUI program with no console, so every slangc run
+    # would otherwise flash up a console window of its own.
+    return {'creationflags': subprocess.CREATE_NO_WINDOW} if sys.platform == 'win32' else {}
+
+
 @run_once
 def slangc_version() -> str:
-    return subprocess.check_output(list(slangc()) + ['-version'], stderr=subprocess.STDOUT).decode().strip()
+    return subprocess.check_output(list(slangc()) + ['-version'], stderr=subprocess.STDOUT, **slangc_popen_kwargs()).decode().strip()
+
+
+def slangc_fingerprint() -> str:
+    """
+    Identify the installed slangc from file metadata, without running it, as
+    running slangc -version takes over 100ms on Windows. Empty if slangc is not
+    found. Covers the shared libraries that hold the actual compiler, as
+    upgrading slang need not change the slangc executable itself.
+    """
+    exe = shutil.which(slangc()[0])
+    if not exe:
+        return ''
+    exe = os.path.realpath(exe)
+    bindir = os.path.dirname(exe)
+    files = [exe]
+    for libdir in (bindir, os.path.join(os.path.dirname(bindir), 'lib')):
+        with suppress(OSError):
+            files.extend(os.path.join(libdir, x) for x in sorted(os.listdir(libdir)) if 'slang' in x and (x.endswith(('.dll', '.dylib', '.so')) or '.so.' in x))
+    h = hashlib.md5(repr(slangc()).encode(), usedforsecurity=False)
+    for path in files:
+        with suppress(OSError):
+            st = os.stat(path)
+            h.update(f'{path}\0{st.st_size}\0{st.st_mtime_ns}\0'.encode())
+    return h.hexdigest()
 
 
 def is_dir_ok(path: str, checks: dict[str, str]) -> bool:
@@ -94,9 +128,20 @@ def is_dir_ok(path: str, checks: dict[str, str]) -> bool:
     return True
 
 
-def ensure_cache_dir(path: str) -> None:
+class NeedsSlangc(Exception):
+    "Raised when a build that may only use cached output needs to run slangc"
+
+
+def ensure_cache_dir(path: str, allow_slangc: bool = True) -> None:
     "Ensure the cache dir is for the current slangc version and slang.py version"
     os.makedirs(path, exist_ok=True)
+    # This runs on every startup with custom shaders, so skip running slangc
+    # for its version when slangc is unchanged since the version was recorded.
+    fingerprint = slangc_fingerprint()
+    if fingerprint and is_dir_ok(path, {'slangc.fingerprint': fingerprint, 'slangpy.version': get_hash_for_self()}):
+        return
+    if fingerprint and not allow_slangc:
+        raise NeedsSlangc(path)
     # slang IR is version dependent and the compiler often crashes when loading .slang-module from another version
     checks = {'slangc.version': slangc_version(), 'slangpy.version': get_hash_for_self()}
     if not is_dir_ok(path, checks):
@@ -105,6 +150,9 @@ def ensure_cache_dir(path: str) -> None:
         for fname, expected in checks.items():
             with open(os.path.join(path, fname), 'w') as f:
                 f.write(expected)
+    if fingerprint:
+        with open(os.path.join(path, 'slangc.fingerprint'), 'w') as f:
+            f.write(fingerprint)
 
 
 class Stage(StrEnum):
@@ -179,11 +227,54 @@ def glsl_shaders(name: str, variant_name: str = '') -> tuple[str, str]:
     return vert, frag
 
 
+class BackgroundBuild:
+    """
+    Build a custom shader pipeline into the cache in a separate process, as
+    building it runs slangc several times, taking a second or more. Not a
+    thread, as the main loop holds the GIL while waiting for events.
+    """
+
+    def __init__(self, prog: int, slot: str, pipeline: 'Pipeline', on_done: Callable[['BackgroundBuild'], None]) -> None:
+        self.prog, self.slot, self.pipeline, self.on_done = prog, slot, pipeline, on_done
+        # Set when the result is out of date before the build finishes
+        self.redo = False
+        self.error = ''
+        self.stderr = tempfile.TemporaryFile()
+        try:
+            with tempfile.TemporaryFile() as stdin:
+                stdin.write(json.dumps(pipeline).encode())
+                stdin.seek(0)
+                self.process = subprocess.Popen(
+                    [kitty_exe(), '+runpy', 'from kitty.shaders.slang import build_custom_shader_pipeline_worker; build_custom_shader_pipeline_worker()'],
+                    stdin=stdin,
+                    stdout=subprocess.DEVNULL,
+                    stderr=self.stderr,
+                    **helper_process_popen_kwargs(),
+                )
+        except BaseException:
+            self.stderr.close()
+            raise
+        self.timer_id = add_timer(self.check, 0.05, True)
+
+    def check(self, timer_id: int | None = None) -> None:
+        if self.process.poll() is None:
+            return
+        remove_timer(self.timer_id)
+        with self.stderr:
+            self.stderr.seek(0)
+            self.error = self.stderr.read().decode('utf-8', 'replace').strip()
+        self.on_done(self)
+
+
 class LoadShaderPrograms:
     text_fg_override_threshold: tuple[float, Literal['%', 'ratio']] = 0, '%'
     text_old_gamma: bool = False
     custom_shaders: tuple[str, ...] = ()
     force_recompile_of_custom_shaders: bool = False
+    # Build custom shaders that are not already cached in the background, so
+    # that the terminal is shown without waiting for slangc, enabling the
+    # shader once it is built. Needs the main loop, so kitty enables it.
+    build_custom_shaders_in_background: bool = False
 
     opts: Options | None = None
 
@@ -195,6 +286,7 @@ class LoadShaderPrograms:
         # custom_shaders option. A failure here disables the shader silently as
         # far as rendering is concerned, so the Boss displays these to the user.
         self.custom_shader_errors: list[str] = []
+        self.background_build: BackgroundBuild | None = None
 
     def get_options(self) -> Options:
         try:
@@ -254,18 +346,84 @@ class LoadShaderPrograms:
         compile_program(-1, (), (), {})  # initialize programs
         self.compile_custom_shaders(allow_recompile)
 
+    def custom_shader_error(self, msg: str) -> None:
+        # Record as well as log: a failure here leaves the shader disabled
+        # with no visible difference from not setting custom_shaders at all,
+        # so the Boss shows these to the user.
+        log_error(msg)
+        self.custom_shader_errors.append(msg)
+
+    def disable_custom_program(self, prog: int, allow_recompile: bool) -> None:
+        # Forget the cached sources as well, otherwise re-enabling the same
+        # shader later is a no-op because the sources compare equal while the
+        # program itself is empty.
+        compile_program(prog, (), (), {}, allow_recompile)
+        self.last_built_custom_shaders.pop(prog, None)
+
+    def load_custom_shader(self, prog: int, slot: str, pipeline: 'Pipeline', allow_recompile: bool, allow_slangc: bool = True) -> bool:
+        "Build and compile pipeline into prog, returning False if it needs slangc and allow_slangc is False"
+        err = self.custom_shader_error
+        try:
+            vert, frag, metadata = build_custom_shader_pipeline_glsl(pipeline, allow_slangc=allow_slangc)
+            # print(vert, file=open('/tmp/sample.vert', 'w'))
+            # print(frag, file=open('/tmp/sample.frag', 'w'))
+        except NeedsSlangc:
+            return False
+        except FileNotFoundError as e:
+            if e.filename == slangc()[0]:
+                # Without slangc no custom shader can be built at all, and
+                # a bare "No such file or directory" gives no hint as to why.
+                err(
+                    f'Failed to build custom shader for slot {slot} because the slang shader compiler'
+                    f' ({slangc()[0]}) was not found. Install shader-slang to use custom shaders.'
+                )
+            else:
+                err(f'Failed to build custom shader for slot {slot} with error: {e}')
+            self.disable_custom_program(prog, allow_recompile)
+        except Exception as e:
+            err(f'Failed to build custom shader for slot {slot} with error: {e}')
+            self.disable_custom_program(prog, allow_recompile)
+        else:
+            try:
+                if self.last_built_custom_shaders.get(prog) != (vert, frag, metadata):
+                    compile_program(prog, (vert,), (frag,), metadata, allow_recompile)
+                    self.last_built_custom_shaders[prog] = vert, frag, metadata
+            except Exception as e:
+                err(f'Failed to load custom shader for slot {slot} with error: {e}')
+                self.disable_custom_program(prog, allow_recompile)
+        return True
+
+    def background_build_done(self, b: BackgroundBuild) -> None:
+        self.background_build = None
+        if b.redo:
+            self.compile_custom_shaders(allow_recompile=True)
+        else:
+            if b.process.returncode:
+                error = b.error or f'exit code {b.process.returncode}'
+                self.custom_shader_error(f'Failed to build custom shader for slot {b.slot} with error: {error}')
+                self.disable_custom_program(b.prog, True)
+            elif not self.load_custom_shader(b.prog, b.slot, b.pipeline, True, allow_slangc=False):
+                # The cache changed meanwhile, build here rather than possibly
+                # building in the background forever.
+                self.load_custom_shader(b.prog, b.slot, b.pipeline, True)
+            compile_program(-2, (), (), {})  # initialize programs
+        boss = get_boss()
+        if boss is not None:
+            for os_window_id in boss.os_window_map:
+                mark_os_window_dirty(os_window_id)
+            boss.show_custom_shader_errors()
+
     def compile_custom_shaders(self, allow_recompile: bool = False) -> None:
         self.force_recompile_of_custom_shaders = False
         opts = self.get_options()
         self.custom_shaders = tuple(opts.custom_shaders)
+        if self.background_build is not None:
+            # Checking the cache now would wait on the lock held by the running
+            # build, so start over once it is done.
+            self.background_build.redo = True
+            return
         self.custom_shader_errors = []
-
-        def err(msg: str) -> None:
-            # Record as well as log: a failure here leaves the shader disabled
-            # with no visible difference from not setting custom_shaders at all,
-            # so the Boss shows these to the user.
-            log_error(msg)
-            self.custom_shader_errors.append(msg)
+        err = self.custom_shader_error
 
         pmap: dict[str, list[Pipeline]] = {}
         for k in self.custom_shaders:
@@ -287,45 +445,25 @@ class LoadShaderPrograms:
                 continue
             pmap.setdefault(d['slot'], []).append(d)
 
-        def disable(prog: int) -> None:
-            # Forget the cached sources as well, otherwise re-enabling the same
-            # shader later is a no-op because the sources compare equal while the
-            # program itself is empty.
-            compile_program(prog, (), (), {}, allow_recompile)
-            self.last_built_custom_shaders.pop(prog, None)
-
         def do(prog: int, slot: str) -> None:
             slot_pipelines = pmap.get(slot)
             if not slot_pipelines:
-                disable(prog)
-            else:
-                try:
-                    pipeline = merge_pipelines(slot_pipelines)
-                    vert, frag, metadata = build_custom_shader_pipeline_glsl(pipeline)
-                    # print(vert, file=open('/tmp/sample.vert', 'w'))
-                    # print(frag, file=open('/tmp/sample.frag', 'w'))
-                except FileNotFoundError as e:
-                    if e.filename == slangc()[0]:
-                        # Without slangc no custom shader can be built at all, and
-                        # a bare "No such file or directory" gives no hint as to why.
-                        err(
-                            f'Failed to build custom shader for slot {slot} because the slang shader compiler'
-                            f' ({slangc()[0]}) was not found. Install shader-slang to use custom shaders.'
-                        )
-                    else:
-                        err(f'Failed to build custom shader for slot {slot} with error: {e}')
-                    disable(prog)
-                except Exception as e:
-                    err(f'Failed to build custom shader for slot {slot} with error: {e}')
-                    disable(prog)
-                else:
-                    try:
-                        if self.last_built_custom_shaders.get(prog) != (vert, frag, metadata):
-                            compile_program(prog, (vert,), (frag,), metadata, allow_recompile)
-                            self.last_built_custom_shaders[prog] = vert, frag, metadata
-                    except Exception as e:
-                        err(f'Failed to load custom shader for slot {slot} with error: {e}')
-                        disable(prog)
+                self.disable_custom_program(prog, allow_recompile)
+                return
+            try:
+                pipeline = merge_pipelines(slot_pipelines)
+            except Exception as e:
+                err(f'Failed to build custom shader for slot {slot} with error: {e}')
+                self.disable_custom_program(prog, allow_recompile)
+                return
+            if self.load_custom_shader(prog, slot, pipeline, allow_recompile, allow_slangc=not self.build_custom_shaders_in_background):
+                return
+            # Not cached, any previous shader stays in use until this is built
+            try:
+                self.background_build = BackgroundBuild(prog, slot, pipeline, self.background_build_done)
+            except Exception as e:
+                log_error(f'Failed to build custom shader in the background, building it now. Error: {e}')
+                self.load_custom_shader(prog, slot, pipeline, allow_recompile)
 
         do(CUSTOM_END_PROGRAM, 'end')
         compile_program(-2, (), (), {})  # initialize programs
@@ -1431,11 +1569,13 @@ def merge_pipelines(pipelines: list[Pipeline]) -> Pipeline:
     }
 
 
-def build_custom_shader_pipeline_ir(pipeline: Pipeline, cache_dir: str, invocation_tracker: set[tuple[str, ...]]) -> tuple[tuple[str, ...], str]:
+def build_custom_shader_pipeline_ir(
+    pipeline: Pipeline, cache_dir: str, invocation_tracker: set[tuple[str, ...]], allow_slangc: bool = True
+) -> tuple[tuple[str, ...], str]:
     slot = pipeline['slot']
     slot_module_name = f'{slot.replace("-", "_")}'
     cache_dir = os.path.join(cache_dir, 'c')
-    ensure_cache_dir(cache_dir)
+    ensure_cache_dir(cache_dir, allow_slangc)
     slot_dir = os.path.join(cache_dir, slot)
     libdir = os.path.join(cache_dir, 'lib')
     import_dirs = [slot_dir, libdir]
@@ -1455,9 +1595,11 @@ def build_custom_shader_pipeline_ir(pipeline: Pipeline, cache_dir: str, invocati
         cache_ok = f.read() == ct_key
         mtime = max(mtime, os.fstat(f.fileno()).st_mtime_ns)
     if not cache_ok:
+        if not allow_slangc:
+            raise NeedsSlangc('custom-types.slang')
         cmd = bc + ['-module-name', 'kitty_custom_shader_types', '-o', j('kitty-custom-shader-types.slang-module'), '--', '-']
         invocation_tracker.add(tuple(cmd))
-        cp = subprocess.run(cmd, input=ct_shader, capture_output=True)
+        cp = subprocess.run(cmd, input=ct_shader, capture_output=True, **slangc_popen_kwargs())
         if cp.returncode != 0:
             raise SlangFailed('custom-types.slang', cp)
         ct_key_path = j('ct.key')
@@ -1481,6 +1623,8 @@ def build_custom_shader_pipeline_ir(pipeline: Pipeline, cache_dir: str, invocati
         with suppress(FileNotFoundError), open(slot_key_file, 'rb') as f:
             if f.read() == slot_key:
                 return tuple(import_dirs), ans
+    if not allow_slangc:
+        raise NeedsSlangc(f'{slot}.slang')
 
     j = partial(os.path.join, slot_dir)
     imports = []
@@ -1498,7 +1642,7 @@ def build_custom_shader_pipeline_ir(pipeline: Pipeline, cache_dir: str, invocati
             inc = ['-I', import_dir] if import_dir else []
             cmd = bc + inc + [f'-Dfragment_main={entry_point(g_idx, s_idx)}', '-module-name', modname, '-o', module_file, '--', '-']
             invocation_tracker.add(tuple(cmd))
-            cp = subprocess.run(cmd, input=src, capture_output=True)
+            cp = subprocess.run(cmd, input=src, capture_output=True, **slangc_popen_kwargs())
             if cp.returncode != 0:
                 raise SlangFailed(name, cp)
             mtime = max(mtime, os.stat(module_file).st_mtime_ns)
@@ -1525,7 +1669,7 @@ def build_custom_shader_pipeline_ir(pipeline: Pipeline, cache_dir: str, invocati
             inc.extend(('-I', x))
         cmd = bc + inc + ['-module-name', slot_module_name, '-o', ans, '--', '-']
         invocation_tracker.add(tuple(cmd))
-        cp = subprocess.run(cmd, cwd=tdir, capture_output=True, input=mod_src.encode())
+        cp = subprocess.run(cmd, cwd=tdir, capture_output=True, input=mod_src.encode(), **slangc_popen_kwargs())
         if cp.returncode != 0:
             raise SlangFailed(f'{slot}.slang', cp)
 
@@ -1564,8 +1708,9 @@ float4 fmain_wrap(
 
 
 def build_custom_shader_pipeline_glsl(
-    pipeline: Pipeline, cache_dir: str = '', invocation_tracker: set[tuple[str, ...]] | None = None
+    pipeline: Pipeline, cache_dir: str = '', invocation_tracker: set[tuple[str, ...]] | None = None, allow_slangc: bool = True
 ) -> tuple[str, str, dict[str, Any]]:
+    "Build the GLSL for pipeline, with allow_slangc=False raising NeedsSlangc unless it is already cached"
     import kitty.constants as kc
 
     cache_dir = os.path.join(cache_dir or kc.cache_dir(), 'shaders')
@@ -1576,7 +1721,7 @@ def build_custom_shader_pipeline_glsl(
     with lock_with_file(
         os.path.join(cache_dir, 'lock'),
     ):
-        import_dirs, slang_module_path = build_custom_shader_pipeline_ir(pipeline, cache_dir, invocation_tracker)
+        import_dirs, slang_module_path = build_custom_shader_pipeline_ir(pipeline, cache_dir, invocation_tracker, allow_slangc)
         glsl_dir = os.path.join(os.path.dirname(os.path.dirname(slang_module_path)), 'glsl')
         os.makedirs(glsl_dir, exist_ok=True)
         module_mtime = safe_mtime(slang_module_path)
@@ -1585,6 +1730,8 @@ def build_custom_shader_pipeline_glsl(
         fragment = os.path.join(glsl_dir, f'{slot}.frag.glsl')
         metadata = os.path.join(glsl_dir, f'{slot}.glsl.json')
         if module_mtime > safe_mtime(metadata):
+            if not allow_slangc:
+                raise NeedsSlangc(f'{slot}.glsl')
             inc = []
             for x in import_dirs:
                 inc.extend(('-I', x))
@@ -1609,8 +1756,8 @@ def build_custom_shader_pipeline_glsl(
             src = module_wrapper_for_slot(slot)
             invocation_tracker.add(tuple(vcmd))
             invocation_tracker.add(tuple(fcmd))
-            v = subprocess.Popen(vcmd, stderr=subprocess.PIPE, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
-            f = subprocess.Popen(fcmd, stderr=subprocess.PIPE, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
+            v = subprocess.Popen(vcmd, stderr=subprocess.PIPE, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, **slangc_popen_kwargs())
+            f = subprocess.Popen(fcmd, stderr=subprocess.PIPE, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, **slangc_popen_kwargs())
             assert v.stdin is not None and f.stdin is not None
             assert v.stderr is not None and f.stderr is not None
             v.stdin.write(src), v.stdin.close()
@@ -1628,6 +1775,16 @@ def build_custom_shader_pipeline_glsl(
             m = glsl_metadata_for_shader(metadata)
             m['pipeline'] = pipeline
             return vf.read(), ff.read(), m
+
+
+def build_custom_shader_pipeline_worker() -> None:
+    "Build the pipeline read as JSON from stdin into the cache, run in a separate process by BackgroundBuild"
+    try:
+        build_custom_shader_pipeline_glsl(json.loads(sys.stdin.buffer.read()))
+    except Exception as e:
+        # As bytes, since text mode on Windows would turn the \r\n from slangc into \r\r\n
+        sys.stderr.buffer.write(str(e).encode())
+        raise SystemExit(1)
 
 
 def clear_caches() -> None:

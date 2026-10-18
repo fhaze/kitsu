@@ -92,6 +92,9 @@ def set_custom_ibeam_cursor() -> None:
 
 
 def load_all_shaders() -> None:
+    # Called when creating the first OS window, before the main loop runs, which
+    # is what completes building any uncached custom shader in the background.
+    load_shader_programs.build_custom_shaders_in_background = True
     try:
         load_shader_programs()
     except ValueError as err:

@@ -3,20 +3,25 @@
 
 import hashlib
 import importlib.resources as ir
+import io
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from kitty.constants import slangc
 from kitty.shaders.slang import (
     EntryPoint,
     LoadShaderPrograms,
+    NeedsSlangc,
     SlangFile,
     Stage,
     build_custom_shader_pipeline_glsl,
+    build_custom_shader_pipeline_worker,
     build_import_graph,
     clear_caches,
     custom_shader,
@@ -108,6 +113,80 @@ class TestSlang(BaseTest):
                 loader.compile_custom_shaders(allow_recompile=True)
             operations = [c.args[1] for c in compile_program.call_args_list if c.args[0] == CUSTOM_END_PROGRAM]
             self.ae(operations, [('vertex',), (), ('vertex',)])
+
+    def test_custom_shader_background_build(self):
+        from kitty.fast_data_types import CUSTOM_END_PROGRAM
+        from kitty.options.types import defaults
+
+        pipeline = parse_pipeline_definition(['startgroup', 'shaders focus-highlight', 'endgroup'], 'test')
+        cache = {'built': False}
+        builds: list['FakeBuild'] = []
+
+        def build(p, allow_slangc=True):
+            if not allow_slangc and not cache['built']:
+                raise NeedsSlangc()
+            return 'vertex', 'fragment', {}
+
+        class FakeBuild:
+            def __init__(self, prog, slot, pipeline, on_done):
+                self.prog, self.slot, self.pipeline, self.on_done = prog, slot, pipeline, on_done
+                self.redo, self.error = False, ''
+                self.process = SimpleNamespace(returncode=None)
+                builds.append(self)
+
+            def finish(self, returncode=0, error=''):
+                cache['built'] = not returncode
+                self.process.returncode, self.error = returncode, error
+                self.on_done(self)
+
+        def loader():
+            ans = LoadShaderPrograms()
+            ans.build_custom_shaders_in_background = True
+            ans.opts = defaults._replace(custom_shaders=('test',))
+            return ans
+
+        with (
+            patch('kitty.shaders.slang.parse_pipeline', return_value=pipeline),
+            patch('kitty.shaders.slang.build_custom_shader_pipeline_glsl', side_effect=build),
+            patch('kitty.shaders.slang.BackgroundBuild', FakeBuild),
+            patch('kitty.shaders.slang.get_boss', return_value=None),
+            patch('kitty.shaders.slang.log_error'),
+            patch('kitty.shaders.slang.compile_program') as compile_program,
+        ):
+
+            def end_program_ops():
+                ans = [c.args[1] for c in compile_program.call_args_list if c.args[0] == CUSTOM_END_PROGRAM]
+                compile_program.reset_mock()
+                return ans
+
+            # Not cached: kitty starts without the shader while it is built
+            lsp = loader()
+            lsp.compile_custom_shaders()
+            self.ae(len(builds), 1)
+            self.ae(end_program_ops(), [])
+            # Reloading the config meanwhile waits for the running build
+            lsp.compile_custom_shaders(allow_recompile=True)
+            self.ae(len(builds), 1)
+            self.assertTrue(builds[0].redo)
+            builds[0].finish()
+            self.ae(end_program_ops(), [('vertex',)])
+            self.assertIsNone(lsp.background_build)
+            # Cached: loaded immediately
+            loader().compile_custom_shaders()
+            self.ae(len(builds), 1)
+            self.ae(end_program_ops(), [('vertex',)])
+            # A failed build is reported, leaving the shader disabled
+            cache['built'] = False
+            lsp = loader()
+            lsp.compile_custom_shaders()
+            builds[-1].finish(1, 'slangc failed')
+            self.ae(end_program_ops(), [()])
+            self.ae(len(lsp.custom_shader_errors), 1)
+            self.assertIn('slangc failed', lsp.custom_shader_errors[0])
+            # Unable to build in the background: build it now instead
+            with patch('kitty.shaders.slang.BackgroundBuild', side_effect=OSError('no kitty')):
+                loader().compile_custom_shaders()
+            self.ae(end_program_ops(), [('vertex',)])
 
     def test_slang_parser(self):
         def check(src: str, expected: SlangFile) -> None:
@@ -430,9 +509,26 @@ fsMain(VertexOutput vo) : SV_Target { return float4(0); }
                 'test',
             )
             try:
-                vert_src, frag_src, metadata = build_custom_shader_pipeline_glsl(p, cache_dir=cache_dir)
+                with patch('subprocess.Popen', wraps=subprocess.Popen) as popen:
+                    vert_src, frag_src, metadata = build_custom_shader_pipeline_glsl(p, cache_dir=cache_dir)
+                if sys.platform == 'win32':
+                    # kitty is a GUI program on Windows, slangc must not get console windows
+                    for call in popen.call_args_list:
+                        self.assertEqual(call.kwargs.get('creationflags'), subprocess.CREATE_NO_WINDOW, call.args)
                 invocation_tracker = set()
+                # A warm cache must not run slangc at all, not even for its version
+                with (
+                    patch('kitty.shaders.slang.slangc_version', side_effect=AssertionError('slangc version checked with a warm cache')),
+                    patch('subprocess.Popen', side_effect=AssertionError('slangc run with a warm cache')),
+                ):
+                    build_custom_shader_pipeline_glsl(p, cache_dir=cache_dir, invocation_tracker=invocation_tracker)
+                # A changed slangc re-checks the version, keeping the cache if the version is unchanged
+                fingerprint_path = os.path.join(cache_dir, 'shaders', 'c', 'slangc.fingerprint')
+                with open(fingerprint_path, 'w') as f:
+                    f.write('changed')
                 build_custom_shader_pipeline_glsl(p, cache_dir=cache_dir, invocation_tracker=invocation_tracker)
+                with open(fingerprint_path) as f:
+                    self.assertNotEqual(f.read(), 'changed')
             finally:
                 clear_caches()
 
@@ -462,6 +558,59 @@ fsMain(VertexOutput vo) : SV_Target { return float4(0); }
                 )
             finally:
                 os.unlink(tf_path)
+
+    def test_custom_shader_build_worker(self):
+        pipeline = {'slot': 'end', 'vars': {'x': ['float', '1']}}
+
+        def run(build):
+            stdin = SimpleNamespace(buffer=io.BytesIO(json.dumps(pipeline).encode()))
+            stderr = SimpleNamespace(buffer=io.BytesIO())
+            with (
+                patch('kitty.shaders.slang.build_custom_shader_pipeline_glsl', side_effect=build) as b,
+                patch('sys.stdin', stdin),
+                patch('sys.stderr', stderr),
+            ):
+                try:
+                    build_custom_shader_pipeline_worker()
+                except SystemExit as e:
+                    return b, e.code, stderr.buffer.getvalue()
+            return b, 0, stderr.buffer.getvalue()
+
+        b, code, err = run(lambda p: None)
+        self.ae((code, err), (0, b''))
+        self.ae(b.call_args.args, (pipeline,))
+        # The error is reported as is, with the line endings from slangc
+        b, code, err = run(Exception('Failed\r\nand stderr:\r\nerror'))
+        self.ae((code, err), (1, b'Failed\r\nand stderr:\r\nerror'))
+
+    def test_custom_shader_cache_only_build(self):
+        if not shutil.which(slangc()[0]):
+            self.skipTest(f'slangc ({slangc()[0]}) not found in PATH')
+        p = parse_pipeline_definition(
+            """
+        var float intensity 0.5
+        startgroup
+            animation_start window-focus-in
+            animation_curve ease-in-out
+            shaders sample
+        endgroup
+        """.splitlines(),
+            'test',
+        )
+        with tempfile.TemporaryDirectory() as cache_dir:
+            clear_caches()
+            try:
+                with self.assertRaises(NeedsSlangc):
+                    build_custom_shader_pipeline_glsl(p, cache_dir=cache_dir, allow_slangc=False)
+                # Background builds get the pipeline as JSON, which must build
+                # the cache entry the main process then looks up
+                build_custom_shader_pipeline_glsl(json.loads(json.dumps(p)), cache_dir=cache_dir)
+                with patch('subprocess.Popen', side_effect=AssertionError('slangc run for a cache only build')):
+                    vert_src, frag_src, _ = build_custom_shader_pipeline_glsl(p, cache_dir=cache_dir, allow_slangc=False)
+            finally:
+                clear_caches()
+        self.assertTrue(vert_src)
+        self.assertTrue(frag_src)
 
     def _content_hash(self) -> str:
         h = hashlib.md5(usedforsecurity=False)
