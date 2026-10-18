@@ -35,15 +35,16 @@ type Winsize struct {
 // Term is a handle to the console. Input is read via ReadConsoleInputW,
 // output is written via WriteConsoleW.
 type Term struct {
-	in, out    windows.Handle
-	name       string
-	states     []Termios
-	interrupt  windows.Handle
-	pending    []byte
-	pending_hi rune // high surrogate waiting for its low half
-	resize_ch  chan<- os.Signal
-	resize_sig os.Signal
-	lock       sync.Mutex
+	in, out       windows.Handle
+	name          string
+	states        []Termios
+	interrupt     windows.Handle
+	pending       []byte
+	pending_hi    rune // high surrogate waiting for its low half
+	mouse_buttons uint32
+	resize_ch     chan<- os.Signal
+	resize_sig    os.Signal
+	lock          sync.Mutex
 }
 
 var (
@@ -53,6 +54,7 @@ var (
 
 const (
 	key_event                = 0x0001
+	mouse_event              = 0x0002
 	window_buffer_size_event = 0x0004
 )
 
@@ -69,6 +71,13 @@ type key_event_record struct {
 	virtual_scan_code uint16
 	unicode_char      uint16
 	control_key_state uint32
+}
+
+type mouse_event_record struct {
+	x, y              int16
+	button_state      uint32
+	control_key_state uint32
+	event_flags       uint32
 }
 
 func read_console_input(h windows.Handle, records []input_record) (n uint32, err error) {
@@ -303,18 +312,71 @@ func (self *Term) append_key_event(k *key_event_record, encode KeyEventEncoder) 
 	}
 }
 
-// Drain all available console input records into self.pending
-func (self *Term) fill_pending(encode KeyEventEncoder) error {
-	var records [64]input_record
-	n, err := read_console_input(self.in, records[:])
-	if err != nil {
-		return err
+func (self *Term) append_mouse_event(m *mouse_event_record) {
+	mods := 0
+	if m.control_key_state&windows.SHIFT_PRESSED != 0 {
+		mods |= 4
 	}
-	for _, rec := range records[:n] {
+	if m.control_key_state&(windows.LEFT_ALT_PRESSED|windows.RIGHT_ALT_PRESSED) != 0 {
+		mods |= 8
+	}
+	if m.control_key_state&(windows.LEFT_CTRL_PRESSED|windows.RIGHT_CTRL_PRESSED) != 0 {
+		mods |= 16
+	}
+	append_event := func(button int, release bool) {
+		end := 'M'
+		if release {
+			end = 'm'
+		}
+		// ConPTY retains the requested SGR coordinates (pixels for the TUI), minus one.
+		self.pending = fmt.Appendf(self.pending, "\x1b[<%d;%d;%d%c", button|mods, int(m.x)+1, int(m.y)+1, end)
+	}
+	buttons := m.button_state & 0x1f
+	changed := buttons ^ self.mouse_buttons
+	self.mouse_buttons = buttons
+	button_codes := [...]int{0, 2, 1, 128, 129}
+	for i, code := range button_codes {
+		mask := uint32(1 << i)
+		if changed&mask != 0 {
+			append_event(code, buttons&mask == 0)
+		}
+	}
+	switch m.event_flags {
+	case windows.MOUSE_MOVED:
+		button := 3
+		for i, code := range button_codes {
+			if buttons&(1<<i) != 0 {
+				button = code
+				break
+			}
+		}
+		append_event(button|32, false)
+	case windows.MOUSE_WHEELED, windows.MOUSE_HWHEELED:
+		delta := int(int16(m.button_state >> 16))
+		button := 64
+		if m.event_flags == windows.MOUSE_HWHEELED {
+			button = 66
+			delta = -delta
+		}
+		if delta < 0 {
+			button++
+			delta = -delta
+		}
+		for ; delta > 0; delta -= 120 {
+			append_event(button, false)
+		}
+	}
+}
+
+func (self *Term) append_input_records(records []input_record, encode KeyEventEncoder) {
+	for _, rec := range records {
 		switch rec.event_type {
 		case key_event:
 			k := (*key_event_record)(unsafe.Pointer(&rec.data[0]))
 			self.append_key_event(k, encode)
+		case mouse_event:
+			m := (*mouse_event_record)(unsafe.Pointer(&rec.data[0]))
+			self.append_mouse_event(m)
 		case window_buffer_size_event:
 			self.lock.Lock()
 			ch, sig := self.resize_ch, self.resize_sig
@@ -327,6 +389,16 @@ func (self *Term) fill_pending(encode KeyEventEncoder) error {
 			}
 		}
 	}
+}
+
+// Drain all available console input records into self.pending
+func (self *Term) fill_pending(encode KeyEventEncoder) error {
+	var records [64]input_record
+	n, err := read_console_input(self.in, records[:])
+	if err != nil {
+		return err
+	}
+	self.append_input_records(records[:n], encode)
 	return nil
 }
 
