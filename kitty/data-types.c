@@ -946,6 +946,7 @@ extern bool init_freetype_render_ui_text(PyObject *);
 #endif
 #ifdef _WIN32
 extern bool init_win32_process_info(PyObject *module);
+extern bool init_win32_notifications(PyObject *module);
 #endif
 
 static unsigned
@@ -994,6 +995,7 @@ PyInit_fast_data_types(void) {
     if (!init_png_reader(m)) return NULL;
 #ifdef _WIN32
     if (!init_win32_process_info(m)) return NULL;
+    if (!init_win32_notifications(m)) return NULL;
 #endif
 #ifdef __APPLE__
     if (!init_macos_process_info(m)) return NULL;

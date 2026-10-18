@@ -129,6 +129,18 @@ jobs:
             shell: cmd
             run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import runpy; runpy.run_path('.github/workflows/test_windows_runtime.py', run_name='__main__')"
 
+          - name: Test updates and notification policy
+            shell: cmd
+            run: |
+              start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','--module','update']; main()"
+              if errorlevel 1 exit /b 1
+              start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','--module','notifications']; main()"
+
+          - name: Test native notification XML and event dispatch (no UI)
+            run: |
+              gcc -std=gnu11 -Wall -Wextra -Werror -Wno-missing-field-initializers $(python3-config --includes) windows/test_notifications.c -o build/test-notifications.exe $(python3-config --embed --ldflags) -lruntimeobject -lole32 -lshlwapi -lshell32 -ladvapi32 -luuid
+              ./build/test-notifications.exe
+
           - name: Test Windows graphics replies
             shell: cmd
             run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','--module','graphics']; main()"

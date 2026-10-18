@@ -1589,6 +1589,10 @@ process_global_state(void *data) {
     maximum_wait = -1;
     bool state_check_timer_enabled = false;
     bool input_read = false;
+#ifdef _WIN32
+    extern void drain_win32_notification_events(void);
+    drain_win32_notification_events();
+#endif
 
     monotonic_t now = monotonic();
     if (global_state.has_pending_resizes) {

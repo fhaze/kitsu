@@ -1583,10 +1583,15 @@ class Boss:
         run_data = getattr(sys, 'kitty_run_data', {})
         is_installed = getattr(sys, 'frozen', False) or (is_windows and bool(run_data.get('bundle_exe_dir')) and not run_data.get('from_source'))
         if (opts := get_options()).update_check_interval > 0 and not self.update_check_started and is_installed:
-            from .update_check import run_update_check
-
-            run_update_check(get_options().update_check_interval * 60 * 60)
             self.update_check_started = True
+
+            def deferred_update_check(timer_id: int | None) -> None:
+                if (interval := get_options().update_check_interval) > 0:
+                    from .update_check import run_update_check
+
+                    run_update_check(interval * 60 * 60)
+
+            add_timer(deferred_update_check, 8.0, False)
         if opts.auto_reload_config >= 0 and not hasattr(self, 'config_reload_watcher_process') and opts.all_config_paths:
             self.config_reload_watcher_process = subprocess.Popen(
                 [kitten_exe(), '__watch_conf__', str(os.getpid()), str(int(opts.auto_reload_config * 1000))] + list(opts.all_config_paths),

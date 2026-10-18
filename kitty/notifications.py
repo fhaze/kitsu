@@ -12,7 +12,17 @@ from itertools import count
 from typing import Any, NamedTuple, Set
 from weakref import ReferenceType, ref
 
-from .constants import cache_dir, config_dir, is_macos, is_windows, logo_png_file, standard_icon_names, standard_sound_names, supports_window_occlusion
+from .constants import (
+    cache_dir,
+    config_dir,
+    display_name,
+    is_macos,
+    is_windows,
+    logo_png_file,
+    standard_icon_names,
+    standard_sound_names,
+    supports_window_occlusion,
+)
 from .fast_data_types import (
     ESC_OSC,
     StreamingBase64Decoder,
@@ -243,6 +253,9 @@ class NotificationCommand:
     on_activation: Callable[['NotificationCommand', int], None] | None = None
     on_close: Callable[['NotificationCommand'], None] | None = None
     on_update: Callable[['NotificationCommand', 'NotificationCommand'], None] | None = None
+    on_created: Callable[[], None] | None = None
+    on_creation_failed: Callable[[], None] | None = None
+    launch_url: str = ''
 
     # metadata
     identifier: str = ''
@@ -818,30 +831,60 @@ class FreeDesktopIntegration(DesktopIntegration):
 
 
 class WindowsIntegration(DesktopIntegration):
-    # TODO: implement native toast notifications via WinRT. Until then
-    # notifications are tracked locally so the OSC 99 protocol works but
-    # nothing is shown on the desktop.
-    supports_close_events: bool = False
-    supports_buttons: bool = False
-    supports_sound: bool = False
+    supports_close_events: bool = True
+    supports_buttons: bool = True
+    supports_sound: bool = True
+    supports_sound_names: str = ''
+    supports_timeout_natively: bool = False
 
     def initialize(self) -> None:
+        from .fast_data_types import win32_set_notification_activated_callback
+
         self.live_notifications: set[int] = set()
         self.id_counter = count(start=1)
+        win32_set_notification_activated_callback(self.notification_activated)
 
     def query_live_notifications(self, channel_id: int, identifier: str) -> None:
         self.notification_manager.send_live_response(channel_id, identifier, tuple(self.live_notifications))
 
     def close_notification(self, desktop_notification_id: int) -> bool:
-        self.live_notifications.discard(desktop_notification_id)
-        return False
+        from .fast_data_types import win32_close_notification
+
+        return win32_close_notification(str(desktop_notification_id))
 
     def notify(self, nc: NotificationCommand, existing_desktop_notification_id: int | None) -> int:
-        desktop_notification_id = existing_desktop_notification_id or next(self.id_counter)
-        self.live_notifications.add(desktop_notification_id)
-        if debug_desktop_integration:
-            log_error(f'Desktop notifications are not yet implemented on Windows, dropping: {nc.title!r}')
+        from .fast_data_types import win32_send_notification
+
+        desktop_notification_id = next(self.id_counter)
+        if existing_desktop_notification_id is not None:
+            self.close_notification(existing_desktop_notification_id)
+        win32_send_notification(
+            str(desktop_notification_id), nc.title, nc.body, launch_url=nc.launch_url,
+            image_path=nc.icon_path or logo_png_file, buttons=nc.buttons[:5], silent=nc.sound_name != 'system',
+        )
         return desktop_notification_id
+
+    def notification_activated(self, event: str, ident: str, button_id: str) -> None:
+        try:
+            desktop_id = int(ident)
+        except ValueError:
+            return
+        if event == 'created':
+            self.live_notifications.add(desktop_id)
+            if len(self.live_notifications) > 128:
+                self.live_notifications.remove(min(self.live_notifications))
+            self.notification_manager.notification_created(desktop_id)
+        elif event in ('activated', 'button'):
+            self.notification_manager.notification_activated(desktop_id, int(button_id) if event == 'button' else 0)
+            self.live_notifications.discard(desktop_id)
+            self.notification_manager.notification_closed(desktop_id)
+        elif event in ('creation_failed', 'closed'):
+            self.live_notifications.discard(desktop_id)
+            if event == 'creation_failed':
+                n = self.notification_manager.in_progress_notification_commands.get(desktop_id)
+                if n is not None and n.on_creation_failed is not None:
+                    n.on_creation_failed()
+            self.notification_manager.notification_closed(desktop_id)
 
 
 class UIState(NamedTuple):
@@ -945,6 +988,12 @@ class NotificationManager:
     def notification_created(self, desktop_notification_id: int) -> NotificationCommand | None:
         if n := self.in_progress_notification_commands.get(desktop_notification_id):
             n.created_by_desktop = True
+            if n.on_created is not None:
+                callback, n.on_created = n.on_created, None
+                try:
+                    callback()
+                except Exception as e:
+                    self.log('Notification on_created handler failed with error:', e)
             if n.timeout > 0 and not self.desktop_integration.supports_timeout_natively:
                 add_timer(partial(self.expire_notification, desktop_notification_id, id(n)), n.timeout / 1000, False)
             return n
@@ -1003,12 +1052,21 @@ class NotificationManager:
             cmd.on_activation = print
             self.notify_with_command(cmd, w.id)
 
-    def send_new_version_notification(self, version: str) -> None:
+    def send_new_version_notification(
+        self, version: str, on_created: Callable[[], None] | None = None, on_creation_failed: Callable[[], None] | None = None,
+    ) -> int | None:
         cmd = self.create_notification_cmd()
-        cmd.title = 'kitty update available!'
-        cmd.body = f'kitty version {version} released'
+        cmd.title = f'{display_name} update available'
+        cmd.body = f"Version {version} is ready. Click to see what's new."
+        cmd.on_created = on_created
+        cmd.on_creation_failed = on_creation_failed
         cmd.on_activation = self.desktop_integration.on_new_version_notification_activation
-        self.notify_with_command(cmd, 0)
+        if isinstance(self.desktop_integration, WindowsIntegration):
+            from .update_check import FORK_RELEASES_URL
+
+            cmd.launch_url = FORK_RELEASES_URL
+            cmd.on_activation = None  # Windows opens protocol links, even after Kitsu exits.
+        return self.notify_with_command(cmd, 0)
 
     def is_notification_allowed(self, cmd: NotificationCommand, channel_id: int, apply_filter_rules: bool = True) -> bool:
         if cmd.only_when is not OnlyWhen.always and cmd.only_when is not OnlyWhen.unset:

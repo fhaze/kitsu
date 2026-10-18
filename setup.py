@@ -820,7 +820,9 @@ def kitty_env(args: Options) -> Env:
     elif is_windows:
         cflags.extend(pkg_config('cairo-ft', '--cflags-only-I'))
         platform_libs = pkg_config('cairo-ft', '--libs')
-        platform_libs.extend('-lws2_32 -lbcrypt -lgdi32 -luser32 -lshell32 -ladvapi32 -lshlwapi -lole32 -luuid -ldwrite -lpsapi -lwtsapi32 -lsystre'.split())
+        platform_libs.extend(
+            '-lws2_32 -lbcrypt -lgdi32 -luser32 -lshell32 -ladvapi32 -lshlwapi -lole32 -luuid -ldwrite -lpsapi -lwtsapi32 -lsystre -lruntimeobject'.split()
+        )
     else:
         cflags.extend(pkg_config('cairo-fc', '--cflags-only-I'))
         platform_libs = []
@@ -1194,7 +1196,7 @@ def find_c_files() -> Tuple[List[str], List[str]]:
     else:
         exclude = {'core_text.m', 'cocoa_window.m', 'macos_process_info.c'}
     if not is_windows:
-        exclude |= {'win32-compat.c', 'win32-pty.c', 'win32_process_info.c'}
+        exclude |= {'win32-compat.c', 'win32-pty.c', 'win32_process_info.c', 'win32-notifications.c'}
     for x in sorted(os.listdir(d)):
         ext = os.path.splitext(x)[1]
         if ext in ('.c', '.m') and os.path.basename(x) not in exclude:
