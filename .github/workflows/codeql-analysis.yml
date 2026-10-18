@@ -22,10 +22,6 @@ jobs:
             include:
                - language: python
                  os: ubuntu-latest
-               - language: c
-                 os: ubuntu-latest
-               - language: c
-                 os: macos-latest
                - language: go
                  os: ubuntu-latest
                - language: actions
@@ -47,7 +43,7 @@ jobs:
               persist-credentials: false
 
         - name: Install Go
-          if: matrix.language == 'c' || matrix.language == 'go'
+          if: matrix.language == 'go'
           uses: actions/setup-go@v7.0.0
           with:
               go-version-file: go.mod
@@ -60,7 +56,7 @@ jobs:
               trap-caching: false
 
         - name: Build kitty
-          if: matrix.language == 'c' || matrix.language == 'go'
+          if: matrix.language == 'go'
           run: python3 .github/workflows/ci.py build
 
         - name: Perform CodeQL Analysis
@@ -69,3 +65,103 @@ jobs:
         - name: Run govulncheck
           if: matrix.language == 'go'
           run: python3 .github/workflows/ci.py govulncheck
+
+    # The C code is scanned as it is built for Windows, with the same MSYS2
+    # UCRT64 toolchain as windows-build.yml, so the win32 sources are covered
+    CodeQL-Build-Windows:
+
+        permissions:
+            contents: read # to fetch code (actions/checkout)
+            security-events: write # to upload SARIF results (github/codeql-action/analyze)
+
+        strategy:
+          fail-fast: false
+          matrix:
+            build-mode: [manual, none]
+
+        runs-on: windows-latest
+        env:
+            CI: 'true'
+            PYTHONUTF8: '1'
+        defaults:
+            run:
+                shell: msys2 {0}
+
+        steps:
+
+        - name: Checkout repository
+          uses: actions/checkout@v7.0.1
+          with:
+              fetch-depth: 2
+              persist-credentials: false
+
+        - name: Install Go
+          if: matrix.build-mode == 'manual'
+          uses: actions/setup-go@v7.0.0
+          with:
+              go-version-file: go.mod
+
+        - name: Set up MSYS2 UCRT64
+          if: matrix.build-mode == 'manual'
+          uses: msys2/setup-msys2@v2.32.0
+          with:
+              msystem: UCRT64
+              update: true
+              path-type: inherit
+              install: >-
+                make git ncurses unzip
+                mingw-w64-ucrt-x86_64-gcc
+                mingw-w64-ucrt-x86_64-pkgconf
+                mingw-w64-ucrt-x86_64-python
+                mingw-w64-ucrt-x86_64-freetype
+                mingw-w64-ucrt-x86_64-harfbuzz
+                mingw-w64-ucrt-x86_64-libpng
+                mingw-w64-ucrt-x86_64-lcms2
+                mingw-w64-ucrt-x86_64-xxhash
+                mingw-w64-ucrt-x86_64-openssl
+                mingw-w64-ucrt-x86_64-zlib
+                mingw-w64-ucrt-x86_64-cairo
+                mingw-w64-ucrt-x86_64-fontconfig
+                mingw-w64-ucrt-x86_64-mesa
+                mingw-w64-ucrt-x86_64-libsystre
+
+        - name: Install SIMDe headers (not packaged by MSYS2)
+          if: matrix.build-mode == 'manual'
+          run: |
+              tmp=$(cygpath -u "$RUNNER_TEMP")
+              curl -fsSL -o "$tmp/simde.tar.gz" https://github.com/simd-everywhere/simde/archive/refs/tags/v0.8.2.tar.gz
+              tar -xzf "$tmp/simde.tar.gz" -C "$tmp"
+              echo "CPPFLAGS=-I$(cygpath -m "$tmp/simde-0.8.2")" >> "$GITHUB_ENV"
+
+        - name: Install slang shader compiler
+          if: matrix.build-mode == 'manual'
+          run: |
+              tmp=$(cygpath -u "$RUNNER_TEMP")
+              curl -fsSL -o "$tmp/slang.zip" https://github.com/shader-slang/slang/releases/download/v2026.14.1/slang-2026.14.1-windows-x86_64.zip
+              mkdir -p "$tmp/slang" && unzip -qo "$tmp/slang.zip" -d "$tmp/slang"
+              echo "SLANGC=$(cygpath -m "$tmp/slang/bin/slangc.exe")" >> "$GITHUB_ENV"
+
+        - name: Install Symbols Nerd Font Mono
+          if: matrix.build-mode == 'manual'
+          run: |
+              tmp=$(cygpath -u "$RUNNER_TEMP")
+              curl -fsSL -o "$tmp/nerd.zip" https://github.com/ryanoasis/nerd-fonts/releases/latest/download/NerdFontsSymbolsOnly.zip
+              fontdir=$(cygpath -u "$LOCALAPPDATA")/Microsoft/Windows/Fonts
+              mkdir -p "$fontdir"
+              unzip -qo -j "$tmp/nerd.zip" SymbolsNerdFontMono-Regular.ttf -d "$fontdir"
+
+        # Initialized after the toolchain is installed, so that only the kitty
+        # build itself is traced
+        - name: Initialize CodeQL
+          uses: github/codeql-action/init@v4.38.1
+          with:
+              languages: c-cpp
+              build-mode: ${{ matrix.build-mode }}
+              trap-caching: false
+
+        - name: Build kitty
+          if: matrix.build-mode == 'manual'
+          run: python setup.py build --verbose
+
+        - name: Perform CodeQL Analysis
+          uses: github/codeql-action/analyze@v4.38.1
