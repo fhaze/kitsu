@@ -321,6 +321,19 @@ ensure_notifier(void) {
     return hr;
 }
 
+static HRESULT
+check_notification_setting(bool *check_after_show) {
+    NotificationSetting setting;
+    HRESULT hr = IToastNotifier_get_Setting(notifier, &setting);
+    // Unpackaged apps have no settings entry until their first notification is sent.
+    if (hr == HRESULT_FROM_WIN32(ERROR_NOT_FOUND) && check_after_show) {
+        *check_after_show = true;
+        return S_OK;
+    }
+    if (SUCCEEDED(hr) && setting != NotificationSetting_Enabled) return E_ACCESSDENIED;
+    return hr;
+}
+
 typedef struct { wchar_t *text; size_t used, capacity; } Xml;
 static bool
 append(Xml *xml, const wchar_t *text, bool escape) {
@@ -478,9 +491,8 @@ win32_send_notification(PyObject *self, PyObject *args, PyObject *kwargs) {
     xml = build_xml(ident, title, body, url ? url : L"", image ? image : L"", buttons, silent);
     if (!xml) goto done;
     HRESULT hr = ensure_notifier();
-    NotificationSetting setting;
-    if (SUCCEEDED(hr)) hr = IToastNotifier_get_Setting(notifier, &setting);
-    if (SUCCEEDED(hr) && setting != NotificationSetting_Enabled) hr = E_ACCESSDENIED;
+    bool check_after_show = false;
+    if (SUCCEEDED(hr)) hr = check_notification_setting(&check_after_show);
     QUERY_USER_NOTIFICATION_STATE state;
     if (SUCCEEDED(hr) && SUCCEEDED(SHQueryUserNotificationState(&state)) && state != QUNS_ACCEPTS_NOTIFICATIONS && state != QUNS_APP) hr = E_ACCESSDENIED;
     LiveToast *t = NULL;
@@ -495,6 +507,10 @@ win32_send_notification(PyObject *self, PyObject *args, PyObject *kwargs) {
     if (SUCCEEDED(hr)) hr = set_tag(t->toast, ident, url && *url);
     if (SUCCEEDED(hr)) hr = attach_handlers(t);
     if (SUCCEEDED(hr)) hr = IToastNotifier_Show(notifier, t->toast);
+    if (SUCCEEDED(hr) && check_after_show) {
+        hr = check_notification_setting(NULL);
+        if (FAILED(hr)) IToastNotifier_Hide(notifier, t->toast);
+    }
     if (SUCCEEDED(hr)) {
         LiveToast *old = take_toast(ident);
         if (old) release_toast(old);

@@ -5,6 +5,38 @@
 void wakeup_main_loop(void) {}
 void register_at_exit_cleanup_func(AtExitCleanupFunc which, kitty_cleanup_at_exit_func func) { (void)which; (void)func; }
 
+static HRESULT setting_result = S_OK;
+static NotificationSetting setting_value = NotificationSetting_Enabled;
+static HRESULT STDMETHODCALLTYPE
+test_setting(IToastNotifier *self, NotificationSetting *value) {
+    (void)self;
+    *value = setting_value;
+    return setting_result;
+}
+
+static void
+test_first_notification_settings(void) {
+    IToastNotifierVtbl vtable = {.get_Setting = test_setting};
+    IToastNotifier fake = {&vtable};
+    notifier = &fake;
+    bool recheck = false;
+    assert(SUCCEEDED(check_notification_setting(&recheck)) && !recheck);
+    setting_result = HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+    assert(SUCCEEDED(check_notification_setting(&recheck)) && recheck);
+    assert(check_notification_setting(NULL) == setting_result);
+    setting_result = S_OK;
+    assert(SUCCEEDED(check_notification_setting(NULL)));
+    for (int i = NotificationSetting_DisabledForApplication; i <= NotificationSetting_DisabledByManifest; i++) {
+        setting_value = (NotificationSetting)i;
+        recheck = false;
+        assert(check_notification_setting(&recheck) == E_ACCESSDENIED && !recheck);
+        assert(check_notification_setting(NULL) == E_ACCESSDENIED);
+    }
+    setting_result = E_FAIL;
+    assert(check_notification_setting(&recheck) == E_FAIL);
+    notifier = NULL;
+}
+
 static void
 python(const char *code) { assert(PyRun_SimpleString(code) == 0); }
 
@@ -29,6 +61,7 @@ foreign_thread(void *unused) {
 
 int
 main(void) {
+    test_first_notification_settings();
     Py_Initialize();
     assert(SUCCEEDED(RoInitialize(RO_INIT_MULTITHREADED)));
     ro_initialized = true;
