@@ -433,6 +433,27 @@ class TestGraphics(BaseTest):
         # The untouched entry must be unaffected throughout
         self.assertEqual(dc.get(b'k1'), b'b' * 200)
 
+    def test_disk_cache_file_removed_with_cache(self):
+        # On Windows an open file cannot be unlinked, so the cache file is
+        # visible while in use and must be deleted by the OS when closed.
+        import gc
+
+        from kitty.constants import cache_dir, is_windows
+
+        def cache_files():
+            return {x for x in os.listdir(cache_dir()) if x.startswith('disk-cache-')}
+
+        before = cache_files()
+        s = self.create_screen()
+        dc = s.grman.disk_cache
+        dc.add(b'k', b'a' * 100)
+        self.assertTrue(dc.wait_for_write())
+        if is_windows:
+            self.assertTrue(cache_files() - before)
+        del s, dc
+        gc.collect()
+        self.assertFalse(cache_files() - before)
+
     def test_suppressing_gr_command_responses(self):
         s, g, pl, sl = load_helpers(self)
         self.ae(pl('abcd', s=10, v=10, q=1), 'ENODATA:Insufficient image data: 4 < 400')

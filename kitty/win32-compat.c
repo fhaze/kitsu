@@ -1089,14 +1089,13 @@ kitty_win32_open_readonly_shared(const char *path) {
     return fd;
 }
 
-int
-kitty_win32_open_anonymous_tmpfile(void) {
-    wchar_t dir[MAX_PATH + 1], path[MAX_PATH + 1];
-    DWORD n = GetTempPathW(MAX_PATH + 1, dir);
-    if (!n || n > MAX_PATH) {
-        errno = ENOENT;
-        return -1;
-    }
+// Creates a uniquely named file in dir (which must end with a path separator)
+// that the OS deletes when its last handle is closed, which also happens if
+// the process crashes. It is opened without sharing, so no other process can
+// open or delete it while it is in use.
+static int
+open_delete_on_close_file(const wchar_t *dir, const wchar_t *prefix, DWORD attributes) {
+    wchar_t path[4096];
     static const wchar_t chars[] = L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     for (int attempt = 0; attempt < 100; attempt++) {
         unsigned char rnd[12];
@@ -1107,11 +1106,12 @@ kitty_win32_open_anonymous_tmpfile(void) {
         wchar_t suffix[sizeof(rnd) + 1];
         for (size_t i = 0; i < sizeof(rnd); i++) suffix[i] = chars[rnd[i] % (sizeof(chars) / sizeof(chars[0]) - 1)];
         suffix[sizeof(rnd)] = 0;
-        if (_snwprintf(path, MAX_PATH, L"%skitty-tmp-%s", dir, suffix) < 0) {
+        int n = _snwprintf(path, sizeof(path) / sizeof(path[0]), L"%ls%ls%ls", dir, prefix, suffix);
+        if (n < 0 || (size_t)n >= sizeof(path) / sizeof(path[0])) {
             errno = ENAMETOOLONG;
             return -1;
         }
-        HANDLE h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+        HANDLE h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_NEW, attributes | FILE_FLAG_DELETE_ON_CLOSE, NULL);
         if (h == INVALID_HANDLE_VALUE) {
             if (GetLastError() == ERROR_FILE_EXISTS) continue;
             set_errno_from_last_error();
@@ -1126,6 +1126,81 @@ kitty_win32_open_anonymous_tmpfile(void) {
     }
     errno = EEXIST;
     return -1;
+}
+
+int
+kitty_win32_open_anonymous_tmpfile(void) {
+    wchar_t dir[MAX_PATH + 1];
+    DWORD n = GetTempPathW(MAX_PATH + 1, dir);
+    if (!n || n > MAX_PATH) {
+        errno = ENOENT;
+        return -1;
+    }
+    return open_delete_on_close_file(dir, L"kitty-tmp-", FILE_ATTRIBUTE_TEMPORARY);
+}
+
+// Converts UTF-8 dir to a wide path ending with a path separator, returns its length or -1
+static int
+wide_dir_path(const char *dir, wchar_t *buf, size_t bufsz) {
+    int n = MultiByteToWideChar(CP_UTF8, 0, dir, -1, buf, (int)bufsz - 1);
+    if (!n) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    n--; // the terminating NUL
+    if (n && buf[n - 1] != L'\\' && buf[n - 1] != L'/') {
+        buf[n++] = L'\\';
+        buf[n] = 0;
+    }
+    return n;
+}
+
+int
+kitty_win32_open_delete_on_close_file(const char *dir, const char *prefix) {
+    wchar_t wdir[4096], wprefix[256];
+    if (wide_dir_path(dir, wdir, sizeof(wdir) / sizeof(wdir[0])) < 0) return -1;
+    if (!MultiByteToWideChar(CP_UTF8, 0, prefix, -1, wprefix, (int)(sizeof(wprefix) / sizeof(wprefix[0])))) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    return open_delete_on_close_file(wdir, wprefix, FILE_ATTRIBUTE_NORMAL);
+}
+
+int
+kitty_win32_delete_unused_files(const char *dir, const char *prefix) {
+    wchar_t path[4096], wprefix[256];
+    int dirlen = wide_dir_path(dir, path, sizeof(path) / sizeof(path[0]));
+    if (dirlen < 0) return -1;
+    int prefixlen = MultiByteToWideChar(CP_UTF8, 0, prefix, -1, wprefix, (int)(sizeof(wprefix) / sizeof(wprefix[0])));
+    if (!prefixlen--) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    const size_t pathsz = sizeof(path) / sizeof(path[0]);
+    int n = _snwprintf(path + dirlen, pathsz - dirlen, L"%ls*", wprefix);
+    if (n < 0 || (size_t)n >= pathsz - dirlen) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileExW(path, FindExInfoBasic, &fd, FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH);
+    if (h == INVALID_HANDLE_VALUE) {
+        if (GetLastError() == ERROR_FILE_NOT_FOUND) return 0;
+        set_errno_from_last_error();
+        return -1;
+    }
+    int count = 0;
+    do {
+        // the wildcard can also match 8.3 short names, so check the real name
+        if ((fd.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) || wcsncmp(fd.cFileName, wprefix, prefixlen) != 0) continue;
+        n = _snwprintf(path + dirlen, pathsz - dirlen, L"%ls", fd.cFileName);
+        if (n < 0 || (size_t)n >= pathsz - dirlen) continue;
+        // A file that is open in some process fails to delete, as it was not
+        // opened with FILE_SHARE_DELETE
+        if (DeleteFileW(path)) count++;
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return count;
 }
 
 int
