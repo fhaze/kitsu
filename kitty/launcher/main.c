@@ -577,6 +577,15 @@ handle_fast_commandline(CLISpec *cli_spec, const char *instance_group_prefix) {
 static bool
 delegate_to_kitten_if_possible(int argc, char **argv, char *exe_dir) {
     if (argc > 1 && argv[1][0] == '@') exec_kitten(argc, argv, exe_dir);
+#ifdef _WIN32
+    // Windows exec() returns to the shell instead of replacing the calling process.
+    int icat_offset = offset_for_plus_subcommand(argc, argv, "icat");
+    if (!icat_offset && argc > 1 && strcmp(argv[1], "icat") == 0) icat_offset = 1;
+    if (icat_offset) {
+        argv[icat_offset] = "icat";
+        exec_kitten(argc - icat_offset + 1, argv + icat_offset - 1, exe_dir);
+    }
+#endif
     int offset = offset_for_plus_subcommand(argc, argv, "kitten");
     if (offset && argc > offset + 1) {
         const char *kitten = argv[offset + 1];
