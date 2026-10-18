@@ -583,6 +583,9 @@ load_glfw(const char* path) {
     *(void **) (&glfwWaylandInjectKey_impl) = dlsym(handle, "glfwWaylandInjectKey");
     if (glfwWaylandInjectKey_impl == NULL) dlerror(); // clear error indicator
 
+    *(void **) (&glfwWin32RequestRenderFrame_impl) = dlsym(handle, "glfwWin32RequestRenderFrame");
+    if (glfwWin32RequestRenderFrame_impl == NULL) dlerror(); // clear error indicator
+
     return NULL;
 }
 

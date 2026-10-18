@@ -1467,7 +1467,10 @@ frames-per-second (FPS) at the cost of more CPU usage. The default value yields
 ~100 FPS which is more than sufficient for most uses. Note that to actually
 achieve 100 FPS, you have to either set :opt:`sync_to_monitor` to :code:`no` or
 use a monitor with a high refresh rate. Also, to minimize latency when there is
-pending input to be processed, this option is ignored.
+pending input to be processed, this option is ignored. On Windows, when
+:opt:`sync_to_monitor` is enabled, frames are timed to the monitor's vertical
+blank and this delay is rounded down to a whole number of refreshes, so the
+default renders on every refresh of monitors up to 195 Hz.
 """,
 )
 

@@ -120,6 +120,7 @@ def generate_wrappers(glfw_header: str) -> None:
     void glfwWaylandInjectMouseMotionAbsolute(unsigned int x, unsigned int y, unsigned int x_extent, unsigned int y_extent)
     void glfwWaylandInjectMouseButton(int button, int action)
     void glfwWaylandInjectKey(int key, int action, int mods)
+    void glfwWin32RequestRenderFrame(GLFWwindow *handle, monotonic_t min_interval, GLFWwin32renderframefun callback)
 """.splitlines():
         if line:
             functions.append(Function(line.strip(), check_fail=False))
@@ -151,6 +152,7 @@ typedef bool (* GLFWhandleurlopen)(const char*);
 typedef void (* GLFWapplicationwillfinishlaunchingfun)(bool);
 typedef bool (* GLFWcocoatogglefullscreenfun)(GLFWwindow*);
 typedef void (* GLFWcocoarenderframefun)(GLFWwindow*);
+typedef void (* GLFWwin32renderframefun)(GLFWwindow*);
 typedef void (*GLFWwaylandframecallbackfunc)(unsigned long long id);
 typedef void (*GLFWDBusnotificationcreatedfun)(unsigned long long, uint32_t, void*);
 typedef void (*GLFWDBusnotificationactivatedfun)(uint32_t, int, const char*);

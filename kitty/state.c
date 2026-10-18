@@ -1096,6 +1096,10 @@ PYWRAP1(set_options) {
     global_state.is_apple = true;
     global_state.has_render_frames = true;
 #endif
+#ifdef _WIN32
+    // Driven by per-monitor vertical blank threads in the GLFW Win32 backend
+    global_state.has_render_frames = true;
+#endif
     global_state.is_wayland = is_wayland ? true : false;
     if (global_state.is_wayland) global_state.has_render_frames = true;
     global_state.debug_rendering = debug_rendering ? true : false;

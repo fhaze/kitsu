@@ -1026,7 +1026,12 @@ windowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 break;
             }
 
-            case WM_DISPLAYCHANGE: _glfwPollMonitorsWin32(); break;
+            case WM_DISPLAYCHANGE:
+                _glfwPollMonitorsWin32();
+                _glfwVSyncDisplayChangedWin32();
+                break;
+
+            case _GLFW_WM_VBLANK: _glfwDispatchVSyncWin32(wParam); return 0;
 
             case WM_KITTY_TIMER_CHECK:
             case WM_KITTY_WAKEUP:
@@ -2199,11 +2204,18 @@ _glfwPlatformWaitEvents(void) {
     _glfwDispatchTimersWin32();
 }
 
+// Rounds up, so that waiting for something due in under a millisecond does not
+// become a zero timeout that spins the main loop until it is due
+static DWORD
+wait_timeout_ms(monotonic_t timeout) {
+    return (DWORD)((timeout + MONOTONIC_T_1e6 - 1) / MONOTONIC_T_1e6);
+}
+
 void
 _glfwPlatformWaitEventsTimeout(monotonic_t timeout) {
     DWORD ms = _glfwTimerWaitTimeoutWin32();
     if (timeout >= 0) {
-        DWORD t = (DWORD)monotonic_t_to_ms(timeout);
+        DWORD t = wait_timeout_ms(timeout);
         if (t < ms) ms = t;
     }
     MsgWaitForMultipleObjectsEx(0, NULL, ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
@@ -2976,7 +2988,7 @@ _glfwTimerWaitTimeoutWin32(void) {
         if (soonest < 0 || d < soonest) soonest = d;
     }
     if (soonest < 0) return INFINITE;
-    return (DWORD)monotonic_t_to_ms(soonest);
+    return wait_timeout_ms(soonest);
 }
 
 void

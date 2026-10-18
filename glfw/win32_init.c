@@ -31,6 +31,7 @@
 
 #include <stdlib.h>
 #include <malloc.h>
+#include <mmsystem.h>
 
 #if defined(_GLFW_USE_HYBRID_HPG) || defined(_GLFW_USE_OPTIMUS_HPG)
 
@@ -431,6 +432,10 @@ _glfwPlatformInit(bool *supports_window_occlusion) {
 
     if (!loadLibraries()) return false;
 
+    // Without this, main loop timeouts (repaint_delay, input_delay, cursor blink,
+    // animations) are rounded up to the default 15.6ms system timer tick
+    _glfw.win32.timer_period_raised = timeBeginPeriod(1) == TIMERR_NOERROR;
+
     createKeyTables();
     _glfwUpdateKeyNamesWin32();
 
@@ -448,6 +453,7 @@ _glfwPlatformInit(bool *supports_window_occlusion) {
 
 void
 _glfwPlatformTerminate(void) {
+    _glfwTerminateVSyncWin32();
     if (_glfw.win32.helperWindowHandle) DestroyWindow(_glfw.win32.helperWindowHandle);
 
     _glfwUnregisterWindowClassWin32();
@@ -463,6 +469,9 @@ _glfwPlatformTerminate(void) {
     _glfwTerminateOSMesa();
 
     _glfwFreeTimersWin32();
+
+    if (_glfw.win32.timer_period_raised) timeEndPeriod(1);
+    _glfw.win32.timer_period_raised = false;
 
     freeLibraries();
 }
