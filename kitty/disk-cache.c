@@ -149,8 +149,39 @@ new_diskcache_object(PyTypeObject *type, PyObject UNUSED *args, PyObject UNUSED 
     return (PyObject *)self;
 }
 
+#ifdef _WIN32
+static const char cache_file_prefix[] = "disk-cache-";
+
+static void *
+delete_stale_cache_files(void *cache_dir) {
+    set_thread_name("DiskCacheClean");
+    kitty_win32_delete_unused_files(cache_dir, cache_file_prefix);
+    free(cache_dir);
+    return NULL;
+}
+
+static void
+start_deleting_stale_cache_files(const char *cache_dir) {
+    // Builds before cache files were opened delete-on-close left them behind.
+    // Files in use by a running process cannot be deleted, so only abandoned
+    // ones go. There can be many, so do it once per process in the background.
+    static bool started = false;
+    if (started) return;
+    started = true;
+    char *dir = strdup(cache_dir);
+    pthread_t thread;
+    if (dir && pthread_create(&thread, NULL, delete_stale_cache_files, dir) == 0) pthread_detach(thread);
+    else free(dir);
+}
+#endif
+
 static int
 open_cache_file_without_tmpfile(const char *cache_path) {
+#ifdef _WIN32
+    // An open file cannot be unlinked on Windows, so have the OS delete it when
+    // it is closed instead, which also happens if the process crashes
+    return kitty_win32_open_delete_on_close_file(cache_path, cache_file_prefix);
+#else
     int fd = -1;
     static const char template[] = "%s/disk-cache-XXXXXXXXXXXX";
     const size_t sz = strlen(cache_path) + sizeof(template) + 4;
@@ -166,6 +197,7 @@ open_cache_file_without_tmpfile(const char *cache_path) {
     }
     if (fd > -1) unlink(buf);
     return fd;
+#endif
 }
 
 static int
@@ -619,6 +651,9 @@ ensure_state(DiskCache *self) {
             return false;
         }
         self->needs_encryption = !opened_securely;
+#ifdef _WIN32
+        start_deleting_stale_cache_files(self->cache_dir);
+#endif
     }
     vt_init(&self->map);
     vt_init(&self->holes.pos_map);

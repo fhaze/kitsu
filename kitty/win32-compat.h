@@ -187,6 +187,12 @@ bool kitty_win32_set_current_thread_name(const char *name);
 int kitty_win32_open_readonly_shared(const char *path);
 // Read/write temp file that is deleted when its last handle is closed
 int kitty_win32_open_anonymous_tmpfile(void);
+// Read/write file named prefix + random suffix in dir, that is deleted when its
+// last handle is closed (or the process dies) and cannot be opened by others
+int kitty_win32_open_delete_on_close_file(const char *dir, const char *prefix);
+// Deletes the files in dir whose names start with prefix, except those open in
+// some process without FILE_SHARE_DELETE, returns the number deleted or -1
+int kitty_win32_delete_unused_files(const char *dir, const char *prefix);
 // UTF-8 path of an open file or directory fd
 int kitty_win32_path_from_fd(int fd, char *buf, size_t bufsz);
 // Whether the file's owner SID is the current process token's user or default owner
