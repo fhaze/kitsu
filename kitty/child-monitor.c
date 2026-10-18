@@ -1160,7 +1160,14 @@ render(monotonic_t now, bool input_read) {
     EVDBG("input_read: %d, check_for_active_animated_images: %d\n", input_read, global_state.check_for_active_animated_images);
     static monotonic_t last_render_at = MONOTONIC_T_MIN;
     monotonic_t time_since_last_render = last_render_at == MONOTONIC_T_MIN ? OPT(repaint_delay) : now - last_render_at;
-    if (!input_read && time_since_last_render < OPT(repaint_delay) && !global_state.thumbnail_callback.os_window) {
+#ifdef _WIN32
+    // Render frames are already spaced by repaint_delay in whole refreshes, throttling
+    // them again here would push frames off the vertical blank
+    const bool throttle = !USE_RENDER_FRAMES;
+#else
+    const bool throttle = true;
+#endif
+    if (throttle && !input_read && time_since_last_render < OPT(repaint_delay) && !global_state.thumbnail_callback.os_window) {
         set_maximum_wait(OPT(repaint_delay) - time_since_last_render);
         return;
     }

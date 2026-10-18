@@ -1871,6 +1871,7 @@ typedef bool (* GLFWhandleurlopen)(const char*);
 typedef void (* GLFWapplicationwillfinishlaunchingfun)(bool);
 typedef bool (* GLFWcocoatogglefullscreenfun)(GLFWwindow*);
 typedef void (* GLFWcocoarenderframefun)(GLFWwindow*);
+typedef void (* GLFWwin32renderframefun)(GLFWwindow*);
 typedef void (*GLFWwaylandframecallbackfunc)(unsigned long long id);
 typedef void (*GLFWDBusnotificationcreatedfun)(unsigned long long, uint32_t, void*);
 typedef void (*GLFWDBusnotificationactivatedfun)(uint32_t, int, const char*);
@@ -2625,5 +2626,9 @@ GFW_EXTERN glfwWaylandInjectMouseButton_func glfwWaylandInjectMouseButton_impl;
 typedef void (*glfwWaylandInjectKey_func)(int, int, int);
 GFW_EXTERN glfwWaylandInjectKey_func glfwWaylandInjectKey_impl;
 #define glfwWaylandInjectKey glfwWaylandInjectKey_impl
+
+typedef void (*glfwWin32RequestRenderFrame_func)(GLFWwindow*, monotonic_t, GLFWwin32renderframefun);
+GFW_EXTERN glfwWin32RequestRenderFrame_func glfwWin32RequestRenderFrame_impl;
+#define glfwWin32RequestRenderFrame glfwWin32RequestRenderFrame_impl
 
 const char* load_glfw(const char* path);

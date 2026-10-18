@@ -130,6 +130,8 @@
 // Private window messages used by the kitty main loop implementation
 #define _GLFW_WM_WAKEUP (WM_APP + 1)
 #define _GLFW_WM_TIMER_CHANGED (WM_APP + 2)
+// Posted to the helper window by a vertical blank thread, wParam is the source index
+#define _GLFW_WM_VBLANK (WM_APP + 5)
 
 // Replacement for versionhelpers.h macros, as we cannot rely on the
 // application having a correct embedded manifest
@@ -199,6 +201,19 @@ typedef VkBool32(APIENTRY *PFN_vkGetPhysicalDeviceWin32PresentationSupportKHR)(V
 
 #include "null_joystick.h"
 #include "wgl_context.h"
+
+typedef void (*GLFWwin32renderframefun)(GLFWwindow *);
+
+// A request to render on a later vertical blank of the window's monitor, see win32_vsync.c
+typedef struct _GLFWframeRequestWin32 {
+    GLFWwin32renderframefun callback;
+    // The vertical blank sequence number of the source to fire on
+    uint64_t fire_at;
+    // When the watchdog fires the request if the vertical blank never arrived
+    monotonic_t deadline;
+    size_t source;
+    bool pending;
+} _GLFWframeRequestWin32;
 
 #if !defined(_GLFW_WNDCLASSNAME)
 #define _GLFW_WNDCLASSNAME L"Kitsu"
@@ -275,6 +290,7 @@ typedef struct _GLFWwindowWin32 {
     } drop;
 
     GLFWLayerShellConfig layer_shell_config;
+    _GLFWframeRequestWin32 frame_request;
 } _GLFWwindowWin32;
 
 typedef struct _GLFWtimerWin32 {
@@ -314,6 +330,8 @@ typedef struct _GLFWlibraryWin32 {
         unsigned long long next_id;
     } timers;
     bool keep_going, wakeup_pending;
+    // Whether timeBeginPeriod(1) succeeded and must be undone at exit
+    bool timer_period_raised;
 
     struct {
         HINSTANCE instance;
@@ -399,3 +417,7 @@ void _glfwGetMonitorContentScaleWin32(HMONITOR handle, float *xscale, float *ysc
 void _glfwDispatchTimersWin32(void);
 DWORD _glfwTimerWaitTimeoutWin32(void);
 void _glfwFreeTimersWin32(void);
+
+void _glfwDispatchVSyncWin32(WPARAM which);
+void _glfwVSyncDisplayChangedWin32(void);
+void _glfwTerminateVSyncWin32(void);

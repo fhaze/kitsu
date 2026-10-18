@@ -3268,6 +3268,27 @@ py_clear_global_shortcuts(PyObject *self UNUSED, PyObject *args UNUSED) {
 }
 #else
 
+#ifdef _WIN32
+static void
+win32_frame_request_callback(GLFWwindow *window) {
+    for (size_t i = 0; i < global_state.num_os_windows; i++) {
+        if (global_state.os_windows[i].handle == window) {
+            global_state.os_windows[i].render_state = RENDER_FRAME_READY;
+            global_state.os_windows[i].last_render_frame_received_at = monotonic();
+            request_tick_callback();
+            break;
+        }
+    }
+}
+
+void
+request_frame_render(OSWindow *w) {
+    // The vertical blank thread spaces frames at least repaint_delay apart, rounded
+    // down to whole refreshes, which is why render() does not throttle them itself
+    glfwWin32RequestRenderFrame(w->handle, OPT(repaint_delay), win32_frame_request_callback);
+    w->render_state = RENDER_FRAME_REQUESTED;
+}
+#else
 static void
 wayland_frame_request_callback(id_type os_window_id) {
     for (size_t i = 0; i < global_state.num_os_windows; i++) {
@@ -3289,6 +3310,7 @@ request_frame_render(OSWindow *w) {
         glfwRequestWaylandFrameEvent(w->handle, w->id, wayland_frame_request_callback);
     }
 }
+#endif
 
 void
 dbus_notification_created_callback(unsigned long long notification_id, uint32_t new_notification_id, void *data UNUSED) {

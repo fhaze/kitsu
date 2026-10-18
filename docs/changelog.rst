@@ -202,6 +202,12 @@ Detailed list of changes
 0.49.2 [2026-10-01]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+- Windows: Time rendering to the monitor's vertical blank when
+  :opt:`sync_to_monitor` is enabled, instead of a timer and a DWM flush before
+  every swap, so scrolling and animations render at the monitor's refresh rate
+  without judder. Also raise the system timer resolution so that short delays,
+  such as :opt:`input_delay`, are no longer rounded up to 15.6 ms
+
 - Windows: Update the Kitsu application and installer icons
 
 - Windows: Fix image caching failing with large filesystem identifiers and
