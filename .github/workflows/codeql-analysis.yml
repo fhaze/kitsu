@@ -2,7 +2,8 @@ name: "CodeQL"
 
 on:
     push:
-        branches: [master]
+        # TEMPORARY: the branch push gives a full, not diff-limited, analysis
+        branches: [master, claude/codeql-windows-c]
     pull_request:
         # The branches below must be a subset of the branches above
         branches: [master]
@@ -165,3 +166,13 @@ jobs:
 
         - name: Perform CodeQL Analysis
           uses: github/codeql-action/analyze@v4.38.1
+          with:
+              output: ${{ runner.temp }}/codeql-results
+
+        # TEMPORARY: the uploaded SARIF keeps the extracted-files diagnostics
+        # that code scanning drops
+        - name: Upload raw SARIF
+          uses: actions/upload-artifact@v7.0.1
+          with:
+              name: codeql-sarif-${{ matrix.build-mode }}-${{ github.event_name }}
+              path: ${{ runner.temp }}/codeql-results
