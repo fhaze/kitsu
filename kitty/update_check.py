@@ -6,8 +6,8 @@ import math
 import os
 import subprocess
 import time
-from contextlib import suppress
 from collections.abc import Callable
+from contextlib import suppress
 from typing import NamedTuple
 
 from .config import atomic_save
@@ -21,6 +21,7 @@ CHANGELOG_URL = website_url('changelog')
 RELEASED_VERSION_URL = website_url() + 'current-version.txt'
 CHECK_INTERVAL = 24 * 60 * 60.0
 NOTIFY_COOLDOWN = 3 * 24 * 60 * 60.0
+notification_pending = False
 
 
 class Notification(NamedTuple):
@@ -42,8 +43,8 @@ def version_notification_log() -> str:
 
 def notify_new_version(
     release_version: str, on_created: Callable[[], None], on_creation_failed: Callable[[], None] | None = None,
-) -> None:
-    get_boss().notification_manager.send_new_version_notification(release_version, on_created, on_creation_failed)
+) -> bool:
+    return get_boss().notification_manager.send_new_version_notification(release_version, on_created, on_creation_failed) is not None
 
 
 def update_check_cache_path() -> str:
@@ -64,14 +65,18 @@ def read_update_check_state() -> UpdateCheckState:
             data = json.load(f)
         if not isinstance(data, dict):
             return UpdateCheckState()
-        fields = {}
-        for key in ('last_check', 'last_notified'):
+        def timestamp(key: str) -> float:
             value = data.get(key, 0)
-            fields[key] = value if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0 else 0
-        for key in ('latest_tag', 'last_notified_tag'):
+            try:
+                return float(value) if type(value) in (int, float) and math.isfinite(value) and value >= 0 else 0
+            except OverflowError:
+                return 0
+
+        def tag(key: str) -> str:
             value = data.get(key, '')
-            fields[key] = value if isinstance(value, str) and parse_release_tag(value) else ''
-        return UpdateCheckState(**fields)
+            return value if isinstance(value, str) and parse_release_tag(value) else ''
+
+        return UpdateCheckState(timestamp('last_check'), tag('latest_tag'), timestamp('last_notified'), tag('last_notified_tag'))
     except (OSError, ValueError, TypeError):
         return UpdateCheckState()
 
@@ -84,11 +89,12 @@ def save_update_check_state(state: UpdateCheckState) -> None:
 
 
 def notify_cached_release(state: UpdateCheckState) -> None:
+    global notification_pending
     info = parse_release_tag(state.latest_tag)
     previous = parse_release_tag(state.last_notified_tag)
     now = time.time()
     if (
-        info is None or not is_newer(info, installed_release_info()) or (previous is not None and not is_newer(info, previous))
+        notification_pending or info is None or not is_newer(info, installed_release_info()) or (previous is not None and not is_newer(info, previous))
         or (state.last_notified and now - state.last_notified < NOTIFY_COOLDOWN)
     ):
         return
@@ -97,17 +103,27 @@ def notify_cached_release(state: UpdateCheckState) -> None:
     notified_at = 0.0
 
     def created() -> None:
+        global notification_pending
         nonlocal previous_state, notified_at
+        notification_pending = False
         current = read_update_check_state()
         previous_state, notified_at = current, time.time()
         save_update_check_state(current._replace(last_notified=notified_at, last_notified_tag=info.tag))
 
     def failed() -> None:
+        global notification_pending
+        notification_pending = False
         current = read_update_check_state()
         if previous_state is not None and current.last_notified == notified_at and current.last_notified_tag == info.tag:
             save_update_check_state(current._replace(last_notified=previous_state.last_notified, last_notified_tag=previous_state.last_notified_tag))
 
-    notify_new_version(info.tag.lstrip('v'), created, failed)
+    notification_pending = True
+    try:
+        if not notify_new_version(info.tag.lstrip('v'), created, failed):
+            notification_pending = False
+    except Exception:
+        notification_pending = False
+        raise
 
 
 def get_released_version() -> str:

@@ -5,8 +5,8 @@
 import os
 import re
 import tempfile
-from unittest.mock import patch
 from base64 import standard_b64encode
+from unittest.mock import patch
 
 from kitty.notifications import Channel, DesktopIntegration, IconDataCache, NotificationManager, UIState, Urgency
 
@@ -374,8 +374,9 @@ class TestNotifications(BaseTest):
             nm = NotificationManager(di, ch, lambda *a: None, base_cache_dir=tdir)
             di.notification_manager = nm
             with patch.object(fdt, 'win32_send_notification', create=True) as send, patch.object(fdt, 'win32_close_notification', create=True) as close:
-                h = lambda raw: nm.handle_notification_cmd(42, 99, raw)
-                h('i=test:c=1:d=0;Hello <&>')
+                def h(raw):
+                    nm.handle_notification_cmd(42, 99, raw)
+                h('i=test:c=1:a=report:d=0;Hello <&>')
                 h('i=test:p=buttons;Yes\u2028No')
                 ident = send.call_args.args[0]
                 self.assertFalse(di.live_notifications)

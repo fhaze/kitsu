@@ -12,7 +12,17 @@ from itertools import count
 from typing import Any, NamedTuple, Set
 from weakref import ReferenceType, ref
 
-from .constants import cache_dir, config_dir, display_name, is_macos, is_windows, logo_png_file, standard_icon_names, standard_sound_names, supports_window_occlusion
+from .constants import (
+    cache_dir,
+    config_dir,
+    display_name,
+    is_macos,
+    is_windows,
+    logo_png_file,
+    standard_icon_names,
+    standard_sound_names,
+    supports_window_occlusion,
+)
 from .fast_data_types import (
     ESC_OSC,
     StreamingBase64Decoder,
@@ -861,6 +871,8 @@ class WindowsIntegration(DesktopIntegration):
             return
         if event == 'created':
             self.live_notifications.add(desktop_id)
+            if len(self.live_notifications) > 128:
+                self.live_notifications.remove(min(self.live_notifications))
             self.notification_manager.notification_created(desktop_id)
         elif event in ('activated', 'button'):
             self.notification_manager.notification_activated(desktop_id, int(button_id) if event == 'button' else 0)
@@ -1042,7 +1054,7 @@ class NotificationManager:
 
     def send_new_version_notification(
         self, version: str, on_created: Callable[[], None] | None = None, on_creation_failed: Callable[[], None] | None = None,
-    ) -> None:
+    ) -> int | None:
         cmd = self.create_notification_cmd()
         cmd.title = f'{display_name} update available'
         cmd.body = f"Version {version} is ready. Click to see what's new."
@@ -1054,7 +1066,7 @@ class NotificationManager:
 
             cmd.launch_url = FORK_RELEASES_URL
             cmd.on_activation = None  # Windows opens protocol links, even after Kitsu exits.
-        self.notify_with_command(cmd, 0)
+        return self.notify_with_command(cmd, 0)
 
     def is_notification_allowed(self, cmd: NotificationCommand, channel_id: int, apply_filter_rules: bool = True) -> bool:
         if cmd.only_when is not OnlyWhen.always and cmd.only_when is not OnlyWhen.unset:

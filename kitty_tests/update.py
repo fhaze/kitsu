@@ -63,10 +63,11 @@ class TestUpdateCheck(BaseTest):
         self.notifications = []
         self.boss = SimpleNamespace(
             update_check_process=None, set_update_check_process=Mock(),
-            notification_manager=SimpleNamespace(send_new_version_notification=lambda *args: self.notifications.append(args)),
+            notification_manager=SimpleNamespace(send_new_version_notification=lambda *args: self.notifications.append(args) or len(self.notifications)),
         )
         for target, value in (
             ('is_windows', True), ('get_boss', lambda: self.boss), ('installed_release_info', lambda: parse_release_tag('v0.49.2-windows.1')),
+            ('notification_pending', False),
         ):
             p = patch.object(update_check, target, value)
             p.start()
@@ -87,6 +88,7 @@ class TestUpdateCheck(BaseTest):
         with patch.object(update_check.subprocess, 'Popen') as spawn:
             self.assertTrue(update_check.update_check())
             spawn.assert_not_called()
+        self.ae(len(self.notifications), 1)
         self.notifications[-1][1]()
         self.ae(update_check.read_update_check_state().last_notified_tag, 'v0.49.2-windows.9')
         self.notifications.clear()

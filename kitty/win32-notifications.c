@@ -15,11 +15,12 @@
 #include <initguid.h>
 #include <roapi.h>
 #include <winstring.h>
+#include <shlobj.h>
+#include <shellapi.h>
+#include <shlwapi.h>
 #include <windows.ui.notifications.h>
 #include <windows.data.xml.dom.h>
 #include <notificationactivationcallback.h>
-#include <shlobj.h>
-#include <shlwapi.h>
 #include <stdbool.h>
 #include "cleanup.h"
 
@@ -134,7 +135,7 @@ static ULONG STDMETHODCALLTYPE prefix##_release(interface_type *self) { return h
 static HRESULT STDMETHODCALLTYPE prefix##_invoke(interface_type *self, IToastNotification *sender, arg_type *args) { \
     (void)sender; return invoke_func((Handler*)self, args); \
 } \
-static const interface_type##Vtbl prefix##_vtable = {prefix##_query, prefix##_addref, prefix##_release, prefix##_invoke};
+static interface_type##Vtbl prefix##_vtable = {prefix##_query, prefix##_addref, prefix##_release, prefix##_invoke};
 HANDLER_FUNCS(activated, ActivatedHandler, IInspectable, on_activated)
 HANDLER_FUNCS(dismissed, DismissedHandler, IToastDismissedEventArgs, on_dismissed)
 HANDLER_FUNCS(failed, FailedHandler, IToastFailedEventArgs, on_failed)
@@ -180,6 +181,11 @@ drain_win32_notification_events(void) {
         Event *next = e->next;
         LiveToast *t = NULL;
         bool deliver = true;
+        if (e->kind == CREATED) {
+            LiveToast *live = live_toasts;
+            while (live && wcscmp(live->ident, e->ident)) live = live->next;
+            deliver = live != NULL;
+        }
         if (e->kind == ACTIVATED || e->kind == BUTTON || e->kind == CLOSED || e->kind == CREATION_FAILED) {
             t = take_toast(e->ident);
             // Activated can be raised by both the COM activator and WinRT.
@@ -207,7 +213,7 @@ activation_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         if (!args || args[data->cbData / sizeof(wchar_t) - 1]) return FALSE;
         unsigned long pid = 0, button = 0;
         wchar_t ident[17] = {0}, button_id[16];
-        if (swscanf(args, L"%lu:%16[0123456789]:%lu", &pid, ident, &button) != 3 || pid != GetCurrentProcessId() || button > 5) return FALSE;
+        if (swscanf(args, L"%lu:%16l[0123456789]:%lu", &pid, ident, &button) != 3 || pid != GetCurrentProcessId() || button > 5) return FALSE;
         swprintf(button_id, 16, L"%lu", button);
         queue_event(button ? BUTTON : ACTIVATED, ident, button_id);
         return TRUE;
@@ -237,6 +243,7 @@ activator_activate(INotificationActivationCallback *self, LPCWSTR app, LPCWSTR a
         DWORD actual_pid = 0;
         GetWindowThreadProcessId(hwnd, &actual_pid);
         if (actual_pid == pid) {
+            AllowSetForegroundWindow(pid);
             COPYDATASTRUCT payload = {.dwData = 1, .cbData = (DWORD)((wcslen(args) + 1) * sizeof(wchar_t)), .lpData = (void*)args};
             DWORD_PTR result;
             SendMessageTimeoutW(hwnd, WM_COPYDATA, 0, (LPARAM)&payload, SMTO_ABORTIFHUNG | SMTO_BLOCK, 2000, &result);
@@ -244,7 +251,7 @@ activator_activate(INotificationActivationCallback *self, LPCWSTR app, LPCWSTR a
     }
     return S_OK;
 }
-static const INotificationActivationCallbackVtbl activator_vtable = {activator_query, activator_ref, activator_ref, activator_activate};
+static INotificationActivationCallbackVtbl activator_vtable = {activator_query, activator_ref, activator_ref, activator_activate};
 static INotificationActivationCallback activator = {&activator_vtable};
 static HRESULT STDMETHODCALLTYPE
 factory_query(IClassFactory *self, REFIID iid, void **out) {
@@ -261,7 +268,7 @@ factory_create(IClassFactory *self, IUnknown *outer, REFIID iid, void **out) {
     return activator_query(&activator, iid, out);
 }
 static HRESULT STDMETHODCALLTYPE factory_lock(IClassFactory *self, BOOL lock) { (void)self; (void)lock; return S_OK; }
-static const IClassFactoryVtbl factory_vtable = {factory_query, factory_ref, factory_ref, factory_create, factory_lock};
+static IClassFactoryVtbl factory_vtable = {factory_query, factory_ref, factory_ref, factory_create, factory_lock};
 static IClassFactory class_factory = {&factory_vtable};
 
 static HRESULT
@@ -274,9 +281,12 @@ register_app(void) {
     if (err != ERROR_SUCCESS) return HRESULT_FROM_WIN32(err);
     err = RegSetValueExW(key, L"DisplayName", 0, REG_SZ, (const BYTE*)L"Kitsu", sizeof(L"Kitsu"));
     if (!err) err = RegSetValueExW(key, L"CustomActivator", 0, REG_SZ, (const BYTE*)ACTIVATOR, sizeof(ACTIVATOR));
-    wchar_t icon[32768];
-    DWORD length = GetModuleFileNameW(NULL, icon, 32768);
-    if (!err && length && length < 32768) err = RegSetValueExW(key, L"IconUri", 0, REG_SZ, (const BYTE*)icon, (length + 1) * sizeof(wchar_t));
+    PyObject *constants = PyImport_ImportModule("kitty.constants");
+    PyObject *icon_obj = constants ? PyObject_GetAttrString(constants, "logo_png_file") : NULL;
+    wchar_t *icon = icon_obj ? PyUnicode_AsWideCharString(icon_obj, NULL) : NULL;
+    if (!icon) err = ERROR_FILE_NOT_FOUND;
+    else if (!err) err = RegSetValueExW(key, L"IconUri", 0, REG_SZ, (const BYTE*)icon, (DWORD)((wcslen(icon) + 1) * sizeof(wchar_t)));
+    PyMem_Free(icon); Py_XDECREF(icon_obj); Py_XDECREF(constants);
     RegCloseKey(key);
     if (err) return HRESULT_FROM_WIN32(err);
     WNDCLASSW wc = {.lpfnWndProc = activation_wndproc, .hInstance = GetModuleHandleW(NULL), .lpszClassName = WINDOW_CLASS};
@@ -285,7 +295,9 @@ register_app(void) {
     swprintf(name, 64, L"KitsuNotifications-%lu", GetCurrentProcessId());
     activation_window = CreateWindowExW(0, WINDOW_CLASS, name, 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, wc.hInstance, NULL);
     if (!activation_window) return HRESULT_FROM_WIN32(GetLastError());
-    return CoRegisterClassObject(&CLSID_KitsuToastActivator, (IUnknown*)&class_factory, CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE, &class_cookie);
+    HRESULT hr = CoRegisterClassObject(&CLSID_KitsuToastActivator, (IUnknown*)&class_factory, CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE, &class_cookie);
+    if (FAILED(hr)) { DestroyWindow(activation_window); activation_window = NULL; }
+    return hr;
 }
 
 static HRESULT
@@ -546,7 +558,7 @@ cleanup_notifications(void) {
 }
 
 static PyMethodDef module_methods[] = {
-    {"win32_send_notification", (PyCFunction)win32_send_notification, METH_VARARGS | METH_KEYWORDS, "Send a native Windows toast."},
+    {"win32_send_notification", _PyCFunction_CAST(win32_send_notification), METH_VARARGS | METH_KEYWORDS, "Send a native Windows toast."},
     {"win32_close_notification", win32_close_notification, METH_O, "Close a live Windows toast."},
     {"win32_set_notification_activated_callback", win32_set_notification_activated_callback, METH_O, "Set the main-thread notification callback."},
     {NULL, NULL, 0, NULL}
