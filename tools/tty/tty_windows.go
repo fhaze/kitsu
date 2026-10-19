@@ -42,9 +42,11 @@ type Term struct {
 	pending       []byte
 	pending_hi    rune // high surrogate waiting for its low half
 	mouse_buttons uint32
-	resize_ch     chan<- os.Signal
-	resize_sig    os.Signal
-	lock          sync.Mutex
+	// Buttons ConPTY reports as held that were never pressed, see append_mouse_event()
+	phantom_buttons uint32
+	resize_ch       chan<- os.Signal
+	resize_sig      os.Signal
+	lock            sync.Mutex
 }
 
 var (
@@ -56,6 +58,11 @@ const (
 	key_event                = 0x0001
 	mouse_event              = 0x0002
 	window_buffer_size_event = 0x0004
+)
+
+const (
+	sgr_motion_indicator = 1 << 5
+	sgr_leave_indicator  = 1 << 8
 )
 
 type input_record struct {
@@ -332,6 +339,27 @@ func (self *Term) append_mouse_event(m *mouse_event_record) {
 		self.pending = fmt.Appendf(self.pending, "\x1b[<%d;%d;%d%c", button|mods, int(m.x)+1, int(m.y)+1, end)
 	}
 	buttons := m.button_state & 0x1f
+	// The buttons ConPTY believes are held
+	held := self.mouse_buttons | self.phantom_buttons
+	switch m.event_flags {
+	case windows.MOUSE_MOVED:
+		if pressed := buttons &^ held; pressed != 0 {
+			// Real presses never arrive as moves. This is the leave report kitty sends
+			// in SGR pixel mode: ConPTY does not know its leave bit and decodes it as a
+			// left button drag, then reports that button as held until it is released.
+			self.phantom_buttons |= pressed
+			append_event(sgr_leave_indicator|sgr_motion_indicator, false)
+			return
+		}
+	case windows.MOUSE_WHEELED, windows.MOUSE_HWHEELED:
+	default:
+		if buttons == held {
+			// Pressing a button ConPTY already believed held
+			self.phantom_buttons = 0
+		}
+	}
+	self.phantom_buttons &= buttons
+	buttons &^= self.phantom_buttons
 	changed := buttons ^ self.mouse_buttons
 	self.mouse_buttons = buttons
 	button_codes := [...]int{0, 2, 1, 128, 129}

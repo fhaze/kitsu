@@ -3,6 +3,7 @@
 package wcswidth
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -138,5 +139,13 @@ func TestCellIterator(t *testing.T) {
 	ci.Forward()
 	if ci.Current() != "2" {
 		t.Fatalf("switching to forward failed, %#v != %#v", "2", ci.Current())
+	}
+}
+
+func TestKeepOnlyCSI(t *testing.T) {
+	var b strings.Builder
+	KeepOnlyCSI("text \x1b[31mred\x1b]8;;url\x1b\\ \x1b[1;2mbold\x1b[m", &b)
+	if diff := cmp.Diff("\x1b[31m\x1b[1;2m\x1b[m", b.String()); diff != "" {
+		t.Fatalf("styles of truncated text were not kept:\n%s", diff)
 	}
 }

@@ -105,6 +105,7 @@ type Scanner interface {
 	Start()
 	Cancel()
 	AddListener(chan bool)
+	RemoveListener(chan bool)
 	Len() int
 	Batch(offset *CollectionIndex) []ResultItem
 	Finished() bool
@@ -136,6 +137,12 @@ func (fss *FileSystemScanner) AddListener(x chan bool) {
 	} else {
 		fss.listeners = append(fss.listeners, x)
 	}
+}
+
+func (fss *FileSystemScanner) RemoveListener(x chan bool) {
+	fss.lock()
+	defer fss.unlock()
+	fss.listeners = slices.DeleteFunc(fss.listeners, func(l chan bool) bool { return l == x })
 }
 
 func (fss *FileSystemScanner) Len() int {
@@ -316,13 +323,14 @@ func (fss *FileSystemScanner) worker() {
 					has_dot_git = true
 				}
 			}
-			if !fss.show_hidden && name[0] == '.' {
+			if !fss.show_hidden && (name[0] == '.' || has_hidden_attribute(e)) {
 				continue
 			}
 			arena[i].name = name
-			if ftype&fs.ModeSymlink != 0 {
+			if ftype&(fs.ModeSymlink|fs.ModeIrregular) != 0 {
 				if st, serr := os.Stat(dir + arena[i].name); serr == nil && st.IsDir() {
-					ftype |= SymlinkToDir
+					// Windows junctions are reported as irregular files, treat them like symlinks
+					ftype = (ftype &^ fs.ModeIrregular) | fs.ModeSymlink | SymlinkToDir
 				}
 			}
 			arena[i].ftype = ftype
@@ -417,6 +425,8 @@ type FileSystemScorer struct {
 	sorted_results                  *SortedResults
 	on_results                      func(error, bool)
 	current_worker_wait             *sync.WaitGroup
+	current_worker_stop             chan struct{}
+	current_listener                chan bool
 	scorer                          *fzf.FuzzyMatcher
 	dir_reader                      func(path string) ([]fs.DirEntry, error)
 	file_reader                     func(path string) ([]byte, error)
@@ -436,7 +446,9 @@ func (fss *FileSystemScorer) lock()   { fss.mutex.Lock() }
 func (fss *FileSystemScorer) unlock() { fss.mutex.Unlock() }
 
 func (fss *FileSystemScorer) Start() {
-	on_results := make(chan bool)
+	// Buffered so that a notification sent while the worker is busy is kept, not
+	// dropped, as the next one may be a slow directory away
+	on_results := make(chan bool, 1)
 	fss.is_complete.Store(false)
 	fss.keep_going.Store(true)
 	if fss.scanner == nil {
@@ -462,9 +474,11 @@ func (fss *FileSystemScorer) Start() {
 	} else {
 		fss.scanner.AddListener(on_results)
 	}
+	fss.current_listener = on_results
+	fss.current_worker_stop = make(chan struct{})
 	fss.current_worker_wait = &sync.WaitGroup{}
 	fss.current_worker_wait.Add(1)
-	go fss.worker(on_results, fss.current_worker_wait)
+	go fss.worker(on_results, fss.current_worker_stop, fss.current_worker_wait)
 }
 
 func (fss *FileSystemScorer) Change_query(query string) {
@@ -473,10 +487,13 @@ func (fss *FileSystemScorer) Change_query(query string) {
 	}
 	fss.keep_going.Store(false)
 	if fss.current_worker_wait != nil {
-		if fss.scanner != nil {
-			fss.scanner.Cancel()
-		}
+		// Stop only the worker, the scanner must keep going, as the next worker
+		// scores the same results
+		close(fss.current_worker_stop)
 		fss.current_worker_wait.Wait()
+		if fss.scanner != nil {
+			fss.scanner.RemoveListener(fss.current_listener)
+		}
 	}
 	fss.lock()
 	fss.query = query
@@ -526,7 +543,7 @@ func (fss *FileSystemScorer) Change_sort_by_last_modified(val bool) {
 	}
 }
 
-func (fss *FileSystemScorer) worker(on_results chan bool, worker_wait *sync.WaitGroup) {
+func (fss *FileSystemScorer) worker(on_results chan bool, stop chan struct{}, worker_wait *sync.WaitGroup) {
 	defer func() {
 		fss.is_complete.Store(true)
 		defer worker_wait.Done()
@@ -594,13 +611,27 @@ func (fss *FileSystemScorer) worker(on_results chan bool, worker_wait *sync.Wait
 	}
 
 	offset := &CollectionIndex{}
-	for range on_results {
-		if !fss.keep_going.Load() {
-			break
-		}
+	handle_new_results := func() {
 		results := fss.scanner.Batch(offset)
 		if len(results) > 0 || fss.scanner.Error() != nil {
 			fss.on_results(handle_batch(results), false)
+		}
+	}
+	// What was scanned before this worker started, such as before a query change
+	handle_new_results()
+wait_for_scanner:
+	for {
+		select {
+		case _, more := <-on_results:
+			if !more {
+				break wait_for_scanner
+			}
+			if !fss.keep_going.Load() {
+				return
+			}
+			handle_new_results()
+		case <-stop:
+			return
 		}
 	}
 	for fss.keep_going.Load() {
@@ -642,9 +673,10 @@ type ResultManager struct {
 	WakeupMainThread func() bool
 	settings         Settings
 
-	scorer         *FileSystemScorer
-	mutex          sync.Mutex
-	last_wakeup_at time.Time
+	scorer                  *FileSystemScorer
+	mutex                   sync.Mutex
+	last_wakeup_at          time.Time
+	trailing_wakeup_pending bool
 
 	last_click_anchor *CollectionIndex
 }
@@ -675,11 +707,22 @@ func (m *ResultManager) on_results(err error, is_finished bool) {
 		m.WakeupMainThread()
 		return
 	}
+	const throttle = 50 * time.Millisecond
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	if is_finished || time.Since(m.last_wakeup_at) > time.Millisecond*50 {
+	if is_finished || time.Since(m.last_wakeup_at) > throttle {
 		m.WakeupMainThread()
 		m.last_wakeup_at = time.Now()
+	} else if !m.trailing_wakeup_pending {
+		// so that these results are shown even if the scan then stalls on a slow directory
+		m.trailing_wakeup_pending = true
+		time.AfterFunc(throttle-time.Since(m.last_wakeup_at), func() {
+			m.mutex.Lock()
+			m.trailing_wakeup_pending = false
+			m.last_wakeup_at = time.Now()
+			m.mutex.Unlock()
+			m.WakeupMainThread()
+		})
 	}
 }
 

@@ -22,7 +22,7 @@ var _ = fmt.Print
 func (h *Handler) draw_results_title() {
 	text := filepath.Clean(h.state.CurrentDir())
 	home := filepath.Clean(utils.Expanduser("~"))
-	if strings.HasPrefix(text, home) {
+	if text == home || strings.HasPrefix(text, home+string(os.PathSeparator)) {
 		text = "~" + text[len(home):]
 	}
 	text = sanitize(text)
@@ -344,7 +344,7 @@ func (h *Handler) draw_results(y, bottom_margin int, matches *SortedResults, in_
 	h.state.last_render.num_matches = num
 	h.state.last_render.num_shown = num_shown
 	h.draw_num_of_matches(h.state.last_render.num_of_slots*num_cols, y+height-2, in_progress)
-	if h.state.last_render.preview_width > 0 {
+	if h.state.last_render.preview_width > 0 && h.state.last_render.num_of_slots > 0 { // windows only a few lines high have no room
 		h.draw_preview(y)
 	}
 	return

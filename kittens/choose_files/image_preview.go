@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -59,7 +60,53 @@ type metadata struct {
 	custom any
 }
 
+var image_preview_id_counter atomic.Uint64
+
+// Rendering previews decodes and resizes images, which uses a lot of CPU and
+// memory, so only a few run at a time. Newest first, so that the preview being
+// looked at is not stuck behind those of files that were scrolled past.
+var render_queue struct {
+	sync.Mutex
+	pending []func()
+	workers int
+}
+
+var max_render_workers = max(2, min(8, runtime.NumCPU()/2))
+
+func schedule_render(job func()) {
+	q := &render_queue
+	q.Lock()
+	q.pending = append(q.pending, job)
+	start_worker := q.workers < max_render_workers
+	if start_worker {
+		q.workers++
+	}
+	q.Unlock()
+	if start_worker {
+		go render_worker()
+	}
+}
+
+func render_worker() {
+	q := &render_queue
+	for {
+		q.Lock()
+		n := len(q.pending)
+		if n == 0 {
+			q.workers--
+			q.Unlock()
+			return
+		}
+		job := q.pending[n-1]
+		q.pending[n-1] = nil
+		q.pending = q.pending[:n-1]
+		q.Unlock()
+		job()
+	}
+}
+
 type ImagePreview struct {
+	id                    uint64 // unlike the address, never reused for another file
 	abspath               string
 	metadata              fs.FileInfo
 	disk_cache            *disk_cache.DiskCache
@@ -82,6 +129,16 @@ func (p *ImagePreview) IsReady() bool                   { return p.ready.Load() 
 
 func (p *ImagePreview) Unload() {
 	p.source_img = nil
+}
+
+func (p *ImagePreview) memory_cost() (ans int) {
+	ans = 4096
+	if img := p.source_img; img != nil {
+		for _, f := range img.Frames {
+			ans += 4 * f.Width * f.Height
+		}
+	}
+	return
 }
 
 func load_image(cached_data map[string]string) (img *images.ImageData, err error) {
@@ -173,18 +230,18 @@ func (p *ImagePreview) Render(h *Handler, x, y, width, height int) {
 	p.file_metadata_preview.Render(h, x, y, width, height)
 }
 
-func (p *ImagePreview) start_rendering() {
+func (p *ImagePreview) start_rendering(ch chan<- render_data) { // ch, as the UI thread clears p.render_channel once it has the result
 	defer func() {
 		if r := recover(); r != nil {
-			p.render_channel <- render_data{err: parallel.Format_stacktrace_on_panic(r, 1)}
+			ch <- render_data{err: parallel.Format_stacktrace_on_panic(r, 1)}
 		}
-		close(p.render_channel)
+		close(ch)
 		p.ready.Store(true)
 		p.WakeupMainThread()
 	}()
 	key, ans, err := p.disk_cache.GetPath(p.abspath)
 	if err != nil {
-		p.render_channel <- render_data{err: err}
+		ch <- render_data{err: err}
 		return
 	}
 	if len(ans) > 0 {
@@ -200,19 +257,21 @@ func (p *ImagePreview) start_rendering() {
 			}
 		}
 		if mi.custom != nil || mi.image != nil {
-			p.render_channel <- render_data{cached_data: ans, metadata: mi}
+			ch <- render_data{cached_data: ans, metadata: mi}
 			return
 		}
 	}
-	rdata, metadata, img, err := p.renderer.Render(p.abspath)
+	rdata, metadata, _, err := p.renderer.Render(p.abspath)
 	if err != nil {
-		p.render_channel <- render_data{err: err}
+		ch <- render_data{err: err}
 	} else {
 		ans, err = p.disk_cache.AddPath(p.abspath, key, rdata)
 		if err == nil {
-			p.render_channel <- render_data{cached_data: ans, metadata: metadata, img: img}
+			// Not the decoded image: it is loaded from the cache only when needed, as
+			// otherwise it stays in memory for as long as this preview does
+			ch <- render_data{cached_data: ans, metadata: metadata}
 		} else {
-			p.render_channel <- render_data{err: err}
+			ch <- render_data{err: err}
 		}
 	}
 }
@@ -271,7 +330,7 @@ func NewImagePreview(
 ) (Preview, error) {
 	dc_size.Store(opts.DiskCacheSize())
 	ans := &ImagePreview{
-		abspath: abspath, metadata: metadata, render_channel: make(chan render_data, 1),
+		id: image_preview_id_counter.Add(1), abspath: abspath, metadata: metadata, render_channel: make(chan render_data, 1),
 		WakeupMainThread: WakeupMainThread, renderer: r,
 	}
 	if dc, err := preview_cache(); err != nil {
@@ -279,6 +338,7 @@ func NewImagePreview(
 	} else {
 		ans.disk_cache = dc
 	}
-	go ans.start_rendering()
+	ch := ans.render_channel
+	schedule_render(func() { ans.start_rendering(ch) })
 	return ans, nil
 }

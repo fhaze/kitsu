@@ -31,6 +31,61 @@ type calibre_server_process struct {
 	stdout          io.ReadCloser
 	stdin           io.WriteCloser
 	file_extensions *utils.Set[string]
+
+	// The server answers one request at a time, in order, so previews rendering at
+	// the same time must take turns
+	request_lock sync.Mutex
+	responses    chan calibre_line
+	// Responses still to come for requests that timed out, to be skipped
+	num_abandoned int
+}
+
+type calibre_line struct {
+	text string
+	err  error
+}
+
+// A single reader, as one per request would lose what it read past its line
+func (c *calibre_server_process) read_responses() {
+	br := bufio.NewReader(c.stdout)
+	for {
+		line, err := br.ReadString('\n')
+		if line = strings.TrimRight(line, "\r\n"); line != "" || err != nil {
+			c.responses <- calibre_line{line, err}
+		}
+		if err != nil {
+			close(c.responses)
+			return
+		}
+	}
+}
+
+func (c *calibre_server_process) request(payload []byte, timeout time.Duration) (string, error) {
+	c.request_lock.Lock()
+	defer c.request_lock.Unlock()
+	if _, err := c.stdin.Write(append(payload, '\n')); err != nil {
+		return "", fmt.Errorf("error writing to calibre metadata server: %w", err)
+	}
+	deadline := time.After(timeout)
+	for {
+		select {
+		case r, more := <-c.responses:
+			if !more {
+				return "", fmt.Errorf("the calibre metadata server exited")
+			}
+			if c.num_abandoned > 0 {
+				c.num_abandoned--
+				continue
+			}
+			if r.text == "" && r.err != nil {
+				return "", fmt.Errorf("error reading from calibre metadata server: %w", r.err)
+			}
+			return r.text, nil
+		case <-deadline:
+			c.num_abandoned++
+			return "", os.ErrDeadlineExceeded
+		}
+	}
 }
 
 type CalibreMetadata struct {
@@ -52,27 +107,6 @@ type CalibreResponse struct {
 	Metadata  CalibreMetadata `json:"metadata"`
 }
 
-func ReadLineWithTimeout(r io.Reader, timeout time.Duration) (string, error) {
-	type result struct {
-		line string
-		err  error
-	}
-	ch := make(chan result, 1)
-
-	go func() {
-		br := bufio.NewReader(r)
-		line, err := br.ReadString('\n')
-		ch <- result{strings.TrimRight(line, "\n"), err}
-	}()
-
-	select {
-	case res := <-ch:
-		return res.line, res.err
-	case <-time.After(timeout):
-		return "", os.ErrDeadlineExceeded
-	}
-}
-
 var calibre_server = sync.OnceValues(func() (ans *calibre_server_process, err error) {
 	defer func() { calibre_server_load_finished.Store(true) }()
 	ans = &calibre_server_process{}
@@ -91,17 +125,15 @@ var calibre_server = sync.OnceValues(func() (ans *calibre_server_process, err er
 		return
 	}
 	calibre_needs_cleanup.Store(true)
+	ans.responses = make(chan calibre_line, 16)
+	go ans.read_responses()
 	payload, _ := json.Marshal(map[string]string{"path": ""})
-	if _, err = ans.stdin.Write(append(payload, '\n')); err != nil {
-		err = fmt.Errorf("error writing to calibre metadata server: %w", err)
-		return
-	}
-	line, err := ReadLineWithTimeout(ans.stdout, 2*time.Second)
+	// calibre-debug can take several seconds to start, more so on Windows, and
+	// this runs in the background, not in the UI
+	line, err := ans.request(payload, 15*time.Second)
 	if err != nil {
 		if errors.Is(err, os.ErrDeadlineExceeded) {
 			err = fmt.Errorf("timed out waiting for response from calibre metadata server, make sure you are using calibre version >= 8.16")
-		} else {
-			err = fmt.Errorf("error reading from calibre metadata server: %w", err)
 		}
 		return
 	}
@@ -173,10 +205,9 @@ func (c calibre_renderer) Render(path string) (m map[string][]byte, mi metadata,
 	if err != nil {
 		return
 	}
-	defer func() {
-		cpath.Close()
-		os.Remove(cpath.Name())
-	}()
+	// calibre writes the cover by name, which fails on Windows while the file is open
+	cpath.Close()
+	defer os.Remove(cpath.Name())
 	calibre, err := calibre_server()
 	if err != nil {
 		return
@@ -185,8 +216,7 @@ func (c calibre_renderer) Render(path string) (m map[string][]byte, mi metadata,
 	if err != nil {
 		return
 	}
-	calibre.stdin.Write(append(payload, '\n'))
-	line, err := ReadLineWithTimeout(calibre.stdout, 30*time.Second)
+	line, err := calibre.request(payload, 30*time.Second)
 	if err != nil {
 		return
 	}
@@ -225,7 +255,7 @@ func (c calibre_renderer) ShowMetadata(h *Handler, s ShowData) (offset int) {
 		w(fmt.Sprintf("Series: Book %g of %s", r.Metadata.Series_index, r.Metadata.Series), false)
 	}
 	if len(r.Metadata.Tags) > 0 {
-		w("Tags: "+strings.Join(r.Metadata.Authors, ", "), false)
+		w("Tags: "+strings.Join(r.Metadata.Tags, ", "), false)
 	}
 	return
 }

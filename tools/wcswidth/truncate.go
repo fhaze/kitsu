@@ -60,6 +60,7 @@ func KeepOnlyCSI(text string, output io.Writer) {
 		}
 		return
 	}
+	_ = w.parser.ParseString(text)
 }
 
 func create_truncate_iterator() *truncate_iterator {

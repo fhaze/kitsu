@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/kovidgoyal/go-parallel"
@@ -32,22 +33,19 @@ func FilePromptCompleter(getcwd func() string) func(string, string) *cli.Complet
 			}
 		}()
 		ans = cli.NewCompletions()
-		path := before_cursor
-		prefix := ""
-		if idx := strings.Index(path, string(os.PathSeparator)); idx > -1 {
-			d := filepath.Dir(path)
-			prefix = d + utils.IfElse(strings.HasSuffix(d, string(os.PathSeparator)), "", string(os.PathSeparator))
+		// The completions replace the typed text, so keep it as typed up to the last separator
+		prefix := filepath.VolumeName(before_cursor)
+		if idx := last_separator_index(before_cursor); idx > -1 {
+			prefix = before_cursor[:idx+1]
 		}
-		dir := ""
-		if path == "" {
+		path, dir := "", ""
+		if before_cursor == "" {
 			path = getcwd()
 			dir = path
 		} else {
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(getcwd(), path)
-			}
+			path = resolve_typed_path(before_cursor, getcwd())
 			dir = filepath.Dir(path)
-			if strings.HasSuffix(before_cursor, string(os.PathSeparator)) {
+			if idx := last_separator_index(before_cursor); idx > -1 && idx == len(before_cursor)-1 {
 				dir = path
 			}
 		}
@@ -67,7 +65,7 @@ func FilePromptCompleter(getcwd func() string) func(string, string) *cli.Complet
 		}
 		for _, e := range entries {
 			word := e.Name()
-			if leading == "" || strings.HasPrefix(word, leading) {
+			if leading == "" || has_name_prefix(word, leading) {
 				collection := utils.IfElse(e.Type().IsDir(), dirs, files)
 				if prefix != "" {
 					word = prefix + word
@@ -82,12 +80,48 @@ func FilePromptCompleter(getcwd func() string) func(string, string) *cli.Complet
 func (h *Handler) current_save_file_path() string {
 	ans := h.rl.AllText()
 	if ans != "" {
-		ans = utils.Expanduser(ans)
-		if !filepath.IsAbs(ans) {
-			ans = filepath.Join(h.state.CurrentDir(), ans)
-		}
+		ans = resolve_typed_path(ans, h.state.CurrentDir())
 	}
 	return ans
+}
+
+// Windows accepts both separators
+func last_separator_index(path string) int {
+	if runtime.GOOS == "windows" {
+		return strings.LastIndexAny(path, `\/`)
+	}
+	return strings.LastIndexByte(path, '/')
+}
+
+// Windows file names are case insensitive
+func has_name_prefix(name, prefix string) bool {
+	if runtime.GOOS == "windows" {
+		return len(name) >= len(prefix) && strings.EqualFold(name[:len(prefix)], prefix)
+	}
+	return strings.HasPrefix(name, prefix)
+}
+
+// The absolute path for a path the user typed, relative to cwd
+func resolve_typed_path(typed, cwd string) string {
+	p := utils.Expanduser(typed)
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	if runtime.GOOS == "windows" {
+		if vol := filepath.VolumeName(p); vol != "" {
+			// C:x is relative to the current directory of drive C:
+			if strings.EqualFold(vol, filepath.VolumeName(cwd)) {
+				return filepath.Join(cwd, p[len(vol):])
+			}
+			if abs, err := filepath.Abs(p); err == nil {
+				return abs
+			}
+		} else if p != "" && os.IsPathSeparator(p[0]) {
+			// \x is relative to the root of the current drive
+			return filepath.VolumeName(cwd) + filepath.Clean(p)
+		}
+	}
+	return filepath.Join(cwd, p)
 }
 
 func (h *Handler) save_file_name_handle_key(ev *loop.KeyEvent) (err error) {
@@ -104,6 +138,12 @@ func (h *Handler) save_file_name_handle_key(ev *loop.KeyEvent) (err error) {
 			ev.Handled = true
 			return nil
 		case "select":
+			if !h.state.mode.AllowsMultipleSelection() {
+				// otherwise accept would add a second name when saving a single file
+				h.lp.Beep()
+				ev.Handled = true
+				return nil
+			}
 			if p := h.current_save_file_path(); p != "" {
 				h.state.selections = append(h.state.selections, p)
 			}
