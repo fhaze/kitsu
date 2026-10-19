@@ -208,6 +208,11 @@ Detailed list of changes
   without judder. Also raise the system timer resolution so that short delays,
   such as :opt:`input_delay`, are no longer rounded up to 15.6 ms
 
+- Windows: Fix programs that track the mouse, such as the mouse-demo kitten,
+  falling seconds behind the mouse when it moves quickly, by delivering at most
+  one mouse move per rendered frame, as on macOS. Also keep rendering while a
+  mouse with a very high polling rate is moving
+
 - Windows: Update the Kitsu application and installer icons
 
 - Windows: Fix image caching failing with large filesystem identifiers and
