@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -243,10 +245,7 @@ func (h *Handler) draw_screen() (err error) {
 	h.state.redraw_needed = false
 	h.lp.StartAtomicUpdate()
 	defer func() {
-		h.state.mouse_state.UpdateHoveredIds()
-		h.state.mouse_state.ApplyHoverStyles(h.lp)
-		h.graphics_handler.ApplyPlacements(h.lp)
-		if h.state.screen == NORMAL { // so that the cursor ends up in the right place
+		if h.state.screen == NORMAL { // drawn last so that the cursor ends up in the search text
 			h.lp.MoveCursorTo(1, 1)
 			if h.state.DisplayTitle() {
 				h.lp.Println(h.state.WindowTitle())
@@ -254,6 +253,14 @@ func (h *Handler) draw_screen() (err error) {
 			} else {
 				h.draw_search_bar(0)
 			}
+			h.lp.SaveCursorPosition()
+		}
+		// Only now are all mouse regions known, including those of the search bar
+		h.state.mouse_state.UpdateHoveredIds()
+		h.state.mouse_state.ApplyHoverStyles(h.lp)
+		h.graphics_handler.ApplyPlacements(h.lp)
+		if h.state.screen == NORMAL {
+			h.lp.RestoreCursorPosition()
 		}
 		h.lp.EndAtomicUpdate()
 	}()
@@ -426,13 +433,28 @@ func (h *Handler) toggle_selection() bool {
 	return h.toggle_selection_at(h.state.CurrentIndex())
 }
 
-func (h *Handler) change_current_dir(dir string) {
+func can_read_dir(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	_, err = f.Readdirnames(1)
+	return err == nil || err == io.EOF
+}
+
+// Returns false if dir cannot be listed, as otherwise the scan error would quit
+func (h *Handler) change_current_dir(dir string) bool {
 	if dir != h.state.CurrentDir() {
+		if !can_read_dir(dir) {
+			return false
+		}
 		h.state.SetCurrentDir(dir)
 		h.search_rl.ResetText()
 		h.result_manager.set_root_dir()
 		h.state.last_render = render_state{}
 	}
+	return true
 }
 
 func (h *Handler) set_query(q string) {
@@ -443,12 +465,38 @@ func (h *Handler) set_query(q string) {
 	}
 }
 
+// The results are about to be recomputed from scratch, so positions in the
+// current ones mean nothing and may be past their end
+func (h *Handler) forget_result_positions() {
+	h.state.SetCurrentIndex(CollectionIndex{})
+	h.state.last_render = render_state{}
+	h.result_manager.last_click_anchor = nil
+}
+
 func (h *Handler) set_filter(filter_name string) {
 	if filter_name != h.state.current_filter {
 		h.state.current_filter = filter_name
 		h.result_manager.set_filter()
-		h.state.last_render = render_state{}
+		h.forget_result_positions()
 	}
+}
+
+func (h *Handler) toggle_show_hidden() {
+	h.state.show_hidden = !h.state.show_hidden
+	h.result_manager.set_show_hidden()
+	h.forget_result_positions()
+}
+
+func (h *Handler) toggle_respect_ignores() {
+	h.state.respect_ignores = !h.state.respect_ignores
+	h.result_manager.set_respect_ignores()
+	h.forget_result_positions()
+}
+
+func (h *Handler) toggle_sort_by_last_modified() {
+	h.state.sort_by_last_modified = !h.state.sort_by_last_modified
+	h.result_manager.set_sort_by_last_modified()
+	h.forget_result_positions()
 }
 
 func (h *Handler) change_to_current_dir_if_possible() error {
@@ -457,8 +505,9 @@ func (h *Handler) change_to_current_dir_if_possible() error {
 			if !st.IsDir() {
 				m = filepath.Dir(m)
 			}
-			h.change_current_dir(m)
-			return h.draw_screen()
+			if h.change_current_dir(m) {
+				return h.draw_screen()
+			}
 		}
 	}
 	h.lp.Beep()
@@ -568,8 +617,8 @@ func (h *Handler) dispatch_action(name, args string) (err error) {
 				h.state.last_render.num_before = 0
 			case "last_on_screen":
 				matches, _ := h.get_results()
-				h.state.SetCurrentIndex(matches.IncrementIndexWithWrapAround(h.state.last_render.first_idx, h.state.last_render.num_shown-1))
-				h.state.last_render.num_before = h.state.last_render.num_shown - 1
+				h.state.SetCurrentIndex(matches.IncrementIndexWithWrapAround(h.state.last_render.first_idx, max(0, h.state.last_render.num_shown-1)))
+				h.state.last_render.num_before = max(0, h.state.last_render.num_shown-1)
 			}
 		}
 		return h.draw_screen()
@@ -615,16 +664,13 @@ func (h *Handler) dispatch_action(name, args string) (err error) {
 			h.state.show_preview = !h.state.show_preview
 			return h.draw_screen()
 		case "dotfiles":
-			h.state.show_hidden = !h.state.show_hidden
-			h.result_manager.set_show_hidden()
+			h.toggle_show_hidden()
 			return h.draw_screen()
 		case "ignorefiles":
-			h.state.respect_ignores = !h.state.respect_ignores
-			h.result_manager.set_respect_ignores()
+			h.toggle_respect_ignores()
 			return h.draw_screen()
 		case "sort_by_dates":
-			h.state.sort_by_last_modified = !h.state.sort_by_last_modified
-			h.result_manager.set_sort_by_last_modified()
+			h.toggle_sort_by_last_modified()
 			return h.draw_screen()
 		default:
 			h.lp.Beep()
@@ -634,32 +680,24 @@ func (h *Handler) dispatch_action(name, args string) (err error) {
 		case ".":
 			return h.change_to_current_dir_if_possible()
 		case "..":
-			curr := h.state.CurrentDir()
-			switch curr {
-			case "/":
-			case ".":
-				if curr, err = os.Getwd(); err == nil && curr != "/" {
-					h.change_current_dir(filepath.Dir(curr))
-					return h.draw_screen()
-				}
-			default:
-				h.change_current_dir(filepath.Dir(curr))
+			// CurrentDir() is always absolute, the root, such as / or C:\, is its own parent
+			if curr := h.state.CurrentDir(); filepath.Dir(curr) != curr && h.change_current_dir(filepath.Dir(curr)) {
 				return h.draw_screen()
 			}
 			h.lp.Beep()
 		default:
+			if runtime.GOOS == "windows" && (args == "/tmp" || args == "/tmp/") {
+				args = os.TempDir() // the default shortcut for ctrl+t
+			}
 			args = utils.Expanduser(args)
 			if st, serr := os.Stat(args); serr != nil || !st.IsDir() {
 				h.lp.Beep()
 				return
 			}
-			if absp, err := filepath.Abs(args); err == nil {
-				h.change_current_dir(absp)
+			if absp, err := filepath.Abs(args); err == nil && h.change_current_dir(absp) {
 				return h.draw_screen()
-			} else {
-				h.lp.Beep()
-				return nil
 			}
+			h.lp.Beep()
 		}
 	}
 	return
@@ -689,6 +727,12 @@ func (h *Handler) OnKeyEvent(ev *loop.KeyEvent) (err error) {
 }
 
 func (h *Handler) OnMouseEvent(event *loop.MouseEvent) (err error) {
+	if event.Event_type == loop.MOUSE_LEAVE {
+		// Reported at the last position in the window, unhover everything instead
+		left := *event
+		left.Cell.X, left.Cell.Y = -1, -1
+		event = &left
+	}
 	h.state.redraw_needed = h.state.mouse_state.UpdateState(event)
 	if err = h.state.mouse_state.DispatchEventToHoveredRegions(event); err != nil {
 		return
@@ -1006,6 +1050,9 @@ func main(_ *cli.Command, opts *Options, args []string) (rc int, err error) {
 		if new_val != use_light_colors {
 			use_light_colors = new_val
 			handler.preview_manager.invalidate_color_scheme_based_cached_items()
+			if p := handler.last_rendered_preview; p != nil && !p.IsValidForColorScheme(use_light_colors) {
+				handler.clear_cached_previews() // otherwise the shown preview keeps the old highlighting
+			}
 			return handler.draw_screen()
 		}
 		return

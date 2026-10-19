@@ -198,6 +198,11 @@ func (s *SortedResults) AddSortedSlice(sl []*ResultItem) {
 		return
 	}
 	sl_min, sl_max := sl[0].score, sl[len(sl)-1].score
+	if last := s.slices[len(s.slices)-1]; sl_min >= last[len(last)-1].score {
+		// the common case without a query, as results are scored in scan order
+		s.slices = append(s.slices, sl)
+		return
+	}
 	for i, q := range s.slices {
 		switch {
 		case sl_max <= q[0].score:
@@ -246,30 +251,41 @@ func (s *SortedResults) Closest(idx CollectionIndex, matches func(*ResultItem) b
 		idx   CollectionIndex
 		count int
 	}
-	var a, b result
-	iterate := func(idx CollectionIndex, amt int, result *result) {
+	iterate := func(idx CollectionIndex, amt int) (ans result) {
 		var did_wrap bool
-		var count int
-		result.count = -1
-		for {
-			idx, did_wrap = s.increment_with_wrap_around(idx, amt)
-			if did_wrap {
-				break
+		ans.count = -1
+		for count := 1; ; count++ {
+			if idx, did_wrap = s.increment_with_wrap_around(idx, amt); did_wrap {
+				return
 			}
-			count++
 			if matches(s.slices[idx.Slice][idx.Pos]) {
-				result.idx = idx
-				result.count = count
-				break
+				return result{idx, count}
 			}
 		}
 	}
-	go func() { iterate(idx, 1, &a) }()
-	go func() { iterate(idx, -1, &a) }()
-	if a.count < 0 && b.count < 0 {
+	a, b := iterate(idx, 1), iterate(idx, -1)
+	switch {
+	case a.count < 0 && b.count < 0:
 		return nil
+	case a.count < 0 || (b.count >= 0 && b.count < a.count):
+		return &b.idx
+	default:
+		return &a.idx
 	}
-	return utils.IfElse(a.count < b.count, &b.idx, &a.idx)
+}
+
+// Make an index that may be stale, from before the results were cleared, safe to use
+func (s *SortedResults) clamp(idx CollectionIndex) CollectionIndex {
+	if idx.Slice < 0 || idx.Pos < 0 || len(s.slices) == 0 {
+		return CollectionIndex{}
+	}
+	if idx.Slice >= len(s.slices) {
+		return CollectionIndex{Slice: len(s.slices) - 1, Pos: len(s.slices[len(s.slices)-1]) - 1}
+	}
+	if idx.Pos >= len(s.slices[idx.Slice]) {
+		idx.Pos = len(s.slices[idx.Slice]) - 1
+	}
+	return idx
 }
 
 func (s *SortedResults) IncrementIndexWithWrapAroundAndCheck(idx CollectionIndex, amt int) (ans CollectionIndex, did_wrap bool) {
@@ -286,6 +302,10 @@ func (s *SortedResults) IncrementIndexWithWrapAround(idx CollectionIndex, amt in
 }
 
 func (s *SortedResults) increment_with_wrap_around(idx CollectionIndex, amt int) (CollectionIndex, bool) {
+	if len(s.slices) == 0 {
+		return CollectionIndex{}, amt != 0
+	}
+	idx = s.clamp(idx)
 	did_wrap := false
 	if amt > 0 {
 		for amt > 0 {
@@ -364,9 +384,10 @@ func (s *SortedResults) SplitIntoColumns(calc_num_cols func(int) int, num_per_co
 	defer s.unlock()
 	num_cols := calc_num_cols(s.len)
 	total := num_cols * num_per_column
-	if total < 1 {
+	if total < 1 || len(s.slices) == 0 {
 		return nil, 0, CollectionIndex{}
 	}
+	current = s.clamp(current)
 	num_before = min(total-1, num_before_current)
 	idx, did_wrap := s.increment_with_wrap_around(current, -num_before)
 	last_slice := s.slices[len(s.slices)-1]

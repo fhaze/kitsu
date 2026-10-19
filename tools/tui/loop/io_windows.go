@@ -85,20 +85,65 @@ func write_to_tty(
 		close(write_done_channel)
 	}()
 
-	for {
+	// Every console write is a round trip to ConPTY, about 40us, and a single redraw
+	// is often hundreds of small messages, so write all queued messages at once.
+	const max_batch_size = 64 * 1024
+	buf := make([]byte, 0, max_batch_size)
+	var ids []IdType
+	closed := false
+	add := func(data write_msg) {
+		if data.bytes == nil {
+			buf = append(buf, data.str...)
+		} else {
+			buf = append(buf, data.bytes...)
+		}
+		ids = append(ids, data.id)
+	}
+	for !closed {
 		data, more := <-job_channel
 		if !more {
 			break
 		}
-		for !data.is_empty() {
+		add(data)
+	gather:
+		for len(buf) < max_batch_size {
+			select {
+			case data, more := <-job_channel:
+				if !more {
+					closed = true
+					break gather
+				}
+				add(data)
+			default:
+				break gather
+			}
+		}
+		written := 0
+		for written < len(buf) {
 			if quit.Load() {
 				return
 			}
-			if err := data.write(term); err != nil {
+			n, err := term.Write(buf[written:])
+			written += n
+			if err != nil {
+				if is_temporary_error(err) {
+					if n == 0 {
+						// an incomplete UTF-8 sequence, completed by a later message
+						break
+					}
+					continue
+				}
 				err_channel <- err
 				return
 			}
 		}
-		write_done_channel <- data.id
+		if written < len(buf) && !closed {
+			buf = buf[:copy(buf, buf[written:])]
+			continue
+		}
+		for _, id := range ids {
+			write_done_channel <- id
+		}
+		buf, ids = buf[:0], ids[:0]
 	}
 }

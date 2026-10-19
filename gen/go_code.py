@@ -910,8 +910,14 @@ def generate_readline_actions() -> str:
 def generate_mimetypes() -> str:
     import mimetypes
 
-    if not mimetypes.inited:
-        mimetypes.init()
+    if sys.platform == 'win32':
+        # mimetypes.init() reads the registry of the build machine, which is full of
+        # application specific entries, such as .ts as an MPEG transport stream
+        types_map = mimetypes.MimeTypes().types_map[True]
+    else:
+        if not mimetypes.inited:
+            mimetypes.init()
+        types_map = mimetypes.types_map
     ans = [
         'package utils',
         'import "sync"',
@@ -920,7 +926,7 @@ def generate_mimetypes() -> str:
         'func set_builtins() {',
         'builtin_types_map = map[string]string{',
     ]
-    for k, v in mimetypes.types_map.items():
+    for k, v in types_map.items():
         ans.append(f'  "{serialize_as_go_string(k)}": "{serialize_as_go_string(v)}",')
     ans.append('}}')
     return '\n'.join(ans)

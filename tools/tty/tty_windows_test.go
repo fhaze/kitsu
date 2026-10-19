@@ -72,6 +72,43 @@ func TestConsoleMouseClickAndKeyRecords(t *testing.T) {
 	}
 }
 
+func TestConsoleMouseLeaveRecords(t *testing.T) {
+	// ConPTY decodes kitty's SGR pixel leave report (\x1b[<288;x;yM) as a left
+	// button drag and keeps reporting the left button as held after it.
+	type rec struct{ buttons, flags uint32 }
+	for _, tc := range []struct {
+		name    string
+		records []rec
+		want    string
+	}{
+		{"leave then click", []rec{{0, windows.MOUSE_MOVED}, {1, windows.MOUSE_MOVED}, {1, windows.MOUSE_MOVED}, {1, 0}, {0, 0}},
+			"\x1b[<35;1;1M\x1b[<288;1;1M\x1b[<35;1;1M\x1b[<0;1;1M\x1b[<0;1;1m"},
+		{"leave then drag", []rec{{1, windows.MOUSE_MOVED}, {1, 0}, {1, windows.MOUSE_MOVED}, {0, 0}},
+			"\x1b[<288;1;1M\x1b[<0;1;1M\x1b[<32;1;1M\x1b[<0;1;1m"},
+		{"leave then right click", []rec{{1, windows.MOUSE_MOVED}, {3, 0}, {1, 0}, {1, windows.MOUSE_MOVED}},
+			"\x1b[<288;1;1M\x1b[<2;1;1M\x1b[<2;1;1m\x1b[<35;1;1M"},
+		{"leave then wheel", []rec{{1, windows.MOUSE_MOVED}, {1 | 120<<16, windows.MOUSE_WHEELED}, {1, windows.MOUSE_MOVED}},
+			"\x1b[<288;1;1M\x1b[<64;1;1M\x1b[<35;1;1M"},
+		{"leave while dragging", []rec{{1, 0}, {1, windows.MOUSE_MOVED}, {1, windows.MOUSE_MOVED}, {0, 0}},
+			"\x1b[<0;1;1M\x1b[<32;1;1M\x1b[<32;1;1M\x1b[<0;1;1m"},
+		// Once ConPTY believes the button held, further leaves look like hovers
+		{"repeated leaves", []rec{{1, windows.MOUSE_MOVED}, {1, windows.MOUSE_MOVED}, {1, 0}, {0, 0}},
+			"\x1b[<288;1;1M\x1b[<35;1;1M\x1b[<0;1;1M\x1b[<0;1;1m"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			term := &Term{}
+			for _, r := range tc.records {
+				record := input_record{event_type: mouse_event}
+				*(*mouse_event_record)(unsafe.Pointer(&record.data[0])) = mouse_event_record{button_state: r.buttons, event_flags: r.flags}
+				term.append_input_records([]input_record{record}, nil)
+			}
+			if got := string(term.pending); got != tc.want {
+				t.Fatalf("got  %q\nwant %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRawConsoleKeyMode(t *testing.T) {
 	for _, initial := range []uint32{0, 0x3a8, ^uint32(0)} {
 		raw := Termios{InMode: initial, OutMode: initial}

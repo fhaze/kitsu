@@ -3,6 +3,7 @@ package choose_files
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/kovidgoyal/kitty/tools/utils"
@@ -35,8 +36,14 @@ func NewFilter(spec string) (*Filter, error) {
 	if ans.Pattern != "*" && ans.Pattern != "" {
 		switch ans.Type {
 		case "glob":
+			// Windows file names are case insensitive, so that *.jpg matches IMG.JPG
+			fold_case := runtime.GOOS == "windows"
+			pattern := utils.IfElse(fold_case, strings.ToLower(ans.Pattern), ans.Pattern)
 			ans.Match = func(filename string) bool {
-				m, _ := filepath.Match(ans.Pattern, filename)
+				if fold_case {
+					filename = strings.ToLower(filename)
+				}
+				m, _ := filepath.Match(pattern, filename)
 				return m
 			}
 		case "mime":

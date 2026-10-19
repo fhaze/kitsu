@@ -22,6 +22,8 @@ type StyleResolveData interface {
 type Highlighter interface {
 	HighlightFile(path string, srd StyleResolveData) (highlighted_string string, err error)
 	Sanitize(string) string
+	// Drop what is cached for path, to free its memory
+	Forget(path string)
 }
 
 func NewHighlighter(sanitize func(string) string) Highlighter {

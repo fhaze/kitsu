@@ -183,6 +183,12 @@ type highlighter struct {
 
 func (h *highlighter) Sanitize(x string) string { return h.sanitize(x) }
 
+func (h *highlighter) Forget(path string) {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	delete(h.tokens_map, path)
+}
+
 func (h *highlighter) HighlightFile(path string, srd StyleResolveData) (highlighted_string string, err error) {
 	defer func() {
 		if r := recover(); r != nil {

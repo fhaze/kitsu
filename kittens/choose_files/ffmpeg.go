@@ -42,7 +42,7 @@ func ffmpeg_thumbnail_cmd(path, outpath string) *exec.Cmd {
 	)
 }
 
-func ffmpeg_thumbnail(path, tempath string, wg *sync.WaitGroup) (ans *images.ImageData, err error) {
+func ffmpeg_thumbnail(path, tempath string, wg *sync.WaitGroup) (err error) {
 	defer wg.Done()
 	cmd := ffmpeg_thumbnail_cmd(path, tempath)
 	cmd.Stdin = nil
@@ -51,10 +51,20 @@ func ffmpeg_thumbnail(path, tempath string, wg *sync.WaitGroup) (ans *images.Ima
 	cmd.Stdout = nil
 	cmd.Stderr = &stderr
 	if err = cmd.Run(); err != nil {
-		return ans, fmt.Errorf("failed to use ffmpeg to render video from %s with error: %w and stderr: %s", path, err, stderr.String())
+		return fmt.Errorf("failed to use ffmpeg to render video from %s with error: %w and stderr: %s", path, err, stderr.String())
 	}
-	ans, err = images.OpenImageFromPath(tempath)
 	return
+}
+
+// What is cached on disk, with the settings the thumbnail was made with, so that
+// changing video_preview makes new ones
+type ffmpeg_cached_metadata struct {
+	Thumbnail string         `json:"thumbnail"`
+	Metadata  FFMpegMetadata `json:"metadata"`
+}
+
+func ffmpeg_thumbnail_settings() string {
+	return fmt.Sprintf("width=%d fps=%d duration=%g quality=%d", video_width, video_fps, video_duration, video_encoding_quality)
 }
 
 type FFMpegFormat struct {
@@ -103,23 +113,30 @@ func (c ffmpeg_renderer) Render(path string) (m map[string][]byte, mi metadata, 
 	if err != nil {
 		return nil, mi, nil, err
 	}
-	defer func() { _ = os.Remove(tempfile.Name()); tempfile.Close() }()
+	// ffmpeg writes to it by name, and Windows cannot delete a file that is still open
+	tempfile.Close()
+	defer func() { _ = os.Remove(tempfile.Name()) }()
 	var metadata FFMpegMetadata
-	var metadata_error error
-	wg.Add(1)
+	var metadata_error, thumbnail_error error
+	wg.Add(2)
 	go func() { metadata, metadata_error = ffmpeg_metadata(path, &wg) }()
-	wg.Add(1)
-	go func() { img, err = ffmpeg_thumbnail(path, tempfile.Name(), &wg) }()
+	go func() { thumbnail_error = ffmpeg_thumbnail(path, tempfile.Name(), &wg) }()
 	wg.Wait()
 	if metadata_error != nil {
 		return nil, mi, nil, metadata_error
+	}
+	if thumbnail_error != nil {
+		return nil, mi, nil, thumbnail_error
 	}
 	var ip ImagePreviewRenderer
 	if m, mi, img, err = ip.Render(tempfile.Name()); err != nil {
 		return
 	}
+	// Without it the disk cache never matches, and ffmpeg runs again every time
+	if m[FFMPEG_METADATA_KEY], err = json.Marshal(ffmpeg_cached_metadata{Thumbnail: ffmpeg_thumbnail_settings(), Metadata: metadata}); err != nil {
+		return
+	}
 	mi.custom = &metadata
-
 	return
 }
 
@@ -128,11 +145,14 @@ func (c ffmpeg_renderer) Unmarshall(m map[string]string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var ans FFMpegMetadata
+	var ans ffmpeg_cached_metadata
 	if err = json.Unmarshal(data, &ans); err != nil {
 		return nil, err
 	}
-	return &ans, nil
+	if ans.Thumbnail != ffmpeg_thumbnail_settings() {
+		return nil, fmt.Errorf("the cached thumbnail was made with different video_preview settings")
+	}
+	return &ans.Metadata, nil
 }
 
 func (c ffmpeg_renderer) ShowMetadata(h *Handler, s ShowData) (offset int) {
