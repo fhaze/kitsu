@@ -19,13 +19,15 @@ func get_file_data(callback func(h *tar.Header, data []byte) error, seen map[fil
 	if err != nil {
 		return err
 	}
+	// The mode Go reports on Windows is 0o666 or 0o777 for everything
+	mode := int64(utils.PosixPermissions(local_path, s))
 	cb := func(h *tar.Header, data []byte, arcname string) error {
 		h.Name = arcname
 		if h.Typeflag == tar.TypeDir {
 			h.Name = strings.TrimRight(h.Name, "/") + "/"
 		}
 		h.Size = int64(len(data))
-		h.Mode = int64(s.Mode().Perm())
+		h.Mode = mode
 		h.ModTime = s.ModTime()
 		h.AccessTime = s.ModTime()
 		h.ChangeTime = s.ModTime()
