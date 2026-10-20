@@ -1875,6 +1875,9 @@ def bundle_windows_runtime(ddir: str, launcher_dir: str) -> None:
     if os.path.exists(fonts_conf_dest):
         shutil.rmtree(fonts_conf_dest)
     shutil.copytree(os.path.join(os.path.dirname(mingw_bin), 'etc', 'fonts'), fonts_conf_dest)
+    # Prefer the monospace fonts that ship with Windows over Courier New
+    for x in glob.glob(os.path.join(src_base, 'windows', 'fonts', '*.conf')):
+        shutil.copy2(x, os.path.join(fonts_conf_dest, 'conf.d'))
 
     pydll = f'libpython{sysconfig.get_python_version()}.dll'
     shutil.copy2(os.path.join(mingw_bin, pydll), launcher_dir)

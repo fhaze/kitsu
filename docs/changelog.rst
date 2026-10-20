@@ -202,6 +202,21 @@ Detailed list of changes
 0.49.2 [2026-10-01]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+- Windows: Use Cascadia Mono, or Consolas or Lucida Console when it is not
+  installed, as the default font instead of Courier New
+
+- Windows: Fix pasting multi-line text copied from other programs asking for
+  confirmation because of terminal control codes, and sanitizing it turning
+  every line ending into a visible ␍. Line endings are now converted between
+  the CRLF used by the Windows clipboard and the LF used by terminal programs
+  in both directions
+
+- Windows: Fix files dropped from Explorer being inserted as unusable
+  ``/C:/...`` paths. They are now inserted as native paths quoted for
+  PowerShell or cmd.exe, as ``/mnt/c/...`` paths in WSL and as ``C:/...``
+  paths in MSYS2, Git Bash and Cygwin. When the shell is idle they are also
+  quoted without :opt:`shell_integration`
+
 - Windows: Fix arguments such as URLs and file names running commands when
   they are passed to a ``.bat`` or ``.cmd`` program started outside a kitty
   window: :opt:`open_url_with`, :option:`kitty +kitten hints --program`,

@@ -217,6 +217,23 @@ class Selection(BaseTest):
             opts.font_family = parse_font_spec('Liberation Mono')
             self.assertIsNone(get_font_files(opts)['italic'].get('matrix'))
 
+    def test_windows_default_monospace_font(self):
+        # The stock fontconfig configuration resolves monospace to Courier New
+        # on Windows, the package prefers the fonts that ship with Windows
+        from kitty.constants import is_windows, kitty_exe
+
+        if not is_windows:
+            self.skipTest('Only the Windows package configures fontconfig')
+        if not os.path.exists(os.path.join(os.path.dirname(os.path.dirname(kitty_exe())), 'etc', 'fonts', 'conf.d', '56-kitsu-windows.conf')):
+            self.skipTest('Not running from the Windows package')
+        names = set(all_fonts_map(True)['family_map']) | set(all_fonts_map(True)['variable_map'])
+        expected = [f for f in ('Cascadia Mono', 'Consolas', 'Lucida Console') if family_name_to_key(f) in names]
+        if not expected:
+            self.skipTest('None of the monospace fonts that ship with Windows are installed')
+        ff = get_font_files(Options())
+        self.ae(ff['medium']['family'], expected[0])
+        self.ae(ff['bold']['family'], expected[0])
+
 
 def block_helpers(s, sprites, cell_width, cell_height):
     mr = {}

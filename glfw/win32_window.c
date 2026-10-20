@@ -551,9 +551,8 @@ handle_drop_files(_GLFWwindow *window, HDROP drop) {
         char *path = _glfwCreateUTF8FromWideStringWin32(buffer);
         free(buffer);
         if (!path) continue;
-        for (char *c = path; *c; c++)
-            if (*c == '\\') *c = '/';
-        // file:///C:/foo/bar with percent-encoding of reserved chars
+        // file:///C:/foo/bar with percent-encoding of reserved chars, text/plain
+        // gets the native path
         size_t needed = strlen(path) * 3 + 16;
         if (uri_len + needed >= uri_cap) {
             uri_cap = (uri_len + needed) * 2;
@@ -570,10 +569,13 @@ handle_drop_files(_GLFWwindow *window, HDROP drop) {
             uri_len += 2;
         }
         if (plain_len) { plain[plain_len++] = '\n'; }
-        memcpy(uri + uri_len, "file:///", 8);
-        uri_len += 8;
+        // \\server\share\x is file://server/share/x
+        const bool unc = path[0] == '\\' && path[1] == '\\';
+        memcpy(uri + uri_len, "file:///", unc ? 5 : 8);
+        uri_len += unc ? 5 : 8;
         for (const unsigned char *c = (const unsigned char *)path; *c; c++) {
-            if (isalnum(*c) || strchr("-._~/:", *c)) uri[uri_len++] = (char)*c;
+            if (*c == '\\') uri[uri_len++] = '/';
+            else if (isalnum(*c) || strchr("-._~/:", *c)) uri[uri_len++] = (char)*c;
             else uri_len += (size_t)snprintf(uri + uri_len, 4, "%%%02X", *c);
         }
         size_t pl = strlen(path);
@@ -2492,6 +2494,38 @@ get_clipboard_data(const _GLFWClipboardData *cd, const char *mime, char **out, s
     return true;
 }
 
+// CF_UNICODETEXT uses CRLF line endings and terminal programs expect LF, so
+// convert where text crosses between them, as other Windows terminals do.
+// Lone CRs are converted as well. Works in place as the text only shrinks.
+static size_t
+crlf_to_lf(char *text) {
+    char *dest = text;
+    for (const char *src = text; *src; src++) {
+        if (*src == '\r') {
+            if (src[1] != '\n') *dest++ = '\n';
+        } else *dest++ = *src;
+    }
+    *dest = 0;
+    return (size_t)(dest - text);
+}
+
+// Expands bare LFs to CRLF, returns a new NUL terminated buffer
+static char*
+lf_to_crlf(const char *text, size_t sz, size_t *out_sz) {
+    size_t bare = 0;
+    for (size_t i = 0; i < sz; i++) if (text[i] == '\n' && (!i || text[i-1] != '\r')) bare++;
+    char *ans = malloc(sz + bare + 1);
+    if (!ans) return NULL;
+    size_t n = 0;
+    for (size_t i = 0; i < sz; i++) {
+        if (text[i] == '\n' && (!i || text[i-1] != '\r')) ans[n++] = '\r';
+        ans[n++] = text[i];
+    }
+    ans[n] = 0;
+    *out_sz = n;
+    return ans;
+}
+
 static UINT
 clipboard_format_for_mime(const char *mime) {
     if (strcmp(mime, "text/plain") == 0 || strncmp(mime, "text/plain;", 11) == 0) return CF_UNICODETEXT;
@@ -2544,6 +2578,9 @@ _glfwPlatformSetClipboard(GLFWClipboardType t) {
         if (!get_clipboard_data(&_glfw.clipboard, mime, &data, &sz)) continue;
         HANDLE object = NULL;
         if (fmt == CF_UNICODETEXT) {
+            char *crlf = lf_to_crlf(data, sz, &sz);
+            free(data);
+            if (!(data = crlf)) continue;
             int count = MultiByteToWideChar(CP_UTF8, 0, data, (int)sz, NULL, 0);
             object = GlobalAlloc(GMEM_MOVEABLE, ((size_t)count + 1) * sizeof(WCHAR));
             if (object) {
@@ -2598,7 +2635,7 @@ _glfwPlatformGetClipboard(GLFWClipboardType clipboard_type, const char *mime_typ
                 char *u = _glfwCreateUTF8FromWideStringWin32(buffer);
                 GlobalUnlock(h);
                 if (u) {
-                    write_data(object, u, strlen(u));
+                    write_data(object, u, crlf_to_lf(u));
                     free(u);
                 }
             }
