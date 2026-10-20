@@ -1999,6 +1999,8 @@ typedef struct {
         bool failed;
     } write;
     bool is_remote_control_peer;
+    // time by which a talk socket peer must have sent its message, 0 for none
+    monotonic_t deadline;
 } Peer;
 static id_type peer_id_counter = 0;
 
@@ -2020,6 +2022,11 @@ start_talk_thread(ChildMonitor *self) {
 
 typedef struct pollfd PollFD;
 #define PEER_LIMIT 256
+// Peers on the talk socket (the single instance socket, or on Windows the DCS
+// channel, which any local process can connect to) send a single message and
+// close their end straight away. Drop the ones that do not, so that idle
+// connections cannot use up all PEER_LIMIT slots.
+#define TALK_PEER_TIMEOUT s_to_monotonic_t(10ll)
 #define nuke_socket(s)                     \
     {                                      \
         shutdown(s, SHUT_RDWR);            \
@@ -2038,6 +2045,7 @@ add_peer(int peer, bool is_remote_control_peer) {
         if (!p->id) p->id = ++peer_id_counter;
         ans = p->id;
         p->is_remote_control_peer = is_remote_control_peer;
+        if (!is_remote_control_peer) p->deadline = monotonic() + TALK_PEER_TIMEOUT;
     } else {
         log_error("Too many peers want to talk, ignoring one.");
         nuke_socket(peer);
@@ -2209,6 +2217,35 @@ wakeup_talk_loop(bool in_signal_handler) {
 }
 
 
+static void
+stop_reading_from_peer(Peer *p) {
+    // the partial message is discarded, prune_peers() then removes the peer
+    shutdown(p->fd, SHUT_RD);
+    p->read.finished = true;
+    p->read.used = 0;
+}
+
+static void
+drop_stalled_talk_peers(void) {
+    const monotonic_t now = monotonic();
+    Peer *oldest = NULL;
+    for (size_t i = 0; i < talk_data.num_peers; i++) {
+        Peer *p = talk_data.peers + i;
+        if (!p->deadline || p->read.finished) continue;
+        if (p->deadline <= now) {
+            log_error("Dropping peer on the talk socket that did not send its message in time");
+            stop_reading_from_peer(p);
+        } else if (!oldest || p->deadline < oldest->deadline) oldest = p;
+    }
+    // Keep a slot free for the next peer by dropping the oldest unfinished
+    // one, so that a flood of idle connections cannot lock out well behaved
+    // peers, which are done within milliseconds.
+    if (oldest && talk_data.num_peers >= PEER_LIMIT) {
+        log_error("Too many peers on the talk socket, dropping the oldest one");
+        stop_reading_from_peer(oldest);
+    }
+}
+
 static bool
 prune_peers(ChildMonitor *self) {
     bool pruned = false;
@@ -2278,6 +2315,7 @@ talk_loop(void *data) {
     while (LIKELY(!self->shutting_down)) {
         num_peer_fds = 0;
         bool need_to_wakup_main_loop = false;
+        monotonic_t next_deadline = 0;
         talk_mutex(lock);
         if (peers_to_inject.num) {
             for (size_t i = 0; i < peers_to_inject.num; i++) {
@@ -2288,6 +2326,7 @@ talk_loop(void *data) {
             peers_to_inject.num = 0;
         }
         if (talk_data.num_peers > 0) {
+            drop_stalled_talk_peers();
             if (prune_peers(self)) need_to_wakup_main_loop = true;
             for (size_t i = 0; i < talk_data.num_peers; i++) {
                 Peer *p = talk_data.peers + i;
@@ -2299,13 +2338,19 @@ talk_loop(void *data) {
                     if (!p->read.finished) flags |= POLLIN;
                     if (p->write.used) flags |= POLLOUT;
                     fds[p->fd_array_idx].events = flags;
+                    if (p->deadline && !p->read.finished && (!next_deadline || p->deadline < next_deadline)) next_deadline = p->deadline;
                 } else p->fd_array_idx = 0;
             }
         }
         talk_mutex(unlock);
         if (need_to_wakup_main_loop) wakeup_main_loop();
         for (size_t i = 0; i < num_listen_fds; i++) fds[i].revents = 0;
-        int ret = poll(fds, num_listen_fds + num_peer_fds, -1);
+        int timeout = -1;
+        if (next_deadline) {
+            const monotonic_t now = monotonic();
+            timeout = next_deadline > now ? monotonic_t_to_ms(next_deadline - now) + 1 : 0;
+        }
+        int ret = poll(fds, num_listen_fds + num_peer_fds, timeout);
         if (ret > 0) {
             for (size_t i = 0; i < num_listen_fds - 1; i++) {
                 if (fds[i].revents & POLLIN) {

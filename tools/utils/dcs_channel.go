@@ -28,17 +28,27 @@ func SendDCSViaChannel(msgtype, body string) error {
 	return SendRawDCSViaChannel("@kitty-" + msgtype + "|" + body)
 }
 
+// The field order matters: kitty requires messages to start with the cmd and
+// token so that it can check the token before parsing the rest, see
+// dcs_channel_message_prefix() in kitty/boss.py
+type dcs_channel_message struct {
+	Cmd      string `json:"cmd"`
+	Token    string `json:"token"`
+	WindowID int    `json:"window_id"`
+	DCS      string `json:"dcs"`
+}
+
 // SendRawDCSViaChannel delivers a complete @kitty- DCS payload.
 func SendRawDCSViaChannel(dcs string) error {
 	window_id, err := strconv.Atoi(os.Getenv("KITTY_WINDOW_ID"))
 	if err != nil {
 		return fmt.Errorf("Invalid KITTY_WINDOW_ID env var: %#v", os.Getenv("KITTY_WINDOW_ID"))
 	}
-	msg, err := json.Marshal(map[string]any{
-		"cmd":       "dcs",
-		"token":     os.Getenv("KITTY_DCS_CHANNEL_TOKEN"),
-		"window_id": window_id,
-		"dcs":       base64.StdEncoding.EncodeToString(UnsafeStringToBytes(dcs)),
+	msg, err := json.Marshal(dcs_channel_message{
+		Cmd:      "dcs",
+		Token:    os.Getenv("KITTY_DCS_CHANNEL_TOKEN"),
+		WindowID: window_id,
+		DCS:      base64.StdEncoding.EncodeToString(UnsafeStringToBytes(dcs)),
 	})
 	if err != nil {
 		return err
