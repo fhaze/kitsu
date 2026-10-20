@@ -3,6 +3,7 @@
 package shell_integration
 
 import (
+	"archive/tar"
 	"bytes"
 	"fmt"
 	"github.com/kovidgoyal/kitty"
@@ -48,4 +49,29 @@ func TestExtractShellIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	TerminfoData()
+}
+
+// The modes of the files the ssh kitten sends to remote hosts must not depend
+// on the OS kitty was built on. Windows reports 0o666 for every file, which
+// made the sourced scripts world writable and the kitty and kitten wrappers
+// not executable on the remote.
+func TestEmbeddedFileModes(t *testing.T) {
+	executables := map[string]bool{"shell-integration/ssh/kitty": true, "shell-integration/ssh/kitten": true}
+	found := 0
+	for name, entry := range Data() {
+		expected := int64(0o644)
+		switch {
+		case entry.Metadata.Typeflag == tar.TypeDir:
+			expected = 0o755
+		case executables[name]:
+			expected = 0o755
+			found++
+		}
+		if entry.Metadata.Mode != expected {
+			t.Errorf("%s has mode %o instead of %o", name, entry.Metadata.Mode, expected)
+		}
+	}
+	if found != len(executables) {
+		t.Fatalf("Only %d of the executables %v are embedded", found, executables)
+	}
 }

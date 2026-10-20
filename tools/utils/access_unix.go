@@ -3,6 +3,8 @@
 package utils
 
 import (
+	"io/fs"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -16,4 +18,10 @@ const (
 // specified modes, as with access(2).
 func Access(path string, mode AccessMode) error {
 	return unix.Access(path, uint32(mode))
+}
+
+// PosixPermissions returns the permission bits to send to a POSIX system for
+// the file at path, which s describes.
+func PosixPermissions(path string, s fs.FileInfo) fs.FileMode {
+	return s.Mode().Perm()
 }
