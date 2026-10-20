@@ -9,7 +9,7 @@ import sys
 import tempfile
 from unittest.mock import patch
 
-from kitty.constants import is_macos, kitty_exe, read_kitty_resource
+from kitty.constants import is_macos, is_windows, kitty_exe, read_kitty_resource
 from kitty.fast_data_types import (
     Color,
     HistoryBuf,
@@ -34,6 +34,7 @@ from kitty.rgb import to_color
 from kitty.utils import (
     is_ok_to_read_image_file,
     is_ok_to_read_image_path,
+    is_ok_to_read_image_path_on_windows,
     is_path_in_temp_dir,
     lock_with_file,
     sanitize_title,
@@ -582,6 +583,93 @@ class TestDataTypes(BaseTest):
         lb2 = self.line_comparison_rewrap(lb, '123', '  a', 'bcd', 'e')
         self.assertContinued(lb2, False, True, True, True)
 
+    def test_windows_image_path_policy(self):
+        # Paths from the graphics protocol are checked without touching the
+        # file system, as opening a UNC path makes Windows connect to, and
+        # authenticate with, its server. This runs on every platform, with
+        # fake drive types: fixed, removable, CD-ROM, remote and no root dir.
+        drive_types = {'C': 3, 'D': 2, 'E': 5, 'Z': 4, 'Q': 1}
+        with patch('kitty.utils.win32_drive_type', side_effect=lambda d: drive_types.get(d.upper(), 0)):
+            for path in (
+                r'C:\Users\x\a.png',
+                'c:/tmp/a.png',
+                r'C:\a b\c.d.png',
+                r'C:\x\..\y\.\a.png',
+                'C:\\x\\\\y\\a.png',
+                r'D:\a.png',
+                r'E:\a.png',
+                r'C:\x\console.png',
+                r'C:\x\nullable.png',
+                r'C:\x\COM10.png',
+                r'C:\x\auxiliary\a.png',
+                r'C:\ünïcødé\漢字.png',
+            ):
+                self.assertTrue(is_ok_to_read_image_path_on_windows(path), path)
+            for path in (
+                # UNC paths, also with forward slashes and in their \\?\ and \??\ forms
+                r'\\host\share\x.png',
+                '//host/share/x.png',
+                '\\/host/share/x.png',
+                r'\\?\UNC\host\share\x.png',
+                r'\??\UNC\host\share\x.png',
+                # device paths
+                r'\\.\pipe\x',
+                '//./pipe/x',
+                r'\\?\C:\x.png',
+                r'\\.\C:\x.png',
+                r'\\?\GLOBALROOT\Device\Mup\host\share\x.png',
+                r'\??\C:\x.png',
+                # DOS device names in any directory, also with an extension, trailing dots or spaces
+                'NUL',
+                r'C:\NUL',
+                r'C:\x\nul.png',
+                r'C:\x\CON\a.png',
+                r'C:\x\com1.txt',
+                r'C:\x\LPT¹',
+                r'C:\x\conin$',
+                r'C:\x\CONOUT$.png',
+                r'C:\x\aux .png',
+                r'C:\x\nul.',
+                r'C:\x\PRN  ',
+                r'C:\x\clock$',
+                # alternate data streams
+                r'C:\x\a.png:stream',
+                r'C:\x\a.png::$DATA',
+                r'C:\x:y\a.png',
+                # names Windows changes silently, wildcards and invalid characters
+                r'C:\x\a.png.',
+                r'C:\x\a.png ',
+                r'C:\x\a*.png',
+                r'C:\x\a?.png',
+                'C:\\x\\a\x01.png',
+                r'C:\x\a|b',
+                r'C:\x\a"b',
+                r'C:\x\a<b>',
+                # rooted, drive relative and relative paths
+                r'\x.png',
+                '/tmp/x.png',
+                'C:x.png',
+                'x.png',
+                r'.\x.png',
+                '',
+                'C:',
+                '1:\\x.png',
+                'İ:\\x.png',
+                # network and non-existent drives
+                r'Z:\x.png',
+                'z:/x.png',
+                r'Q:\x.png',
+                r'Y:\x.png',
+            ):
+                self.assertFalse(is_ok_to_read_image_path_on_windows(path), path)
+        if is_windows:
+            # The policy is applied before os.path.realpath(), which opens the file
+            with patch('kitty.utils.os.path.realpath', side_effect=AssertionError('realpath() was called')):
+                for path in (r'\\host\share\x.png', r'\\.\pipe\x', r'C:\x\nul.png', r'C:\x\a.png:s'):
+                    self.assertFalse(is_ok_to_read_image_path(path), path)
+            system_drive = os.environ.get('SystemDrive', 'C:')
+            self.assertTrue(is_ok_to_read_image_path(os.path.join(system_drive + os.sep, 'does-not-exist', 'a.png')))
+
     def test_utils(self):
         def w(x):
             return wcwidth(ord(x))
@@ -665,7 +753,8 @@ class TestDataTypes(BaseTest):
         # the file to be opened first, since opening it leaks its existence
         for path in ('', '/proc/self/cmdline', '/proc/does-not-exist', '/sys/kernel', '/dev/null', '/dev/does-not-exist'):
             self.assertFalse(is_ok_to_read_image_path(path), path)
-        for path in ('/tmp/a.png', '/dev/shm/a.png', os.path.join(tempfile.gettempdir(), 'a.png')):
+        # Windows only allows absolute paths with a drive letter, see test_windows_image_path_policy()
+        for path in (() if is_windows else ('/tmp/a.png', '/dev/shm/a.png')) + (os.path.join(tempfile.gettempdir(), 'a.png'),):
             self.assertTrue(is_ok_to_read_image_path(path), path)
         if hasattr(os, 'mkfifo'):
             fifo = os.path.join(tempfile.gettempdir(), 'test-kitty-fifo')

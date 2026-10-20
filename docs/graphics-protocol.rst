@@ -361,7 +361,11 @@ any device/socket/etc. special files. Only regular files are allowed.
 Additionally, terminal emulators may refuse to read files in *sensitive*
 parts of the filesystem, such as :file:`/proc`, :file:`/sys`, :file:`/dev`, etc.
 These checks should be made on the path *before* the file is opened, since
-merely opening a file can have side-effects.
+merely opening a file can have side-effects. On Windows, for instance, opening
+a UNC path such as :file:`\\\\host\\share\\image.png` makes the system
+authenticate with that host, so kitty only reads absolute paths on local
+drives, without DOS device names such as :file:`NUL` or alternate data streams
+in them.
 
 Because the escape codes can be emitted by a program running on a remote
 machine over SSH or by a sandboxed process, the terminal emulator **must not**

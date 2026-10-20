@@ -1076,9 +1076,25 @@ kitty_win32_open_readonly_shared(const char *path) {
         errno = ENAMETOOLONG;
         return -1;
     }
-    HANDLE h = CreateFileW(wpath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    // The path comes from a client, so: should it name a named pipe, its
+    // server may only identify us, not impersonate us. Do not fetch files
+    // from offline storage, such as cloud files that are not on disk. And
+    // only read actual files, not pipes or devices such as CON.
+    HANDLE h = CreateFileW(
+        wpath,
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_NO_RECALL | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+        NULL);
     if (h == INVALID_HANDLE_VALUE) {
         set_errno_from_last_error();
+        return -1;
+    }
+    if (GetFileType(h) != FILE_TYPE_DISK) {
+        CloseHandle(h);
+        errno = EACCES;
         return -1;
     }
     int fd = _open_osfhandle((intptr_t)h, _O_RDONLY | _O_BINARY | _O_NOINHERIT);

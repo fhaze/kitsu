@@ -195,7 +195,9 @@ int kitty_win32_socketpair(uintptr_t out[2]);
 int kitty_win32_fd_from_socket_handle(intptr_t sock);
 bool kitty_win32_set_current_thread_name(const char *name);
 // Read-only open that permits the file to be concurrently deleted/renamed by
-// its creator, which CRT open() disallows
+// its creator, which CRT open() disallows. For paths from untrusted sources:
+// fails with EACCES for anything but files on disk, does not recall offline
+// files and named pipe servers cannot impersonate the caller.
 int kitty_win32_open_readonly_shared(const char *path);
 // Read/write temp file that is deleted when its last handle is closed
 int kitty_win32_open_anonymous_tmpfile(void);
