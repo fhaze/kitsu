@@ -373,25 +373,108 @@ to_backslashes(wchar_t *s) {
         if (*s == L'/') *s = L'\\';
 }
 
-static wchar_t *
-build_command_line(char *const argv[]) {
-    size_t cap = 4096, pos = 0;
-    char *buf = malloc(cap);
-    if (!buf) return NULL;
-    for (size_t i = 0; argv[i]; i++) {
-        while (!kitty_win32_append_quoted_arg(buf, cap, &pos, argv[i])) {
-            cap *= 2;
-            char *nbuf = realloc(buf, cap);
-            if (!nbuf) {
-                free(buf);
-                return NULL;
-            }
-            buf = nbuf;
-        }
+static char *
+wide_to_utf8(const wchar_t *s) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, s, -1, NULL, 0, NULL, NULL);
+    if (n <= 0) return NULL;
+    char *ans = malloc(n);
+    if (!ans) return NULL;
+    if (WideCharToMultiByte(CP_UTF8, 0, s, -1, ans, n, NULL, NULL) <= 0) {
+        free(ans);
+        return NULL;
     }
-    wchar_t *ans = utf8_to_wide(buf);
-    free(buf);
     return ans;
+}
+
+typedef bool (*append_arg_func)(char *buf, size_t buf_sz, size_t *pos, const char *arg);
+
+static bool
+append_raw(char *buf, size_t buf_sz, size_t *pos, const char *s) {
+    size_t n = strlen(s);
+    if (*pos + n >= buf_sz) {
+        errno = E2BIG;
+        return false;
+    }
+    memcpy(buf + *pos, s, n + 1);
+    *pos += n;
+    return true;
+}
+
+typedef struct {
+    char *buf;
+    size_t cap, pos;
+} CommandLine;
+
+static bool
+append_to_command_line(CommandLine *c, append_arg_func append, const char *arg) {
+    const size_t before = c->pos;
+    while (!append(c->buf, c->cap, &c->pos, arg)) {
+        if (errno != E2BIG) return false;
+        // the arg may have been partially appended
+        c->pos = before;
+        char *nbuf = realloc(c->buf, c->cap * 2);
+        if (!nbuf) {
+            errno = ENOMEM;
+            return false;
+        }
+        c->buf = nbuf;
+        c->cap *= 2;
+    }
+    return true;
+}
+
+// Returns NULL with errno set on failure. When batch_file is not NULL, argv[0]
+// is ignored and the command line is the one for running batch_file via cmd.exe
+static wchar_t *
+build_command_line(char *const argv[], const char *batch_file) {
+    CommandLine c = {.buf = malloc(4096), .cap = 4096};
+    if (!c.buf) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    c.buf[0] = 0;
+    bool ok = true;
+    if (batch_file) {
+        ok = append_to_command_line(&c, append_raw, KITTY_WIN32_BATCH_PREFIX) &&
+             append_to_command_line(&c, kitty_win32_append_batch_arg, batch_file);
+        for (size_t i = 1; ok && argv[i]; i++) ok = append_to_command_line(&c, kitty_win32_append_batch_arg, argv[i]);
+        ok = ok && append_to_command_line(&c, append_raw, "\"");
+    } else {
+        for (size_t i = 0; ok && argv[i]; i++) ok = append_to_command_line(&c, kitty_win32_append_quoted_arg, argv[i]);
+    }
+    wchar_t *ans = NULL;
+    if (ok && !(ans = utf8_to_wide(c.buf))) errno = ENOMEM;
+    free(c.buf);
+    return ans;
+}
+
+// CreateProcess() runs batch files as cmd.exe /c with the command line as is,
+// letting cmd.exe interpret metacharacters in the arguments, see
+// kitty_win32_append_batch_arg(). Run them via cmd.exe explicitly instead,
+// with a command line that is safe for it. On success *exe is replaced by the
+// path to cmd.exe and *batch_file is the full path to the script, as cmd.exe
+// would resolve a relative one against the cwd of the child, not ours.
+static bool
+resolve_batch_file(wchar_t **exe, char **batch_file) {
+    *batch_file = NULL;
+    if (!kitty_win32_is_batch_file(*exe)) return true;
+    wchar_t sysdir[MAX_PATH + 1], full[32768];
+    UINT n = GetSystemDirectoryW(sysdir, MAX_PATH - 8);
+    DWORD fn = GetFullPathNameW(*exe, sizeof(full) / sizeof(full[0]), full, NULL);
+    if (!n || n >= MAX_PATH - 8 || !fn || fn >= sizeof(full) / sizeof(full[0])) {
+        set_errno_from_last_error();
+        return false;
+    }
+    wcscpy(sysdir + n, L"\\cmd.exe");
+    wchar_t *cmd = _wcsdup(sysdir);
+    if (!cmd || !(*batch_file = wide_to_utf8(full))) {
+        free(cmd);
+        errno = ENOMEM;
+        return false;
+    }
+    free(*exe);
+    *exe = cmd;
+    return true;
 }
 
 static wchar_t *
@@ -466,16 +549,19 @@ win32_pty_spawn(int master_fd, const char *exe, const char *cwd, char *const arg
     }
     pid_t ans = -1;
     wchar_t *wexe = utf8_to_wide(exe), *wcwd = cwd && *cwd ? utf8_to_wide(cwd) : NULL;
-    wchar_t *cmdline = build_command_line(argv), *envblock = build_environment_block(env);
+    wchar_t *cmdline = NULL, *envblock = build_environment_block(env);
+    char *batch_file = NULL;
     LPPROC_THREAD_ATTRIBUTE_LIST attrs = NULL;
     SIZE_T attrs_sz = 0;
     ResumeData *rd = NULL;
     HANDLE child_stdin = INVALID_HANDLE_VALUE;
-    if (!wexe || (cwd && *cwd && !wcwd) || !cmdline || !envblock) {
+    if (!wexe || (cwd && *cwd && !wcwd) || !envblock) {
         errno = ENOMEM;
         goto end;
     }
     to_backslashes(wexe);
+    if (!resolve_batch_file(&wexe, &batch_file)) goto end;
+    if (!(cmdline = build_command_line(argv, batch_file))) goto end;
     if (wcwd) {
         to_backslashes(wcwd);
         // Like chdir() failing in the POSIX child, run in our own cwd when the
@@ -570,6 +656,7 @@ end:
     free(wcwd);
     free(cmdline);
     free(envblock);
+    free(batch_file);
     pty_unref(pty);
     return ans;
 }

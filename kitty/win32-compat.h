@@ -174,8 +174,20 @@ int win32_spawn_and_wait(const char *exe, char *const argv[]);
 bool win32_attach_parent_console(void);
 bool win32_add_dll_dir_of_module(const wchar_t *module_name);
 // Appends arg to buf at *pos quoted as per CommandLineToArgvW() rules,
-// returns false if buf is too small
+// returns false with errno set to E2BIG if buf is too small
 bool kitty_win32_append_quoted_arg(char *buf, size_t buf_sz, size_t *pos, const char *arg);
+// Whether CreateProcess() would run path as a batch file, via cmd.exe
+bool kitty_win32_is_batch_file(const wchar_t *path);
+// Batch files must be run as "<system dir>\cmd.exe" with a command line made
+// of this prefix, the script and its arguments each appended with
+// kitty_win32_append_batch_arg() and a closing double quote. /d skips the
+// AutoRun commands from the registry, /e:ON /v:OFF are needed for the escaping
+// to work and /s strips the outer quotes regardless of what is inside them.
+#define KITTY_WIN32_BATCH_PREFIX "cmd.exe /d /e:ON /v:OFF /s /c \""
+// Appends arg to buf at *pos quoted for a batch file command line (see
+// above), returns false with errno set to E2BIG if buf is too small or to
+// EINVAL if arg contains characters that cannot be passed to batch files.
+bool kitty_win32_append_batch_arg(char *buf, size_t buf_sz, size_t *pos, const char *arg);
 void set_errno_from_last_error(void);
 // Creates a connected pair of loopback TCP sockets (SOCKET handles)
 int kitty_win32_socketpair(uintptr_t out[2]);
