@@ -365,6 +365,49 @@ run_child(int argc, char **argv) {
     return 0;
 }
 
+static int
+run_crt_rules_child(void) {
+    // Launched with the raw arguments --crt-rules "a""b c" d: for the C runtime
+    // "" inside double quotes is a literal " and the quotes continue, while
+    // CommandLineToArgvW() would split this into a"b and c".
+    int argc = 0;
+    char **uargv = kitty_win32_utf8_argv(&argc);
+    if (!uargv) return 2;
+    if (argc != 4 || strcmp(uargv[2], "a\"b c") != 0 || strcmp(uargv[3], "d") != 0) {
+        for (int i = 0; i < argc; i++) fprintf(stderr, "argv[%d] = %s\n", i, uargv[i]);
+        return 3;
+    }
+    return 0;
+}
+
+static void
+test_crt_argv_rules(void) {
+    // Batch files receive arguments quoted by kitty_win32_append_batch_arg(),
+    // which kitty.exe must split with the C runtime's rules when they are
+    // passed on with %*
+    const DWORD sz = 32768;
+    wchar_t *self = malloc(sizeof(wchar_t) * sz), *cmdline = malloc(sizeof(wchar_t) * (sz + 64));
+    CHECK(self && cmdline);
+    if (!self || !cmdline) return;
+    DWORD n = GetModuleFileNameW(NULL, self, sz);
+    CHECK(n && n < sz);
+    wcscpy(cmdline, L"\"");
+    wcscat(cmdline, self);
+    wcscat(cmdline, L"\" --crt-rules \"a\"\"b c\" d");
+    STARTUPINFOW si = {.cb = sizeof(si)};
+    PROCESS_INFORMATION pi = {0};
+    CHECK(CreateProcessW(self, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi));
+    if (pi.hProcess) {
+        DWORD code = 1;
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        CHECK(GetExitCodeProcess(pi.hProcess, &code) && code == 0);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    free(self);
+    free(cmdline);
+}
+
 static void
 test_spawn(const char *dir) {
     // Runs a copy of this executable from dir, which checks its arguments and exe path
@@ -407,6 +450,7 @@ remove_tree(const char *path) {
 int
 main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "--child") == 0) return run_child(argc, argv);
+    if (argc > 1 && strcmp(argv[1], "--crt-rules") == 0) return run_crt_rules_child();
     SetConsoleOutputCP(CP_UTF8);
     printf("ANSI code page: %u\n", GetACP());
     wchar_t wtmp[MAX_PATH + 1];
@@ -427,6 +471,7 @@ main(int argc, char **argv) {
     test_shm(dir);
     test_devices();
     test_invalid_utf8();
+    test_crt_argv_rules();
     test_spawn(dir);
 
     // A directory whose path is longer than MAX_PATH, both in UTF-16 units and

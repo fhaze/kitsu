@@ -20,6 +20,7 @@
 #include <aclapi.h>
 #include <wtsapi32.h>
 #include <bcrypt.h>
+#include <corecrt_startup.h>
 #include <direct.h>
 #include <stdio.h>
 #include <string.h>
@@ -256,10 +257,21 @@ temp_dir(void) {
 
 char **
 kitty_win32_utf8_argv(int *argc) {
-    int n = 0;
-    wchar_t **wargv = CommandLineToArgvW(GetCommandLineW(), &n);
+    // Split the wide command line with the C runtime's rules, not those of
+    // CommandLineToArgvW(), so that arguments are the same as in the narrow
+    // argv, only not lossy. The two differ for "" inside double quotes: the C
+    // runtime reads a literal " and stays inside the quotes, which the quoting
+    // for batch files in kitty_win32_append_batch_arg() relies on, as do
+    // other programs that pass arguments through batch files.
+    errno_t err = _configure_wide_argv(_crt_argv_unexpanded_arguments);
+    if (err) {
+        errno = err;
+        return NULL;
+    }
+    const int n = __argc;
+    wchar_t **wargv = __wargv;
     if (!wargv) {
-        set_errno_from_last_error();
+        errno = EINVAL;
         return NULL;
     }
     size_t total = sizeof(char *) * (n + 1);
@@ -267,14 +279,12 @@ kitty_win32_utf8_argv(int *argc) {
         int len = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, NULL, 0, NULL, NULL);
         if (len <= 0) {
             set_errno_from_last_error();
-            LocalFree(wargv);
             return NULL;
         }
         total += len;
     }
     char **ans = malloc(total);
     if (!ans) {
-        LocalFree(wargv);
         errno = ENOMEM;
         return NULL;
     }
@@ -284,7 +294,6 @@ kitty_win32_utf8_argv(int *argc) {
         p += WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, p, (int)(end - p), NULL, NULL);
     }
     ans[n] = NULL;
-    LocalFree(wargv);
     *argc = n;
     return ans;
 }
