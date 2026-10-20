@@ -1246,3 +1246,56 @@ class TestDataTypes(BaseTest):
             self.ae('C:/Users/me', path_from_osc7_url('file:///C:/Users/me'))
             self.ae('C:/Users/me', path_from_osc7_url('file://host/C:/Users/me'))
             self.ae('//host/share/path', path_from_osc7_url('file://host/share/path'))
+
+    def test_windows_dropped_paths(self):
+        from kitty.utils import parse_uri_list, quote_path_for_windows_shell, windows_path_for_shell, windows_shell_kind
+
+        # glfw turns files dropped from Explorer into file:///C:/... URLs
+        uris = 'file:///C:/Program%20Files/foo.txt\r\nfile:////server/share/x\r\nfile://server/share/y\r\nfile:///D:\r\nhttps://example.com/a\r\nfile://///server/share/z\r\n'
+        with patch('kitty.utils.is_windows', False):
+            self.ae(list(parse_uri_list(uris))[0], '/C:/Program Files/foo.txt')
+        with patch('kitty.utils.is_windows', True):
+            paths = list(parse_uri_list(uris))
+        self.ae(paths, ['C:\\Program Files\\foo.txt', '\\\\server\\share\\x', '\\\\server\\share\\y', 'D:\\', 'https://example.com/a', '\\\\server\\share\\z'])
+
+        sys32 = 'C:\\Windows\\System32\\'
+        pwsh = 'C:\\Program Files\\PowerShell\\7\\pwsh.exe'
+        for exes, kind in (
+            ((pwsh,), 'powershell'),
+            ((sys32 + 'WindowsPowerShell\\v1.0\\powershell.exe',), 'powershell'),
+            ((sys32 + 'cmd.exe',), 'cmd'),
+            ((pwsh, sys32 + 'cmd.exe'), 'cmd'),
+            ((sys32 + 'cmd.exe', pwsh), 'powershell'),
+            ((pwsh, sys32 + 'wsl.exe'), 'wsl'),
+            ((sys32 + 'bash.exe',), 'wsl'),
+            ((pwsh, 'C:\\Program Files\\Git\\bin\\bash.exe', 'C:\\Program Files\\Git\\usr\\bin\\bash.exe'), 'msys'),
+            (('C:\\msys64\\usr\\bin\\zsh.exe', 'C:\\msys64\\usr\\bin\\vim.exe'), 'msys'),
+            ((pwsh, sys32 + 'OpenSSH\\ssh.exe'), 'posix'),
+            (('C:\\tools\\nvim.exe',), ''),
+            ((), ''),
+        ):
+            self.ae(windows_shell_kind(exes), kind, exes)
+
+        p = 'C:\\Program Files\\foo.txt'
+        self.ae(windows_path_for_shell(p, 'wsl'), '/mnt/c/Program Files/foo.txt')
+        self.ae(windows_path_for_shell('D:\\', 'wsl'), '/mnt/d/')
+        self.ae(windows_path_for_shell('\\\\wsl.localhost\\Ubuntu\\home\\me\\x', 'wsl'), '/home/me/x')
+        self.ae(windows_path_for_shell('\\\\wsl$\\Ubuntu', 'wsl'), '/')
+        self.ae(windows_path_for_shell('\\\\server\\share\\x', 'wsl'), '//server/share/x')
+        self.ae(windows_path_for_shell(p, 'msys'), 'C:/Program Files/foo.txt')
+        self.ae(windows_path_for_shell('\\\\server\\share\\x', 'msys'), '//server/share/x')
+        for shell in ('powershell', 'cmd', 'posix', ''):
+            self.ae(windows_path_for_shell(p, shell), p)
+        for shell in ('wsl', 'msys', 'powershell'):
+            self.ae(windows_path_for_shell('https://example.com/a', shell), 'https://example.com/a')
+
+        q = quote_path_for_windows_shell
+        self.ae(q('C:\\Users\\me\\a.txt', 'powershell'), 'C:\\Users\\me\\a.txt')
+        self.ae(q(p, 'powershell'), "'C:\\Program Files\\foo.txt'")
+        self.ae(q("C:\\it's $x\u2019", 'powershell'), "'C:\\it''s $x\u2019\u2019'")
+        self.ae(q('C:\\Users\\me\\a.txt', 'cmd'), 'C:\\Users\\me\\a.txt')
+        self.ae(q(p, 'cmd'), '"C:\\Program Files\\foo.txt"')
+        self.ae(q('C:\\a&b', 'cmd'), '"C:\\a&b"')
+        self.ae(q(p, ''), '"C:\\Program Files\\foo.txt"')
+        self.ae(q("/mnt/c/it's", 'wsl'), "'/mnt/c/it'\"'\"'s'")
+        self.ae(q('C:/Program Files/foo.txt', 'msys'), "'C:/Program Files/foo.txt'")

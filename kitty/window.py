@@ -118,6 +118,7 @@ from .utils import (
     open_url,
     parse_uri_list,
     path_from_osc7_url,
+    quote_path_for_windows_shell,
     resolve_custom_file,
     resolved_shell,
     sanitize_control_codes,
@@ -125,6 +126,8 @@ from .utils import (
     sanitize_title,
     sanitize_url_for_display_to_user,
     shlex_split,
+    windows_path_for_shell,
+    windows_shell_kind,
 )
 
 MatchPatternType = Union[Pattern[str], tuple[Pattern[str], Optional[Pattern[str]]]]
@@ -2231,7 +2234,7 @@ class Window:
         self.clipboard_request_manager.send_paste_event(is_primary_selection)
         return True
 
-    def paste_with_actions(self, text: str, from_drop: bool = False, is_uri_list: bool = False) -> None:
+    def paste_with_actions(self, text: str, from_drop: bool = False, is_uri_list: bool = False, windows_shell: str | None = None) -> None:
         if self.destroyed or not text:
             return
         opts = get_options()
@@ -2239,12 +2242,15 @@ class Window:
             text = load_paste_filter()(text)
             if not text:
                 return
-        if 'quote-urls-at-prompt' in opts.paste_actions and self.at_prompt:
+        # cmd.exe has no shell integration, so a shell without a running program is at its prompt
+        at_prompt = self.at_prompt or (windows_shell is not None and not self.has_running_program)
+        if 'quote-urls-at-prompt' in opts.paste_actions and at_prompt:
             if is_uri_list:
                 import shlex
 
                 urls = text.splitlines(keepends=False)
-                text = ' '.join(map(shlex.quote, urls))
+                quote: Callable[[str], str] = shlex.quote if windows_shell is None else partial(quote_path_for_windows_shell, shell=windows_shell)
+                text = ' '.join(map(quote, urls))
             else:
                 prefixes = '|'.join(opts.url_prefixes)
                 m = re.match(f'({prefixes}):(.+)', text)
@@ -2348,8 +2354,12 @@ class Window:
     def on_drop(self, drop: dict[str, bytes]) -> None:
         text = ''
         is_uri_list = False
+        windows_shell = None
         if uri_list := drop.pop('text/uri-list', b''):
             urls = parse_uri_list(uri_list.decode('utf-8', 'replace'))
+            if is_windows:
+                windows_shell = self.windows_shell_kind()
+                urls = (windows_path_for_shell(u, windows_shell) for u in urls)
             text = '\n'.join(urls)
             is_uri_list = True
         elif tp := drop.pop('text/plain', b''):
@@ -2357,7 +2367,25 @@ class Window:
         elif tp := drop.pop('text/plain;charset=utf-8', b''):
             text = tp.decode('utf-8', 'replace')
         if text:
-            self.paste_with_actions(text, from_drop=True, is_uri_list=is_uri_list)
+            self.paste_with_actions(text, from_drop=True, is_uri_list=is_uri_list, windows_shell=windows_shell)
+
+    def windows_shell_kind(self) -> str:
+        # Follow the processes started from the child downwards, such as wsl
+        # or Git Bash started from PowerShell, see utils.windows_shell_kind()
+        from .child import abspath_of_exe, process_group_map
+
+        exes: list[str] = []
+        with suppress(Exception):
+            children = process_group_map()
+            pid, seen = self.child.pid, set()
+            while pid is not None and pid not in seen and len(seen) < 32:
+                seen.add(pid)
+                with suppress(Exception):
+                    exes.append(abspath_of_exe(pid))
+                kids = children.get(pid)
+                # the newest child is most likely the one in the foreground, as in Child.get_pid_for_cwd()
+                pid = max(kids) if kids else None
+        return windows_shell_kind(exes)
 
     # Serialization {{{
     def as_dict(

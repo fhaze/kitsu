@@ -1039,7 +1039,77 @@ def parse_uri_list(text: str) -> Generator[str, None, None]:
             yield line
             continue
         if purl.path:
-            yield unquote(purl.path)
+            yield windows_path_from_file_url(purl.netloc, unquote(purl.path)) if is_windows else unquote(purl.path)
+
+
+def windows_path_from_file_url(netloc: str, path: str) -> str:
+    # file:///C:/x is C:\x and file://server/share/x or file:////server/share/x is \\server\share\x
+    if netloc and netloc.lower() != 'localhost':
+        path = '//' + netloc + path
+    elif re.match(r'/[A-Za-z][:|]', path):
+        path = f'{path[1]}:{path[3:] or "/"}'
+    elif path.startswith('//'):
+        path = '//' + path.lstrip('/')
+    return path.replace('/', '\\')
+
+
+# The shells and programs a path dropped onto a window is meant for, see windows_shell_kind()
+WINDOWS_POSIX_SHELLS = frozenset(('sh', 'bash', 'zsh', 'fish', 'dash', 'ksh', 'mksh', 'yash', 'tcsh', 'csh'))
+
+
+def windows_shell_kind(exes: Iterable[str]) -> str:
+    """
+    The kind of shell paths should be written for, from the executables of
+    the processes running in a window, starting with its child. One of wsl,
+    msys (MSYS2, Git Bash, Cygwin), powershell, cmd, posix (ssh) or empty if
+    unknown.
+    """
+    ans = ''
+    for exe in exes:
+        name = ntpath.splitext(ntpath.basename(exe))[0].lower()
+        if name == 'wsl' or (name == 'bash' and ntpath.basename(ntpath.dirname(exe)).lower() in ('system32', 'sysnative')):
+            return 'wsl'  # the Linux processes started by it are not visible here
+        if name == 'ssh':
+            return 'posix'
+        if name in ('pwsh', 'powershell'):
+            ans = 'powershell'
+        elif name == 'cmd':
+            ans = 'cmd'
+        elif name in WINDOWS_POSIX_SHELLS:
+            ans = 'msys'
+    return ans
+
+
+def windows_path_for_shell(path: str, shell: str) -> str:
+    "Convert a Windows path to the form the specified kind of shell uses, other text is returned unchanged"
+    m = re.match(r'([A-Za-z]):(?:\\|$)(.*)', path, re.DOTALL)
+    unc = path.startswith('\\\\')
+    if not m and not unc:
+        return path
+    if shell == 'wsl':
+        if m is not None:
+            return f'/mnt/{m.group(1).lower()}/' + m.group(2).replace('\\', '/')
+        if (w := re.match(r'\\\\(?:wsl\$|wsl\.localhost)\\[^\\]+(.*)', path, re.IGNORECASE)) is not None:
+            return w.group(1).replace('\\', '/') or '/'
+        return path.replace('\\', '/')
+    if shell == 'msys':
+        # Mixed paths such as C:/x work in MSYS2, Git Bash and Cygwin and for native programs started from them
+        return path.replace('\\', '/')
+    return path
+
+
+def quote_path_for_windows_shell(path: str, shell: str) -> str:
+    if shell == 'powershell':
+        if re.fullmatch(r'[\w\-.:\\/]+', path):
+            return path
+        # PowerShell treats the typographic single quotes as quotes as well
+        return "'" + re.sub("(['\u2018\u2019\u201a\u201b])", r'\1\1', path) + "'"
+    if shell in ('', 'cmd'):
+        # Double quotes work in cmd.exe and PowerShell. Paths cannot contain double quotes.
+        return f'"{path}"' if re.search(r'[\s&()\[\]{}^=;!\'+,`~%$@#]', path) else path
+    import shlex
+
+    return shlex.quote(path)
 
 
 def edit_config_file() -> None:
