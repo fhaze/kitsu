@@ -59,13 +59,18 @@ load_conpty_api(void) {
     conpty_api.create = CreatePseudoConsole;
     conpty_api.resize = ResizePseudoConsole;
     conpty_api.close = ClosePseudoConsole;
-    wchar_t path[MAX_PATH + 64];
-    DWORD n = GetModuleFileNameW(NULL, path, MAX_PATH);
-    if (!n || n >= MAX_PATH) return;
-    wchar_t *slash = wcsrchr(path, L'\\');
-    if (!slash) return;
-    wcscpy(slash + 1, L"conpty.dll");
-    HMODULE m = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    // install directories can be longer than MAX_PATH
+    const DWORD sz = 32768;
+    wchar_t *path = malloc(sizeof(wchar_t) * (sz + 16));
+    if (!path) return;
+    DWORD n = GetModuleFileNameW(NULL, path, sz);
+    wchar_t *slash = n && n < sz ? wcsrchr(path, L'\\') : NULL;
+    HMODULE m = NULL;
+    if (slash) {
+        wcscpy(slash + 1, L"conpty.dll");
+        m = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    }
+    free(path);
     if (!m) return;
     create_pseudo_console_func c = NULL;
     resize_pseudo_console_func r = NULL;

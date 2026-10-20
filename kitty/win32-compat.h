@@ -21,16 +21,28 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <wchar.h>
+#include <limits.h>
 #include <locale.h>
 #include <unistd.h>
 #include <signal.h>
 #include <io.h>
 #include <direct.h>
+#include <dirent.h>
 #include <malloc.h>
 
-#ifndef PATH_MAX
-#define PATH_MAX 260
-#endif
+// struct stat and off_t are passed between this layer and its callers, so
+// they must agree on the layout. pyconfig.h sets this, so everything is built
+// with it on Windows rather than only the translation units including Python.h
+_Static_assert(sizeof(off_t) == 8, "Build with -D_FILE_OFFSET_BITS=64 so struct stat and off_t match win32-compat.c");
+
+// MinGW defines this as MAX_PATH (260), too small for UTF-8 paths, which need
+// up to three bytes per UTF-16 unit, and for long paths. The path functions
+// below lift the MAX_PATH limit by using \\?\ paths where needed.
+#undef PATH_MAX
+#define PATH_MAX 4096
 
 #ifndef O_CLOEXEC
 #define O_CLOEXEC _O_NOINHERIT
@@ -152,14 +164,32 @@ locale_t newlocale(int category_mask, const char *locale, locale_t base);
 void freelocale(locale_t locobj);
 #define strtod_l _strtod_l
 
+// Unicode: the narrow (ANSI) Windows APIs, and the C runtime functions built on
+// them, interpret strings in the ANSI code page, which cannot represent most of
+// Unicode. Everything here takes and returns UTF-8 and uses the wide APIs.
+// These return malloc()ed strings, or NULL with errno set.
+wchar_t *kitty_win32_utf8_to_wide(const char *s);
+char *kitty_win32_wide_to_utf8(const wchar_t *s);
+// A UTF-8 path as a wide path for the W APIs. Paths too long for the Win32
+// namespace (MAX_PATH) are made absolute and given the \\?\ prefix, which lifts
+// that limit even when long paths are not enabled system wide.
+wchar_t *kitty_win32_wide_path(const char *path);
+// argc/argv in UTF-8, parsed from the wide command line. The C runtime's argv
+// is in the ANSI code page. The result is a single allocation.
+char **kitty_win32_utf8_argv(int *argc);
+
 // <stdlib.h> extensions
 int posix_memalign(void **memptr, size_t alignment, size_t size);
 #define aligned_free _aligned_free
 int setenv(const char *name, const char *value, int overwrite);
 int unsetenv(const char *name);
-// resolved_path must be NULL or at least PATH_MAX bytes
+// getenv() returning UTF-8. Like glibc, the returned strings stay valid even
+// if the variable is changed later.
+char *kitty_win32_getenv(const char *name);
+// Resolves symlinks/junctions and requires the path to exist, as on POSIX.
+// resolved_path must be NULL or at least PATH_MAX bytes.
 char *realpath(const char *path, char *resolved_path);
-// GetModuleFileName() with backslashes converted to forward slashes
+// GetModuleFileName() as UTF-8 with backslashes converted to forward slashes
 bool win32_exe_path(char *buf, size_t buf_sz);
 // Re-runs the current executable with the specified argv as a detached process
 // (no console, own process group), returns false on failure.
@@ -202,16 +232,33 @@ size_t kitty_win32_num_logged_in_users(void);
 // Called before a socket based fd is closed by close()
 extern void (*kitty_win32_on_fd_close)(int fd);
 
-// <sys/stat.h> extensions
-#define mkdir(path, mode) _mkdir(path)
+// <sys/stat.h>, <stdio.h> and <unistd.h> with UTF-8 paths
+int kitty_win32_stat(const char *path, struct stat *st);
 int kitty_win32_lstat(const char *path, struct stat *st);
 #define lstat kitty_win32_lstat
+int kitty_win32_mkdir(const char *path);
+int kitty_win32_access(const char *path, int mode);
+int kitty_win32_unlink(const char *path);
+char *kitty_win32_getcwd(char *buf, size_t size);
+FILE *kitty_win32_fopen(const char *path, const char *mode);
+// Maps a whole file read-only into memory (for FreeType, which opens files with
+// the narrow fopen()), returns NULL with errno set on failure
+void *kitty_win32_map_file(const char *path, size_t *size);
+void kitty_win32_unmap_file(void *addr);
 
-// <dirent.h>: MinGW dirent has no d_type
+// <dirent.h> with UTF-8 names: MinGW dirent has no d_type
 #define DT_UNKNOWN 0
 #define DT_DIR 4
 #define DT_REG 8
 #define DT_LNK 10
+typedef struct kitty_win32_DIR kitty_win32_DIR;
+struct kitty_win32_dirent {
+    // a NAME_MAX (255) UTF-16 unit name is at most 765 bytes of UTF-8
+    char d_name[1024];
+};
+kitty_win32_DIR *kitty_win32_opendir(const char *path);
+struct kitty_win32_dirent *kitty_win32_readdir(kitty_win32_DIR *dir);
+int kitty_win32_closedir(kitty_win32_DIR *dir);
 
 // <sys/socket.h>: sockets are wrapped in CRT file descriptors so they can be
 // used interchangeably with the fds returned by pipe2() and open().
@@ -263,6 +310,18 @@ int kitty_win32_open(const char *path, int flags, ...);
 #define write(fd, buf, count) kitty_win32_write(fd, buf, count)
 #define close(fd) kitty_win32_close(fd)
 #define open(...) kitty_win32_open(__VA_ARGS__)
+#define stat(path, st) kitty_win32_stat(path, st)
+#define mkdir(path, mode) kitty_win32_mkdir(path)
+#define access(path, mode) kitty_win32_access(path, mode)
+#define unlink(path) kitty_win32_unlink(path)
+#define getcwd(buf, size) kitty_win32_getcwd(buf, size)
+#define fopen(path, mode) kitty_win32_fopen(path, mode)
+#define getenv(name) kitty_win32_getenv(name)
+#define DIR kitty_win32_DIR
+#define dirent kitty_win32_dirent
+#define opendir(path) kitty_win32_opendir(path)
+#define readdir(dir) kitty_win32_readdir(dir)
+#define closedir(dir) kitty_win32_closedir(dir)
 #define recv(fd, buf, len, flags) kitty_win32_recv(fd, buf, len, flags)
 #define send(fd, buf, len, flags) kitty_win32_send(fd, buf, len, flags)
 #define accept(fd, addr, addrlen) kitty_win32_accept(fd, addr, addrlen)

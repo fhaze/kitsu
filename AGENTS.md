@@ -35,3 +35,19 @@ Use the helper script instead of invoking anything by hand:
   `kitty.exe +runpy "import ssl, sqlite3, kitty.fast_data_types"`.
 - Build deps are cached in `~/build-deps` by default (override with
   `KITTY_BUILD_DEPS`).
+
+### Unicode and long paths
+
+The narrow (ANSI) Windows APIs and the C runtime functions built on them use the
+ANSI code page, so C code must not pass paths or strings to them directly. Use the
+UTF-8 wrappers in `kitty/win32-compat.h` (`win32-compat.h` redirects `fopen`, `stat`,
+`getenv`, `opendir`, ... to them), which call the W APIs and add `\\?\` to paths
+longer than `MAX_PATH`. The executables embed `kitty/launcher/windows-app.manifest`
+(UTF-8 active code page, long path aware), which third party libraries such as
+fontconfig rely on. Tests, run against a built package:
+
+```sh
+gcc -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -Ikitty windows/test_win32_compat.c kitty/win32-compat.c \
+    -o build/test-win32-compat.exe -lws2_32 -lbcrypt -ladvapi32 -lwtsapi32 -lshell32 && ./build/test-win32-compat.exe
+python windows/test_unicode_paths.py windows-package/kitsu
+```

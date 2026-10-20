@@ -114,6 +114,39 @@ freetype_library(void) {
     return library;
 }
 
+#ifdef _WIN32
+static void
+close_mapped_stream(FT_Stream stream) {
+    kitty_win32_unmap_file(stream->base);
+    free(stream);
+}
+#endif
+
+static FT_Error
+new_face(const char *path, FT_Long index, FT_Face *face) {
+#ifdef _WIN32
+    // FreeType opens files with fopen(), which interprets the path in the ANSI
+    // code page, so map the file using its UTF-8 path and hand FreeType a
+    // memory based stream, as its own mmap() based implementation does
+    size_t sz = 0;
+    void *addr = kitty_win32_map_file(path, &sz);
+    if (!addr) return FT_Err_Cannot_Open_Resource;
+    FT_Stream stream = sz <= ULONG_MAX ? calloc(1, sizeof(FT_StreamRec)) : NULL;
+    if (!stream) {
+        kitty_win32_unmap_file(addr);
+        return sz <= ULONG_MAX ? FT_Err_Out_Of_Memory : FT_Err_Cannot_Open_Resource;
+    }
+    stream->base = addr;
+    stream->size = (unsigned long)sz;
+    // called by FreeType when the face is freed or if opening it fails
+    stream->close = close_mapped_stream;
+    FT_Open_Args args = {.flags = FT_OPEN_STREAM, .stream = stream};
+    return FT_Open_Face(library, &args, index, face);
+#else
+    return FT_New_Face(library, path, index, face);
+#endif
+}
+
 static int
 font_units_to_pixels_y(Face *self, int x) {
     return (int)ceil((double)FT_MulFix(x, self->face->size->metrics.y_scale) / 64.0);
@@ -391,7 +424,7 @@ face_from_descriptor(PyObject *descriptor, FONTS_DATA_HANDLE fg) {
     Face *self = (Face *)retval;
     if (retval != NULL) {
         int error;
-        if ((error = FT_New_Face(library, path, index, &(self->face)))) {
+        if ((error = new_face(path, index, &(self->face)))) {
             self->face = NULL;
             return set_load_error(path, error);
         }
@@ -470,7 +503,7 @@ FT_Face
 native_face_from_path(const char *path, int index) {
     int error;
     FT_Face ans;
-    error = FT_New_Face(library, path, index, &ans);
+    error = new_face(path, index, &ans);
     if (error) return set_load_error(path, error);
     return ans;
 }
@@ -480,7 +513,7 @@ face_from_path(const char *path, int index, FONTS_DATA_HANDLE fg) {
     Face *ans = (Face *)Face_Type.tp_alloc(&Face_Type, 0);
     if (ans == NULL) return NULL;
     int error;
-    error = FT_New_Face(library, path, index, &ans->face);
+    error = new_face(path, index, &ans->face);
     if (error) {
         ans->face = NULL;
         return set_load_error(path, error);
@@ -918,7 +951,7 @@ ensure_cairo_resources(Face *self, size_t width, size_t height) {
     if (!self->cairo.font) {
         const char *path = PyUnicode_AsUTF8(self->path);
         int error;
-        if ((error = FT_New_Face(library, path, self->index, &self->face_for_cairo))) {
+        if ((error = new_face(path, self->index, &self->face_for_cairo))) {
             self->face_for_cairo = NULL;
             return set_load_error(path, error);
         }

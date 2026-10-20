@@ -204,7 +204,7 @@ run_embedded(RunData *run_data) {
     if (PyStatus_Exception(status)) goto fail;
 #ifdef SET_PYTHON_HOME
 #ifndef __APPLE__
-    char pyhome[256];
+    char pyhome[PATH_MAX + 1];
     safe_snprintf(pyhome, sizeof(pyhome), "%s/%s", run_data->lib_dir, SET_PYTHON_HOME);
     status = PyConfig_SetBytesString(&config, &config.home, pyhome);
     if (PyStatus_Exception(status)) goto fail;
@@ -622,6 +622,12 @@ output_test_data(RunData *rd) {
 
 int
 main(int argc_, char *argv_[], char *envp[]) {
+#ifdef _WIN32
+    // The C runtime's argv is in the ANSI code page, which cannot represent
+    // most of Unicode, while everything here and Python expect UTF-8, so
+    // parse the wide command line instead. Lives as long as the process.
+    argv_ = kitty_win32_utf8_argv(&argc_);
+#endif
     if (argc_ < 1 || !argv_) {
         fprintf(stderr, "Invalid argc/argv\n");
         return 1;

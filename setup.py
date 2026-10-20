@@ -672,6 +672,9 @@ def init_env(
         # UCRT provides C99 compliant printf and friends when this is defined.
         # Also target Windows 10+ so ConPTY and friends are available.
         cppflags += ['-D__USE_MINGW_ANSI_STDIO=1', '-D_WIN32_WINNT=0x0A00', '-DWINVER=0x0A00', '-DUNICODE', '-D_UNICODE', '-DBASE64_STATIC_DEFINE']
+        # As set by pyconfig.h, so that struct stat and off_t are the same in
+        # every translation unit, see win32-compat.h
+        cppflags.append('-D_FILE_OFFSET_BITS=64')
         # kitty relies on GCC bitfield packing for its many bitfield unions with static_assert()ed sizes
         cflags_ += ' -mno-ms-bitfields'
     cflags = shlex.split(cflags_) + shlex.split(sysconfig.get_config_var('CCSHARED') or '')
@@ -1547,6 +1550,29 @@ def go_cmd() -> list[str]:
     return []
 
 
+# The application manifest embedded in the Windows executables, see windows-app.manifest
+WINDOWS_MANIFEST_SOURCES = ('kitty/launcher/windows-manifest.rc', 'kitty/launcher/windows-app.manifest')
+
+
+def build_kitten_manifest_resource(args: Options, go: list[str]) -> None:
+    # go build links the .syso objects in the package directory, the
+    # _windows_<arch> suffix keeps it out of builds for other platforms
+    if args.building_arch:
+        goarch = {'x86_64': 'amd64', 'arm64': 'arm64'}[args.building_arch]
+    else:
+        goarch = subprocess.check_output(go + ['env', 'GOARCH']).decode().strip()
+    dest = os.path.join('tools', 'cmd', f'kitten_windows_{goarch}.syso')
+    if not newer(dest, *WINDOWS_MANIFEST_SOURCES):
+        return
+    windres = shutil.which('windres')
+    if windres is None:
+        raise SystemExit('The command windres was not found. Install the MinGW-w64 binutils package.')
+    cmd = [windres, '--input-format=rc', '--output-format=coff', '--include-dir=.']
+    if goarch == 'amd64':
+        cmd.append('--target=pe-x86-64')
+    subprocess.check_call(cmd + [WINDOWS_MANIFEST_SOURCES[0], dest])
+
+
 def build_static_kittens(
     args: Options, launcher_dir: str, destination_dir: str = '', for_freeze: bool = False, for_platform: Optional[Tuple[str, str]] = None
 ) -> str:
@@ -1570,6 +1596,8 @@ def build_static_kittens(
     if args.skip_building_kitten:
         print('Skipping building of the kitten binary because of a command line option. Build is incomplete', file=sys.stderr)
         return ''
+    if is_windows and not for_platform:
+        build_kitten_manifest_resource(args, go)
     cmd = go + ['build', '-v']
     vcs_rev = args.vcs_rev or get_vcs_rev()
     ld_flags: List[str] = []
@@ -1729,6 +1757,7 @@ def build_launcher(args: Options, launcher_dir: str = '.', bundle_type: str = 's
     launcher_sources = ['kitty/launcher/main.c', 'kitty/launcher/single-instance.c', 'kitty/launcher/cmdline.c']
     if is_windows:
         launcher_sources.append('kitty/win32-compat.c')
+        cppflags.append('-D_FILE_OFFSET_BITS=64')
     for src in launcher_sources:
         obj = os.path.join(build_dir, src.replace('/', '-').replace('.c', '.o'))
         objects.append(obj)
@@ -1758,7 +1787,7 @@ def build_launcher(args: Options, launcher_dir: str = '.', bundle_type: str = 's
         args.compilation_database.add_command(
             f'Compiling {emphasis(resource_src)} ...',
             cmd,
-            partial(newer, resource_obj, resource_src, resource_icon),
+            partial(newer, resource_obj, resource_src, resource_icon, *WINDOWS_MANIFEST_SOURCES),
             key=CompileKey(resource_src, os.path.basename(resource_obj)),
             keyfile=resource_src,
         )
@@ -1767,7 +1796,7 @@ def build_launcher(args: Options, launcher_dir: str = '.', bundle_type: str = 's
     link_targets.append(os.path.abspath(dest))
     desc = f'Linking {emphasis("launcher")} ...'
     if is_windows:
-        libs += ['-lws2_32', '-lshlwapi', '-lbcrypt', '-ladvapi32', '-lwtsapi32']
+        libs += ['-lws2_32', '-lshlwapi', '-lbcrypt', '-ladvapi32', '-lwtsapi32', '-lshell32']
         # GUI subsystem, otherwise Windows opens a console host (conhost or
         # Windows Terminal) for kitty.exe when it is not started from a shell
         ldflags.append('-mwindows')

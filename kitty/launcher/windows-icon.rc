@@ -4,6 +4,8 @@
 
 GLFW_ICON ICON "logo/kitsu.ico"
 
+#include "kitty/launcher/windows-manifest.rc"
+
 1 VERSIONINFO
 FILEVERSION KITTY_FILE_VERSION
 PRODUCTVERSION KITTY_FILE_VERSION
