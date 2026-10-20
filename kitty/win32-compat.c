@@ -15,10 +15,12 @@
 #include <winsock2.h>
 #undef pollfd
 #include <windows.h>
+#include <shellapi.h>
 #include <winioctl.h>
 #include <aclapi.h>
 #include <wtsapi32.h>
 #include <bcrypt.h>
+#include <corecrt_startup.h>
 #include <direct.h>
 #include <stdio.h>
 #include <string.h>
@@ -34,16 +36,268 @@ set_errno_from_last_error(void) {
     switch (GetLastError()) {
         case ERROR_FILE_NOT_FOUND:
         case ERROR_PATH_NOT_FOUND:
+        case ERROR_INVALID_NAME:
+        case ERROR_INVALID_DRIVE:
+        case ERROR_BAD_NETPATH:
+        case ERROR_BAD_NET_NAME:
         case ERROR_MOD_NOT_FOUND: errno = ENOENT; break;
-        case ERROR_ACCESS_DENIED: errno = EACCES; break;
+        case ERROR_ACCESS_DENIED:
+        case ERROR_SHARING_VIOLATION:
+        case ERROR_LOCK_VIOLATION: errno = EACCES; break;
+        case ERROR_PRIVILEGE_NOT_HELD: errno = EPERM; break;
         case ERROR_NOT_ENOUGH_MEMORY:
         case ERROR_OUTOFMEMORY: errno = ENOMEM; break;
         case ERROR_INVALID_HANDLE: errno = EBADF; break;
         case ERROR_ALREADY_EXISTS:
         case ERROR_FILE_EXISTS: errno = EEXIST; break;
+        case ERROR_DIRECTORY: errno = ENOTDIR; break;
+        case ERROR_DIR_NOT_EMPTY: errno = ENOTEMPTY; break;
+        case ERROR_FILENAME_EXCED_RANGE: errno = ENAMETOOLONG; break;
+        case ERROR_CANT_RESOLVE_FILENAME: errno = ELOOP; break;
+        case ERROR_NO_UNICODE_TRANSLATION: errno = EILSEQ; break;
+        case ERROR_DISK_FULL: errno = ENOSPC; break;
         default: errno = EINVAL; break;
     }
 }
+
+static void
+free_keep_errno(void *p) {
+    int saved = errno;
+    free(p);
+    errno = saved;
+}
+
+// Unicode and long paths {{{
+wchar_t *
+kitty_win32_utf8_to_wide(const char *s) {
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, NULL, 0);
+    if (n <= 0) {
+        set_errno_from_last_error();
+        return NULL;
+    }
+    wchar_t *ans = malloc(sizeof(wchar_t) * n);
+    if (!ans) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, ans, n);
+    return ans;
+}
+
+char *
+kitty_win32_wide_to_utf8(const wchar_t *s) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, s, -1, NULL, 0, NULL, NULL);
+    if (n <= 0) {
+        set_errno_from_last_error();
+        return NULL;
+    }
+    char *ans = malloc(n);
+    if (!ans) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    WideCharToMultiByte(CP_UTF8, 0, s, -1, ans, n, NULL, NULL);
+    return ans;
+}
+
+// Concatenation of up to three wide strings, NULL ones are skipped
+static wchar_t *
+join_wide(const wchar_t *a, const wchar_t *b, const wchar_t *c) {
+    const size_t la = a ? wcslen(a) : 0, lb = b ? wcslen(b) : 0, lc = c ? wcslen(c) : 0;
+    wchar_t *ans = malloc(sizeof(wchar_t) * (la + lb + lc + 1));
+    if (!ans) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    if (la) memcpy(ans, a, la * sizeof(wchar_t));
+    if (lb) memcpy(ans + la, b, lb * sizeof(wchar_t));
+    if (lc) memcpy(ans + la + lb, c, lc * sizeof(wchar_t));
+    ans[la + lb + lc] = 0;
+    return ans;
+}
+
+// \\?\ and \\.\ paths bypass Win32 path normalization and length limits
+static bool
+is_namespaced_path(const wchar_t *p) {
+    return p[0] == L'\\' && p[1] == L'\\' && (p[2] == L'?' || p[2] == L'.') && p[3] == L'\\';
+}
+
+static bool
+is_absolute_wide_path(const wchar_t *p) {
+#define sep(c) ((c) == L'\\' || (c) == L'/')
+    return (p[0] && p[1] == L':' && sep(p[2])) || (sep(p[0]) && sep(p[1]));
+#undef sep
+}
+
+// Without the \\?\ prefix paths are limited to MAX_PATH, less 12 (room for an
+// 8.3 name) for CreateDirectoryW(), unless long paths are enabled system wide
+#define WIN32_PATH_LIMIT (MAX_PATH - 12)
+
+// Takes ownership of p and returns it, or, if it is too long for the Win32
+// namespace, its absolute, normalized form with the \\?\ prefix
+static wchar_t *
+extend_path(wchar_t *p) {
+    if (!p || is_namespaced_path(p) || (is_absolute_wide_path(p) && wcslen(p) < WIN32_PATH_LIMIT)) return p;
+    DWORD n = GetFullPathNameW(p, 0, NULL, NULL);
+    if (!n) {
+        set_errno_from_last_error();
+        free(p);
+        return NULL;
+    }
+    // room for \\?\UNC\ in place of the leading \\ of a UNC path
+    wchar_t *full = malloc(sizeof(wchar_t) * (n + 8));
+    if (!full) {
+        errno = ENOMEM;
+        free(p);
+        return NULL;
+    }
+    wchar_t *dest = full + 8;
+    DWORD m = GetFullPathNameW(p, n, dest, NULL);
+    if (!m || m >= n) {
+        if (m) errno = ENAMETOOLONG; // the cwd changed between the calls
+        else set_errno_from_last_error();
+        free(p);
+        free(full);
+        return NULL;
+    }
+    // Short relative paths stay as they are
+    if (m < WIN32_PATH_LIMIT || is_namespaced_path(dest)) {
+        free(full);
+        return p;
+    }
+    free(p);
+    if (dest[0] == L'\\' && dest[1] == L'\\') {
+        dest -= 6; // \\server\share -> \\?\UNC\server\share
+        memcpy(dest, L"\\\\?\\UNC", 7 * sizeof(wchar_t));
+    } else {
+        dest -= 4;
+        memcpy(dest, L"\\\\?\\", 4 * sizeof(wchar_t));
+    }
+    memmove(full, dest, (wcslen(dest) + 1) * sizeof(wchar_t));
+    return full;
+}
+
+wchar_t *
+kitty_win32_wide_path(const char *path) {
+    return extend_path(kitty_win32_utf8_to_wide(path));
+}
+
+// Removes the \\?\ prefix added by GetFinalPathNameByHandleW() where the path
+// can be expressed without it, \\?\Volume{...}\ paths keep it.
+static void
+strip_long_path_prefix(wchar_t *p) {
+    if (wcsncmp(p, L"\\\\?\\UNC\\", 8) == 0) memmove(p + 2, p + 8, (wcslen(p + 8) + 1) * sizeof(wchar_t)); // -> \\server\share
+    else if (wcsncmp(p, L"\\\\?\\", 4) == 0 && p[4] && p[5] == L':') memmove(p, p + 4, (wcslen(p + 4) + 1) * sizeof(wchar_t));
+}
+
+// The final (symlinks resolved) path of an open file or directory
+static wchar_t *
+final_path_of_handle(HANDLE h) {
+    DWORD n = GetFinalPathNameByHandleW(h, NULL, 0, FILE_NAME_NORMALIZED);
+    if (!n) {
+        set_errno_from_last_error();
+        return NULL;
+    }
+    wchar_t *ans = malloc(sizeof(wchar_t) * n);
+    if (!ans) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    DWORD m = GetFinalPathNameByHandleW(h, ans, n, FILE_NAME_NORMALIZED);
+    if (!m || m >= n) {
+        if (m) errno = ENAMETOOLONG;
+        else set_errno_from_last_error();
+        free(ans);
+        return NULL;
+    }
+    strip_long_path_prefix(ans);
+    return ans;
+}
+
+// GetModuleFileNameW() of any length
+static wchar_t *
+module_file_name(HMODULE module) {
+    for (DWORD sz = 512; sz <= 32768; sz *= 2) {
+        wchar_t *buf = malloc(sizeof(wchar_t) * sz);
+        if (!buf) {
+            errno = ENOMEM;
+            return NULL;
+        }
+        DWORD n = GetModuleFileNameW(module, buf, sz);
+        if (n && n < sz) return buf;
+        free(buf);
+        if (!n) {
+            set_errno_from_last_error();
+            return NULL;
+        }
+    }
+    errno = ENAMETOOLONG;
+    return NULL;
+}
+
+// GetTempPathW(), which ends with a backslash
+static wchar_t *
+temp_dir(void) {
+    DWORD n = GetTempPathW(0, NULL);
+    wchar_t *ans = n ? malloc(sizeof(wchar_t) * n) : NULL;
+    if (!ans) {
+        if (n) errno = ENOMEM;
+        else set_errno_from_last_error();
+        return NULL;
+    }
+    DWORD m = GetTempPathW(n, ans);
+    if (!m || m >= n) {
+        if (m) errno = ENAMETOOLONG;
+        else set_errno_from_last_error();
+        free(ans);
+        return NULL;
+    }
+    return ans;
+}
+
+char **
+kitty_win32_utf8_argv(int *argc) {
+    // Split the wide command line with the C runtime's rules, not those of
+    // CommandLineToArgvW(), so that arguments are the same as in the narrow
+    // argv, only not lossy. The two differ for "" inside double quotes: the C
+    // runtime reads a literal " and stays inside the quotes, which the quoting
+    // for batch files in kitty_win32_append_batch_arg() relies on, as do
+    // other programs that pass arguments through batch files.
+    errno_t err = _configure_wide_argv(_crt_argv_unexpanded_arguments);
+    if (err) {
+        errno = err;
+        return NULL;
+    }
+    const int n = __argc;
+    wchar_t **wargv = __wargv;
+    if (!wargv) {
+        errno = EINVAL;
+        return NULL;
+    }
+    size_t total = sizeof(char *) * (n + 1);
+    for (int i = 0; i < n; i++) {
+        int len = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, NULL, 0, NULL, NULL);
+        if (len <= 0) {
+            set_errno_from_last_error();
+            return NULL;
+        }
+        total += len;
+    }
+    char **ans = malloc(total);
+    if (!ans) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    char *p = (char *)(ans + n + 1), *end = (char *)ans + total;
+    for (int i = 0; i < n; i++) {
+        ans[i] = p;
+        p += WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, p, (int)(end - p), NULL, NULL);
+    }
+    ans[n] = NULL;
+    *argc = n;
+    return ans;
+}
+// }}}
 
 // poll {{{
 int
@@ -211,48 +465,39 @@ munlock(const void *addr, size_t len) {
 
 // Shared memory objects are emulated as files in a per-user directory, which
 // allows them to be accessed by name from other processes (kitten, ssh, etc).
-static bool
-shm_path(const char *name, char *buf, size_t bufsz) {
+static wchar_t *
+shm_path(const char *name) {
     while (*name == '/') name++;
     if (!*name || strchr(name, '/') || strchr(name, '\\')) {
         errno = EINVAL;
-        return false;
+        return NULL;
     }
-    char tmp[MAX_PATH];
-    DWORD n = GetTempPathA(sizeof(tmp), tmp);
-    if (!n || n >= sizeof(tmp)) {
-        errno = ENOENT;
-        return false;
-    }
-    int written = snprintf(buf, bufsz, "%skitty-shm", tmp);
-    if (written < 0 || (size_t)written >= bufsz) {
-        errno = ENAMETOOLONG;
-        return false;
-    }
-    _mkdir(buf);
-    written = snprintf(buf, bufsz, "%skitty-shm\\%s", tmp, name);
-    if (written < 0 || (size_t)written >= bufsz) {
-        errno = ENAMETOOLONG;
-        return false;
-    }
-    return true;
+    wchar_t *wname = NULL, *tmp = NULL, *dir = NULL, *ans = NULL;
+    if (!(wname = kitty_win32_utf8_to_wide(name)) || !(tmp = temp_dir())) goto end;
+    if (!(dir = extend_path(join_wide(tmp, L"kitty-shm", NULL)))) goto end;
+    CreateDirectoryW(dir, NULL);
+    ans = extend_path(join_wide(tmp, L"kitty-shm\\", wname));
+end:
+    free_keep_errno(wname);
+    free_keep_errno(tmp);
+    free_keep_errno(dir);
+    return ans;
 }
 
 // Opened with FILE_SHARE_DELETE so that a mapped object can be unlinked by its
 // creator while other processes still have it open, as with POSIX shm
 int
 shm_open(const char *name, int oflag, mode_t mode UNUSED) {
-    char path[MAX_PATH];
-    if (!shm_path(name, path, sizeof(path))) return -1;
+    wchar_t *path = shm_path(name);
+    if (!path) return -1;
     DWORD access = GENERIC_READ, disposition = OPEN_EXISTING;
     if (oflag & (O_WRONLY | O_RDWR)) access |= GENERIC_WRITE;
     if (oflag & O_CREAT) disposition = (oflag & O_EXCL) ? CREATE_NEW : (oflag & O_TRUNC) ? CREATE_ALWAYS : OPEN_ALWAYS;
     else if (oflag & O_TRUNC) disposition = TRUNCATE_EXISTING;
-    HANDLE h = CreateFileA(path, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, disposition, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) {
-        set_errno_from_last_error();
-        return -1;
-    }
+    HANDLE h = CreateFileW(path, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, disposition, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) set_errno_from_last_error();
+    free_keep_errno(path);
+    if (h == INVALID_HANDLE_VALUE) return -1;
     int fd = _open_osfhandle((intptr_t)h, _O_BINARY | _O_NOINHERIT | ((oflag & (O_WRONLY | O_RDWR)) ? _O_RDWR : _O_RDONLY));
     if (fd < 0) {
         CloseHandle(h);
@@ -261,10 +506,9 @@ shm_open(const char *name, int oflag, mode_t mode UNUSED) {
     return fd;
 }
 
-// Remove the name immediately even if the file is still open elsewhere
-int
-kitty_win32_unlink_posix(const char *path) {
-    HANDLE h = CreateFileA(path, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+static int
+unlink_posix(const wchar_t *path) {
+    HANDLE h = CreateFileW(path, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
     if (h == INVALID_HANDLE_VALUE) {
         set_errno_from_last_error();
         return -1;
@@ -280,11 +524,23 @@ kitty_win32_unlink_posix(const char *path) {
     return ok ? 0 : -1;
 }
 
+// Remove the name immediately even if the file is still open elsewhere
+int
+kitty_win32_unlink_posix(const char *path) {
+    wchar_t *wpath = kitty_win32_wide_path(path);
+    if (!wpath) return -1;
+    int ret = unlink_posix(wpath);
+    free_keep_errno(wpath);
+    return ret;
+}
+
 int
 shm_unlink(const char *name) {
-    char path[MAX_PATH];
-    if (!shm_path(name, path, sizeof(path))) return -1;
-    return kitty_win32_unlink_posix(path);
+    wchar_t *path = shm_path(name);
+    if (!path) return -1;
+    int ret = unlink_posix(path);
+    free_keep_errno(path);
+    return ret;
 }
 // }}}
 
@@ -295,8 +551,11 @@ static bool dlerror_set = false;
 static void
 set_dlerror(const char *what) {
     DWORD code = GetLastError();
+    // The narrow FormatMessageA() would return text in the ANSI code page
+    wchar_t wmsg[400] = {0};
     char msg[400] = {0};
-    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, code, 0, msg, sizeof(msg) - 1, NULL);
+    FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, code, 0, wmsg, sizeof(wmsg) / sizeof(wmsg[0]) - 1, NULL);
+    WideCharToMultiByte(CP_UTF8, 0, wmsg, -1, msg, sizeof(msg) - 1, NULL, NULL);
     size_t n = strlen(msg);
     while (n && (msg[n - 1] == '\r' || msg[n - 1] == '\n' || msg[n - 1] == ' ')) msg[--n] = 0;
     snprintf(dlerror_buf, sizeof(dlerror_buf), "%s: %s (error %lu)", what, msg, (unsigned long)code);
@@ -308,14 +567,12 @@ dlopen(const char *filename, int flags UNUSED) {
     HMODULE h;
     if (!filename) h = GetModuleHandleW(NULL);
     else {
-        int wlen = MultiByteToWideChar(CP_UTF8, 0, filename, -1, NULL, 0);
-        wchar_t *wpath = wlen > 0 ? malloc(sizeof(wchar_t) * wlen) : NULL;
+        wchar_t *wpath = kitty_win32_utf8_to_wide(filename);
         if (!wpath) {
             snprintf(dlerror_buf, sizeof(dlerror_buf), "Invalid module name: %s", filename);
             dlerror_set = true;
             return NULL;
         }
-        MultiByteToWideChar(CP_UTF8, 0, filename, -1, wpath, wlen);
         h = LoadLibraryExW(wpath, NULL, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR);
         if (!h) h = LoadLibraryW(wpath);
         free(wpath);
@@ -557,39 +814,55 @@ is_absolute_path(const char *path) {
     return path[0] == '/' || path[0] == '\\' || (path[0] && path[1] == ':');
 }
 
-// Resolves path relative to the directory open at dirfd into buf (UTF-8).
-// Returns the path to use, which is path itself when no resolution is needed.
-static const char *
-resolve_at(int dirfd, const char *path, char *buf, size_t bufsz) {
-    if (dirfd == AT_FDCWD || is_absolute_path(path)) return path;
+// Wide path for path relative to the directory open at dirfd
+static wchar_t *
+wide_path_at(int dirfd, const char *path) {
+    if (dirfd == AT_FDCWD || is_absolute_path(path)) return kitty_win32_wide_path(path);
     HANDLE h = (HANDLE)_get_osfhandle(dirfd);
     if (h == INVALID_HANDLE_VALUE) {
         errno = EBADF;
         return NULL;
     }
-    wchar_t wdir[32768];
-    DWORD n = GetFinalPathNameByHandleW(h, wdir, (DWORD)(sizeof(wdir) / sizeof(wdir[0])), FILE_NAME_NORMALIZED);
-    if (!n || n >= sizeof(wdir) / sizeof(wdir[0])) {
+    wchar_t *dir = final_path_of_handle(h), *rel = NULL, *ans = NULL;
+    if (dir && (rel = kitty_win32_utf8_to_wide(path))) ans = extend_path(join_wide(dir, L"\\", rel));
+    free_keep_errno(dir);
+    free_keep_errno(rel);
+    return ans;
+}
+
+// CRT open() can neither open directories nor refuse to follow symlinks
+static int
+open_dir_or_nofollow(const wchar_t *wpath, bool want_dir, bool nofollow) {
+    DWORD cflags = want_dir ? FILE_FLAG_BACKUP_SEMANTICS : FILE_ATTRIBUTE_NORMAL;
+    if (nofollow) cflags |= FILE_FLAG_OPEN_REPARSE_POINT;
+    HANDLE h = CreateFileW(
+        wpath, want_dir ? FILE_LIST_DIRECTORY : GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, cflags, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
         set_errno_from_last_error();
-        return NULL;
+        return -1;
     }
-    // strip the \\?\ prefix added by GetFinalPathNameByHandleW
-    const wchar_t *dir = wdir;
-    if (wcsncmp(dir, L"\\\\?\\UNC\\", 8) == 0) {
-        dir += 6;
-        wdir[6] = L'\\';
-    } else if (wcsncmp(dir, L"\\\\?\\", 4) == 0) dir += 4;
-    int len = WideCharToMultiByte(CP_UTF8, 0, dir, -1, buf, (int)bufsz, NULL, NULL);
-    if (len <= 0) {
-        errno = ENAMETOOLONG;
-        return NULL;
+    BY_HANDLE_FILE_INFORMATION info;
+    if (!GetFileInformationByHandle(h, &info)) {
+        set_errno_from_last_error();
+        CloseHandle(h);
+        return -1;
     }
-    size_t used = strlen(buf);
-    if (snprintf(buf + used, bufsz - used, "\\%s", path) >= (int)(bufsz - used)) {
-        errno = ENAMETOOLONG;
-        return NULL;
+    if (want_dir && !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+        CloseHandle(h);
+        errno = ENOTDIR;
+        return -1;
     }
-    return buf;
+    if (nofollow && (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        CloseHandle(h);
+        errno = ELOOP;
+        return -1;
+    }
+    int fd = _open_osfhandle((intptr_t)h, _O_RDONLY | _O_BINARY | _O_NOINHERIT);
+    if (fd < 0) {
+        CloseHandle(h);
+        errno = EMFILE;
+    }
+    return fd;
 }
 
 int
@@ -598,50 +871,15 @@ openat(int dirfd, const char *path, int flags, ...) {
     va_start(ap, flags);
     int mode = (flags & O_CREAT) ? va_arg(ap, int) : 0;
     va_end(ap);
-    char buf[PATH_MAX * 4];
-    const char *p = resolve_at(dirfd, path, buf, sizeof(buf));
-    if (!p) return -1;
+    wchar_t *wpath = wide_path_at(dirfd, path);
+    if (!wpath) return -1;
     const bool want_dir = flags & O_DIRECTORY, nofollow = flags & O_NOFOLLOW;
     const bool readonly = (flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND)) == 0;
-    if (want_dir || (nofollow && readonly)) {
-        // CRT open() can neither open directories nor refuse to follow symlinks
-        wchar_t wpath[32768];
-        if (!MultiByteToWideChar(CP_UTF8, 0, p, -1, wpath, (int)(sizeof(wpath) / sizeof(wpath[0])))) {
-            errno = ENAMETOOLONG;
-            return -1;
-        }
-        DWORD cflags = want_dir ? FILE_FLAG_BACKUP_SEMANTICS : FILE_ATTRIBUTE_NORMAL;
-        if (nofollow) cflags |= FILE_FLAG_OPEN_REPARSE_POINT;
-        HANDLE h = CreateFileW(
-            wpath, want_dir ? FILE_LIST_DIRECTORY : GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, cflags, NULL);
-        if (h == INVALID_HANDLE_VALUE) {
-            set_errno_from_last_error();
-            return -1;
-        }
-        BY_HANDLE_FILE_INFORMATION info;
-        if (!GetFileInformationByHandle(h, &info)) {
-            set_errno_from_last_error();
-            CloseHandle(h);
-            return -1;
-        }
-        if (want_dir && !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-            CloseHandle(h);
-            errno = ENOTDIR;
-            return -1;
-        }
-        if (nofollow && (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
-            CloseHandle(h);
-            errno = ELOOP;
-            return -1;
-        }
-        int fd = _open_osfhandle((intptr_t)h, _O_RDONLY | _O_BINARY | _O_NOINHERIT);
-        if (fd < 0) {
-            CloseHandle(h);
-            errno = EMFILE;
-        }
-        return fd;
-    }
-    return _open(p, (flags & ~KITTY_WIN32_NON_CRT_OPEN_FLAGS) | _O_BINARY, mode);
+    int fd;
+    if (want_dir || (nofollow && readonly)) fd = open_dir_or_nofollow(wpath, want_dir, nofollow);
+    else fd = _wopen(wpath, (flags & ~KITTY_WIN32_NON_CRT_OPEN_FLAGS) | _O_BINARY, mode);
+    free_keep_errno(wpath);
+    return fd;
 }
 
 int
@@ -653,33 +891,44 @@ kitty_win32_open(const char *path, int flags, ...) {
     return openat(AT_FDCWD, path, flags, mode);
 }
 
+static int
+mkdir_wide(const wchar_t *path) {
+    if (CreateDirectoryW(path, NULL)) return 0;
+    set_errno_from_last_error();
+    return -1;
+}
+
 int
 mkdirat(int dirfd, const char *path, mode_t mode UNUSED) {
-    char buf[PATH_MAX * 4];
-    const char *p = resolve_at(dirfd, path, buf, sizeof(buf));
-    if (!p) return -1;
-    return _mkdir(p);
+    wchar_t *wpath = wide_path_at(dirfd, path);
+    if (!wpath) return -1;
+    int ret = mkdir_wide(wpath);
+    free_keep_errno(wpath);
+    return ret;
+}
+
+int
+kitty_win32_mkdir(const char *path) {
+    return mkdirat(AT_FDCWD, path, 0);
 }
 
 int
 symlinkat(const char *target, int dirfd, const char *linkpath) {
-    char buf[PATH_MAX * 4];
-    const char *p = resolve_at(dirfd, linkpath, buf, sizeof(buf));
-    if (!p) return -1;
-    wchar_t wtarget[32768], wlink[32768];
-    if (!MultiByteToWideChar(CP_UTF8, 0, target, -1, wtarget, (int)(sizeof(wtarget) / sizeof(wtarget[0]))) ||
-        !MultiByteToWideChar(CP_UTF8, 0, p, -1, wlink, (int)(sizeof(wlink) / sizeof(wlink[0])))) {
-        errno = ENAMETOOLONG;
-        return -1;
+    // The target is stored as is, so relative ones must stay relative, long
+    // absolute ones need the \\?\ prefix, which readlink() removes
+    wchar_t *wtarget = kitty_win32_utf8_to_wide(target), *wlink = NULL;
+    if (wtarget && is_absolute_wide_path(wtarget)) wtarget = extend_path(wtarget);
+    int ret = -1;
+    if (wtarget && (wlink = wide_path_at(dirfd, linkpath))) {
+        DWORD attrs = GetFileAttributesW(wtarget);
+        DWORD flags = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) flags |= SYMBOLIC_LINK_FLAG_DIRECTORY;
+        if (CreateSymbolicLinkW(wlink, wtarget, flags)) ret = 0;
+        else set_errno_from_last_error();
     }
-    DWORD attrs = GetFileAttributesW(wtarget);
-    DWORD flags = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
-    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) flags |= SYMBOLIC_LINK_FLAG_DIRECTORY;
-    if (!CreateSymbolicLinkW(wlink, wtarget, flags)) {
-        set_errno_from_last_error();
-        return -1;
-    }
-    return 0;
+    free_keep_errno(wtarget);
+    free_keep_errno(wlink);
+    return ret;
 }
 
 int
@@ -732,7 +981,10 @@ mkostemp(char *template, int flags) {
             return -1;
         }
         for (int i = 0; i < 6; i++) template[len - 6 + i] = chars[rnd[i] % (sizeof(chars) - 1)];
-        int fd = _open(template, flags | _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY, _S_IREAD | _S_IWRITE);
+        wchar_t *wpath = kitty_win32_wide_path(template);
+        if (!wpath) return -1;
+        int fd = _wopen(wpath, flags | _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY, _S_IREAD | _S_IWRITE);
+        free_keep_errno(wpath);
         if (fd >= 0) return fd;
         if (errno != EEXIST) return -1;
     }
@@ -775,14 +1027,23 @@ pwrite(int fd, const void *buf, size_t count, off_t offset) {
     return positional_io(fd, (void *)buf, count, offset, true);
 }
 
-// Reads the target of a symlink, returns the number of wchars or -1
-static ssize_t
-read_symlink_target(const char *path, wchar_t *target, size_t target_sz) {
-    wchar_t wpath[32768];
-    if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, (int)(sizeof(wpath) / sizeof(wpath[0])))) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
+// REPARSE_DATA_BUFFER from ntdef.h uses an anonymous union which is
+// rejected by -pedantic
+struct symlink_reparse_buffer {
+    ULONG ReparseTag;
+    USHORT ReparseDataLength;
+    USHORT Reserved;
+    USHORT SubstituteNameOffset;
+    USHORT SubstituteNameLength;
+    USHORT PrintNameOffset;
+    USHORT PrintNameLength;
+    ULONG Flags;
+    WCHAR PathBuffer[1];
+};
+
+// Reads the target of a symlink into a new string, *len is set to its length
+static wchar_t *
+read_symlink_target(const wchar_t *wpath, size_t *len) {
     HANDLE h = CreateFileW(
         wpath,
         FILE_READ_ATTRIBUTES,
@@ -793,93 +1054,166 @@ read_symlink_target(const char *path, wchar_t *target, size_t target_sz) {
         NULL);
     if (h == INVALID_HANDLE_VALUE) {
         set_errno_from_last_error();
-        return -1;
+        return NULL;
     }
-    // REPARSE_DATA_BUFFER from ntdef.h uses an anonymous union which is
-    // rejected by -pedantic
-    struct symlink_reparse_buffer {
-        ULONG ReparseTag;
-        USHORT ReparseDataLength;
-        USHORT Reserved;
-        USHORT SubstituteNameOffset;
-        USHORT SubstituteNameLength;
-        USHORT PrintNameOffset;
-        USHORT PrintNameLength;
-        ULONG Flags;
-        WCHAR PathBuffer[1];
-    };
-    union {
-        struct symlink_reparse_buffer rdb;
-        char raw[MAXIMUM_REPARSE_DATA_BUFFER_SIZE];
-    } u;
+    struct symlink_reparse_buffer *rdb = malloc(MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
+    if (!rdb) {
+        CloseHandle(h);
+        errno = ENOMEM;
+        return NULL;
+    }
     DWORD ret = 0;
-    bool ok = DeviceIoControl(h, FSCTL_GET_REPARSE_POINT, NULL, 0, &u, sizeof(u), &ret, NULL);
+    bool ok = DeviceIoControl(h, FSCTL_GET_REPARSE_POINT, NULL, 0, rdb, MAXIMUM_REPARSE_DATA_BUFFER_SIZE, &ret, NULL);
     DWORD err = GetLastError();
     CloseHandle(h);
-    if (!ok) {
-        errno = err == ERROR_NOT_A_REPARSE_POINT ? EINVAL : EIO;
-        return -1;
-    }
-    if (u.rdb.ReparseTag != IO_REPARSE_TAG_SYMLINK) {
-        errno = EINVAL;
-        return -1;
-    }
-    const wchar_t *pb = u.rdb.PathBuffer;
-    const wchar_t *name = pb + u.rdb.PrintNameOffset / sizeof(wchar_t);
-    size_t len = u.rdb.PrintNameLength / sizeof(wchar_t);
-    if (!len) {
-        name = pb + u.rdb.SubstituteNameOffset / sizeof(wchar_t);
-        len = u.rdb.SubstituteNameLength / sizeof(wchar_t);
-        if (len >= 4 && wcsncmp(name, L"\\??\\", 4) == 0) {
-            name += 4;
-            len -= 4;
+    wchar_t *ans = NULL;
+    if (!ok) errno = err == ERROR_NOT_A_REPARSE_POINT ? EINVAL : EIO;
+    else if (rdb->ReparseTag != IO_REPARSE_TAG_SYMLINK) errno = EINVAL;
+    else {
+        const wchar_t *pb = rdb->PathBuffer;
+        const wchar_t *name = pb + rdb->PrintNameOffset / sizeof(wchar_t);
+        size_t n = rdb->PrintNameLength / sizeof(wchar_t);
+        if (!n) {
+            name = pb + rdb->SubstituteNameOffset / sizeof(wchar_t);
+            n = rdb->SubstituteNameLength / sizeof(wchar_t);
+            if (n >= 4 && wcsncmp(name, L"\\??\\", 4) == 0) {
+                name += 4;
+                n -= 4;
+            }
         }
+        if ((ans = malloc(sizeof(wchar_t) * (n + 1)))) {
+            memcpy(ans, name, n * sizeof(wchar_t));
+            ans[n] = 0;
+            strip_long_path_prefix(ans);
+            *len = wcslen(ans);
+        } else errno = ENOMEM;
     }
-    if (len >= target_sz) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    memcpy(target, name, len * sizeof(wchar_t));
-    target[len] = 0;
-    return (ssize_t)len;
+    free_keep_errno(rdb);
+    return ans;
 }
 
 ssize_t
 readlink(const char *path, char *buf, size_t bufsiz) {
-    wchar_t target[32768];
-    ssize_t len = read_symlink_target(path, target, sizeof(target) / sizeof(target[0]));
-    if (len < 0) return -1;
-    char utf8[32768 * 3];
-    int n = WideCharToMultiByte(CP_UTF8, 0, target, (int)len, utf8, (int)sizeof(utf8), NULL, NULL);
-    if (n <= 0) {
-        errno = EIO;
-        return -1;
+    wchar_t *wpath = kitty_win32_wide_path(path), *target = NULL;
+    size_t len = 0;
+    ssize_t ans = -1;
+    if (wpath && (target = read_symlink_target(wpath, &len))) {
+        int n = len ? WideCharToMultiByte(CP_UTF8, 0, target, (int)len, NULL, 0, NULL, NULL) : 0;
+        char *utf8 = n > 0 ? malloc(n) : NULL;
+        if (len && !utf8) errno = n > 0 ? ENOMEM : EIO;
+        else {
+            if (n) WideCharToMultiByte(CP_UTF8, 0, target, (int)len, utf8, n, NULL, NULL);
+            ans = (size_t)n > bufsiz ? (ssize_t)bufsiz : n;
+            if (ans) memcpy(buf, utf8, ans);
+            free(utf8);
+        }
     }
-    if ((size_t)n > bufsiz) n = (int)bufsiz;
-    memcpy(buf, utf8, (size_t)n);
-    return n;
+    free_keep_errno(wpath);
+    free_keep_errno(target);
+    return ans;
+}
+
+static time_t
+filetime_to_time_t(FILETIME ft) {
+    const uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    // 100ns intervals since 1601-01-01 to seconds since 1970-01-01
+    return (time_t)((int64_t)(t / 10000000ull) - 11644473600ll);
+}
+
+static bool
+has_executable_extension(const wchar_t *path) {
+    const wchar_t *dot = wcsrchr(path, L'.');
+    if (!dot || wcschr(dot, L'\\') || wcschr(dot, L'/')) return false;
+    return _wcsicmp(dot, L".exe") == 0 || _wcsicmp(dot, L".com") == 0 || _wcsicmp(dot, L".bat") == 0 || _wcsicmp(dot, L".cmd") == 0;
+}
+
+// stat() using the wide APIs, symlinks are followed
+static int
+stat_wide(const wchar_t *wpath, struct stat *st) {
+    BY_HANDLE_FILE_INFORMATION info = {0};
+    // FILE_FLAG_BACKUP_SEMANTICS is needed to open directories
+    HANDLE h = CreateFileW(
+        wpath, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        const DWORD type = GetFileType(h);
+        if (type == FILE_TYPE_CHAR || type == FILE_TYPE_PIPE) {
+            // devices such as NUL and CON, as reported by the C runtime
+            CloseHandle(h);
+            memset(st, 0, sizeof(*st));
+            st->st_mode = (type == FILE_TYPE_CHAR ? S_IFCHR : S_IFIFO) | 0666;
+            st->st_nlink = 1;
+            return 0;
+        }
+        bool ok = GetFileInformationByHandle(h, &info);
+        if (!ok) set_errno_from_last_error();
+        CloseHandle(h);
+        if (!ok) return -1;
+    } else {
+        // Files that cannot be opened at all, such as the page file, still have attributes
+        DWORD err = GetLastError();
+        WIN32_FILE_ATTRIBUTE_DATA fad;
+        if ((err != ERROR_SHARING_VIOLATION && err != ERROR_ACCESS_DENIED) || !GetFileAttributesExW(wpath, GetFileExInfoStandard, &fad)) {
+            SetLastError(err);
+            set_errno_from_last_error();
+            return -1;
+        }
+        info.dwFileAttributes = fad.dwFileAttributes;
+        info.ftCreationTime = fad.ftCreationTime;
+        info.ftLastAccessTime = fad.ftLastAccessTime;
+        info.ftLastWriteTime = fad.ftLastWriteTime;
+        info.nFileSizeHigh = fad.nFileSizeHigh;
+        info.nFileSizeLow = fad.nFileSizeLow;
+        info.nNumberOfLinks = 1;
+    }
+    memset(st, 0, sizeof(*st));
+    // Permissions as reported by the C runtime: the owner's copied to group and others
+    unsigned mode = S_IREAD;
+    if (!(info.dwFileAttributes & FILE_ATTRIBUTE_READONLY)) mode |= S_IWRITE;
+    if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) mode |= S_IFDIR | S_IEXEC;
+    else mode |= S_IFREG | (has_executable_extension(wpath) ? S_IEXEC : 0);
+    mode |= (mode & 0700) >> 3;
+    mode |= (mode & 0700) >> 6;
+    st->st_mode = (unsigned short)mode;
+    st->st_nlink = (short)info.nNumberOfLinks;
+    st->st_size = (off_t)(((uint64_t)info.nFileSizeHigh << 32) | info.nFileSizeLow);
+    st->st_atime = filetime_to_time_t(info.ftLastAccessTime);
+    st->st_mtime = filetime_to_time_t(info.ftLastWriteTime);
+    st->st_ctime = filetime_to_time_t(info.ftCreationTime);
+    st->st_dev = st->st_rdev = info.dwVolumeSerialNumber;
+    return 0;
+}
+
+int
+kitty_win32_stat(const char *path, struct stat *st) {
+    wchar_t *wpath = kitty_win32_wide_path(path);
+    if (!wpath) return -1;
+    int ret = stat_wide(wpath, st);
+    free_keep_errno(wpath);
+    return ret;
 }
 
 int
 kitty_win32_lstat(const char *path, struct stat *st) {
-    wchar_t wpath[32768];
-    if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, (int)(sizeof(wpath) / sizeof(wpath[0])))) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
+    wchar_t *wpath = kitty_win32_wide_path(path);
+    if (!wpath) return -1;
     WIN32_FILE_ATTRIBUTE_DATA fad;
     if (GetFileAttributesExW(wpath, GetFileExInfoStandard, &fad) && (fad.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
-        wchar_t target[32768];
-        ssize_t len = read_symlink_target(path, target, sizeof(target) / sizeof(target[0]));
-        if (len >= 0) {
+        size_t len = 0;
+        wchar_t *target = read_symlink_target(wpath, &len);
+        if (target) {
             memset(st, 0, sizeof(*st));
             st->st_mode = S_IFLNK | S_IRUSR | S_IWUSR;
             st->st_nlink = 1;
-            st->st_size = WideCharToMultiByte(CP_UTF8, 0, target, (int)len, NULL, 0, NULL, NULL);
+            st->st_size = len ? WideCharToMultiByte(CP_UTF8, 0, target, (int)len, NULL, 0, NULL, NULL) : 0;
+            free(target);
+            free(wpath);
             return 0;
         }
     }
-    return stat(path, st);
+    // not a symlink (junctions are followed, as before)
+    int ret = stat_wide(wpath, st);
+    free_keep_errno(wpath);
+    return ret;
 }
 
 int
@@ -1071,11 +1405,8 @@ sigaction(int signum, const struct sigaction *act, struct sigaction *oldact) {
 // files {{{
 int
 kitty_win32_open_readonly_shared(const char *path) {
-    wchar_t wpath[32768];
-    if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, (int)(sizeof(wpath) / sizeof(wpath[0])))) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
+    wchar_t *wpath = kitty_win32_wide_path(path);
+    if (!wpath) return -1;
     // The path comes from a client, so: should it name a named pipe, its
     // server may only identify us, not impersonate us. Do not fetch files
     // from offline storage, such as cloud files that are not on disk. And
@@ -1088,10 +1419,9 @@ kitty_win32_open_readonly_shared(const char *path) {
         OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_NO_RECALL | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
         NULL);
-    if (h == INVALID_HANDLE_VALUE) {
-        set_errno_from_last_error();
-        return -1;
-    }
+    if (h == INVALID_HANDLE_VALUE) set_errno_from_last_error();
+    free_keep_errno(wpath);
+    if (h == INVALID_HANDLE_VALUE) return -1;
     if (GetFileType(h) != FILE_TYPE_DISK) {
         CloseHandle(h);
         errno = EACCES;
@@ -1105,13 +1435,170 @@ kitty_win32_open_readonly_shared(const char *path) {
     return fd;
 }
 
+FILE *
+kitty_win32_fopen(const char *path, const char *mode) {
+    wchar_t *wpath = kitty_win32_wide_path(path), *wmode = NULL;
+    FILE *ans = NULL;
+    if (wpath && (wmode = kitty_win32_utf8_to_wide(mode))) ans = _wfopen(wpath, wmode);
+    free_keep_errno(wpath);
+    free_keep_errno(wmode);
+    return ans;
+}
+
+int
+kitty_win32_access(const char *path, int mode) {
+    wchar_t *wpath = kitty_win32_wide_path(path);
+    if (!wpath) return -1;
+    // The C runtime rejects X_OK, Windows has no execute permission
+    int ret = _waccess(wpath, mode & (R_OK | W_OK));
+    free_keep_errno(wpath);
+    return ret;
+}
+
+int
+kitty_win32_unlink(const char *path) {
+    wchar_t *wpath = kitty_win32_wide_path(path);
+    if (!wpath) return -1;
+    int ret = _wunlink(wpath);
+    free_keep_errno(wpath);
+    return ret;
+}
+
+char *
+kitty_win32_getcwd(char *buf, size_t size) {
+    if (buf && !size) {
+        errno = EINVAL;
+        return NULL;
+    }
+    DWORD n = GetCurrentDirectoryW(0, NULL);
+    wchar_t *wcwd = n ? malloc(sizeof(wchar_t) * n) : NULL;
+    if (!wcwd) {
+        if (n) errno = ENOMEM;
+        else set_errno_from_last_error();
+        return NULL;
+    }
+    DWORD m = GetCurrentDirectoryW(n, wcwd);
+    char *cwd = NULL;
+    if (!m || m >= n) {
+        if (m) errno = ERANGE; // changed by another thread between the calls
+        else set_errno_from_last_error();
+    } else {
+        strip_long_path_prefix(wcwd);
+        cwd = kitty_win32_wide_to_utf8(wcwd);
+    }
+    free_keep_errno(wcwd);
+    if (!cwd) return NULL;
+    const size_t len = strlen(cwd) + 1;
+    if (size && size < len) {
+        free(cwd);
+        errno = ERANGE;
+        return NULL;
+    }
+    if (!buf) return cwd;
+    memcpy(buf, cwd, len);
+    free(cwd);
+    return buf;
+}
+
+void *
+kitty_win32_map_file(const char *path, size_t *size) {
+    wchar_t *wpath = kitty_win32_wide_path(path);
+    if (!wpath) return NULL;
+    // Writers are locked out as changing a mapped file under its user can crash it
+    HANDLE h = CreateFileW(wpath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) set_errno_from_last_error();
+    free_keep_errno(wpath);
+    if (h == INVALID_HANDLE_VALUE) return NULL;
+    void *addr = NULL;
+    LARGE_INTEGER sz;
+    if (!GetFileSizeEx(h, &sz)) set_errno_from_last_error();
+    else if (!sz.QuadPart || (uint64_t)sz.QuadPart > SIZE_MAX) errno = EINVAL; // empty files cannot be mapped
+    else {
+        HANDLE mapping = CreateFileMappingW(h, NULL, PAGE_READONLY, 0, 0, NULL);
+        // the view keeps the mapping alive
+        if (mapping) addr = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+        if (!addr) set_errno_from_last_error();
+        if (mapping) CloseHandle(mapping);
+        if (addr) *size = (size_t)sz.QuadPart;
+    }
+    int saved = errno;
+    CloseHandle(h);
+    errno = saved;
+    return addr;
+}
+
+void
+kitty_win32_unmap_file(void *addr) {
+    if (addr) UnmapViewOfFile(addr);
+}
+
+struct kitty_win32_DIR {
+    HANDLE find;
+    bool started, done;
+    WIN32_FIND_DATAW data;
+    struct kitty_win32_dirent entry;
+};
+
+kitty_win32_DIR *
+kitty_win32_opendir(const char *path) {
+    wchar_t *wpath = kitty_win32_utf8_to_wide(path), *pattern = NULL;
+    kitty_win32_DIR *ans = NULL;
+    if (!wpath) return NULL;
+    const size_t len = wcslen(wpath);
+    const bool has_sep = len && (wpath[len - 1] == L'\\' || wpath[len - 1] == L'/' || wpath[len - 1] == L':');
+    if (!(pattern = extend_path(join_wide(wpath, has_sep ? NULL : L"\\", L"*")))) goto end;
+    if (!(ans = calloc(1, sizeof(kitty_win32_DIR)))) {
+        errno = ENOMEM;
+        goto end;
+    }
+    ans->find = FindFirstFileExW(pattern, FindExInfoBasic, &ans->data, FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH);
+    if (ans->find == INVALID_HANDLE_VALUE) {
+        // an empty root directory does not even have . and ..
+        if (GetLastError() == ERROR_FILE_NOT_FOUND) ans->done = true;
+        else {
+            set_errno_from_last_error();
+            free(ans);
+            ans = NULL;
+        }
+    }
+end:
+    free_keep_errno(wpath);
+    free_keep_errno(pattern);
+    return ans;
+}
+
+struct kitty_win32_dirent *
+kitty_win32_readdir(kitty_win32_DIR *dir) {
+    while (!dir->done) {
+        if (dir->started && !FindNextFileW(dir->find, &dir->data)) {
+            if (GetLastError() != ERROR_NO_MORE_FILES) set_errno_from_last_error();
+            dir->done = true;
+            break;
+        }
+        dir->started = true;
+        // names are at most MAX_PATH UTF-16 units, so this cannot fail in practice
+        if (WideCharToMultiByte(CP_UTF8, 0, dir->data.cFileName, -1, dir->entry.d_name, sizeof(dir->entry.d_name), NULL, NULL)) return &dir->entry;
+    }
+    return NULL;
+}
+
+int
+kitty_win32_closedir(kitty_win32_DIR *dir) {
+    if (!dir) {
+        errno = EBADF;
+        return -1;
+    }
+    if (dir->find != INVALID_HANDLE_VALUE) FindClose(dir->find);
+    free(dir);
+    return 0;
+}
+
 // Creates a uniquely named file in dir (which must end with a path separator)
 // that the OS deletes when its last handle is closed, which also happens if
 // the process crashes. It is opened without sharing, so no other process can
 // open or delete it while it is in use.
 static int
 open_delete_on_close_file(const wchar_t *dir, const wchar_t *prefix, DWORD attributes) {
-    wchar_t path[4096];
     static const wchar_t chars[] = L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     for (int attempt = 0; attempt < 100; attempt++) {
         unsigned char rnd[12];
@@ -1122,14 +1609,14 @@ open_delete_on_close_file(const wchar_t *dir, const wchar_t *prefix, DWORD attri
         wchar_t suffix[sizeof(rnd) + 1];
         for (size_t i = 0; i < sizeof(rnd); i++) suffix[i] = chars[rnd[i] % (sizeof(chars) / sizeof(chars[0]) - 1)];
         suffix[sizeof(rnd)] = 0;
-        int n = _snwprintf(path, sizeof(path) / sizeof(path[0]), L"%ls%ls%ls", dir, prefix, suffix);
-        if (n < 0 || (size_t)n >= sizeof(path) / sizeof(path[0])) {
-            errno = ENAMETOOLONG;
-            return -1;
-        }
+        wchar_t *path = extend_path(join_wide(dir, prefix, suffix));
+        if (!path) return -1;
         HANDLE h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_NEW, attributes | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+        DWORD err = GetLastError();
+        free(path);
         if (h == INVALID_HANDLE_VALUE) {
-            if (GetLastError() == ERROR_FILE_EXISTS) continue;
+            if (err == ERROR_FILE_EXISTS) continue;
+            SetLastError(err);
             set_errno_from_last_error();
             return -1;
         }
@@ -1146,76 +1633,63 @@ open_delete_on_close_file(const wchar_t *dir, const wchar_t *prefix, DWORD attri
 
 int
 kitty_win32_open_anonymous_tmpfile(void) {
-    wchar_t dir[MAX_PATH + 1];
-    DWORD n = GetTempPathW(MAX_PATH + 1, dir);
-    if (!n || n > MAX_PATH) {
-        errno = ENOENT;
-        return -1;
-    }
-    return open_delete_on_close_file(dir, L"kitty-tmp-", FILE_ATTRIBUTE_TEMPORARY);
+    wchar_t *dir = temp_dir();
+    if (!dir) return -1;
+    int fd = open_delete_on_close_file(dir, L"kitty-tmp-", FILE_ATTRIBUTE_TEMPORARY);
+    free_keep_errno(dir);
+    return fd;
 }
 
-// Converts UTF-8 dir to a wide path ending with a path separator, returns its length or -1
-static int
-wide_dir_path(const char *dir, wchar_t *buf, size_t bufsz) {
-    int n = MultiByteToWideChar(CP_UTF8, 0, dir, -1, buf, (int)bufsz - 1);
-    if (!n) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    n--; // the terminating NUL
-    if (n && buf[n - 1] != L'\\' && buf[n - 1] != L'/') {
-        buf[n++] = L'\\';
-        buf[n] = 0;
-    }
-    return n;
+// Converts UTF-8 dir to a wide path ending with a path separator
+static wchar_t *
+wide_dir_path(const char *dir) {
+    wchar_t *w = kitty_win32_utf8_to_wide(dir);
+    if (!w) return NULL;
+    const size_t n = wcslen(w);
+    if (!n || w[n - 1] == L'\\' || w[n - 1] == L'/') return w;
+    wchar_t *ans = join_wide(w, L"\\", NULL);
+    free_keep_errno(w);
+    return ans;
 }
 
 int
 kitty_win32_open_delete_on_close_file(const char *dir, const char *prefix) {
-    wchar_t wdir[4096], wprefix[256];
-    if (wide_dir_path(dir, wdir, sizeof(wdir) / sizeof(wdir[0])) < 0) return -1;
-    if (!MultiByteToWideChar(CP_UTF8, 0, prefix, -1, wprefix, (int)(sizeof(wprefix) / sizeof(wprefix[0])))) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    return open_delete_on_close_file(wdir, wprefix, FILE_ATTRIBUTE_NORMAL);
+    wchar_t *wdir = wide_dir_path(dir), *wprefix = NULL;
+    int fd = -1;
+    if (wdir && (wprefix = kitty_win32_utf8_to_wide(prefix))) fd = open_delete_on_close_file(wdir, wprefix, FILE_ATTRIBUTE_NORMAL);
+    free_keep_errno(wdir);
+    free_keep_errno(wprefix);
+    return fd;
 }
 
 int
 kitty_win32_delete_unused_files(const char *dir, const char *prefix) {
-    wchar_t path[4096], wprefix[256];
-    int dirlen = wide_dir_path(dir, path, sizeof(path) / sizeof(path[0]));
-    if (dirlen < 0) return -1;
-    int prefixlen = MultiByteToWideChar(CP_UTF8, 0, prefix, -1, wprefix, (int)(sizeof(wprefix) / sizeof(wprefix[0])));
-    if (!prefixlen--) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    const size_t pathsz = sizeof(path) / sizeof(path[0]);
-    int n = _snwprintf(path + dirlen, pathsz - dirlen, L"%ls*", wprefix);
-    if (n < 0 || (size_t)n >= pathsz - dirlen) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
+    wchar_t *wdir = wide_dir_path(dir), *wprefix = NULL, *pattern = NULL;
+    int count = -1;
+    if (!wdir || !(wprefix = kitty_win32_utf8_to_wide(prefix)) || !(pattern = extend_path(join_wide(wdir, wprefix, L"*")))) goto end;
+    const size_t prefixlen = wcslen(wprefix);
     WIN32_FIND_DATAW fd;
-    HANDLE h = FindFirstFileExW(path, FindExInfoBasic, &fd, FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH);
+    HANDLE h = FindFirstFileExW(pattern, FindExInfoBasic, &fd, FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH);
     if (h == INVALID_HANDLE_VALUE) {
-        if (GetLastError() == ERROR_FILE_NOT_FOUND) return 0;
-        set_errno_from_last_error();
-        return -1;
+        if (GetLastError() == ERROR_FILE_NOT_FOUND) count = 0;
+        else set_errno_from_last_error();
+        goto end;
     }
-    int count = 0;
+    count = 0;
     do {
         // the wildcard can also match 8.3 short names, so check the real name
         if ((fd.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) || wcsncmp(fd.cFileName, wprefix, prefixlen) != 0) continue;
-        n = _snwprintf(path + dirlen, pathsz - dirlen, L"%ls", fd.cFileName);
-        if (n < 0 || (size_t)n >= pathsz - dirlen) continue;
+        wchar_t *path = extend_path(join_wide(wdir, fd.cFileName, NULL));
         // A file that is open in some process fails to delete, as it was not
         // opened with FILE_SHARE_DELETE
-        if (DeleteFileW(path)) count++;
+        if (path && DeleteFileW(path)) count++;
+        free(path);
     } while (FindNextFileW(h, &fd));
     FindClose(h);
+end:
+    free_keep_errno(wdir);
+    free_keep_errno(wprefix);
+    free_keep_errno(pattern);
     return count;
 }
 
@@ -1226,19 +1700,11 @@ kitty_win32_path_from_fd(int fd, char *buf, size_t bufsz) {
         errno = EBADF;
         return -1;
     }
-    wchar_t wpath[32768];
-    DWORD n = GetFinalPathNameByHandleW(h, wpath, (DWORD)(sizeof(wpath) / sizeof(wpath[0])), FILE_NAME_NORMALIZED);
-    if (!n || n >= sizeof(wpath) / sizeof(wpath[0])) {
-        if (!n) set_errno_from_last_error();
-        else errno = ENAMETOOLONG;
-        return -1;
-    }
-    const wchar_t *p = wpath;
-    if (wcsncmp(p, L"\\\\?\\UNC\\", 8) == 0) {
-        p += 6; // \\?\UNC\server\share -> \\server\share
-        wpath[6] = L'\\';
-    } else if (wcsncmp(p, L"\\\\?\\", 4) == 0) p += 4;
-    if (!WideCharToMultiByte(CP_UTF8, 0, p, -1, buf, (int)bufsz, NULL, NULL)) {
+    wchar_t *wpath = final_path_of_handle(h);
+    if (!wpath) return -1;
+    int ok = WideCharToMultiByte(CP_UTF8, 0, wpath, -1, buf, (int)bufsz, NULL, NULL);
+    free(wpath);
+    if (!ok) {
         errno = ENAMETOOLONG;
         return -1;
     }
@@ -1481,14 +1947,96 @@ posix_memalign(void **memptr, size_t alignment, size_t size) {
     return 0;
 }
 
+// The C runtime's narrow environment is in the ANSI code page, so values are
+// read with the wide API and the UTF-8 strings are kept around, per name, for
+// the lifetime of the process.
+static struct {
+    struct {
+        char *name, *value;
+    } *items;
+    size_t count, capacity;
+    SRWLOCK lock;
+} env_cache = {.lock = SRWLOCK_INIT};
+
+static char *
+cached_env_value(const char *name, char *value) {
+    char *ans = value;
+    AcquireSRWLockExclusive(&env_cache.lock);
+    size_t i = 0;
+    while (i < env_cache.count && strcmp(env_cache.items[i].name, name) != 0) i++;
+    if (i < env_cache.count) {
+        if (strcmp(env_cache.items[i].value, value) == 0) {
+            ans = env_cache.items[i].value;
+            free(value);
+        } else env_cache.items[i].value = value; // the old value is leaked, callers may still use it
+    } else {
+        if (env_cache.count >= env_cache.capacity) {
+            size_t cap = env_cache.capacity ? env_cache.capacity * 2 : 16;
+            void *items = realloc(env_cache.items, cap * sizeof(env_cache.items[0]));
+            if (items) {
+                env_cache.items = items;
+                env_cache.capacity = cap;
+            }
+        }
+        char *n = env_cache.count < env_cache.capacity ? strdup(name) : NULL;
+        if (n) {
+            env_cache.items[env_cache.count].name = n;
+            env_cache.items[env_cache.count++].value = value;
+        } // else out of memory, leak value
+    }
+    ReleaseSRWLockExclusive(&env_cache.lock);
+    return ans;
+}
+
+char *
+kitty_win32_getenv(const char *name) {
+    wchar_t *wname = kitty_win32_utf8_to_wide(name), *wvalue = NULL;
+    char *value = NULL;
+    if (!wname) return NULL;
+    DWORD n = GetEnvironmentVariableW(wname, NULL, 0); // includes the NUL, so 0 means unset
+    while (n) {
+        wchar_t *buf = realloc(wvalue, sizeof(wchar_t) * n);
+        if (!buf) {
+            errno = ENOMEM;
+            break;
+        }
+        wvalue = buf;
+        SetLastError(ERROR_SUCCESS);
+        DWORD m = GetEnvironmentVariableW(wname, wvalue, n);
+        if (m < n) {
+            // m is 0 for an empty value, or if the variable was removed meanwhile
+            if (m || GetLastError() != ERROR_ENVVAR_NOT_FOUND) value = kitty_win32_wide_to_utf8(wvalue);
+            break;
+        }
+        n = m; // the value grew meanwhile
+    }
+    free(wname);
+    free(wvalue);
+    return value ? cached_env_value(name, value) : NULL;
+}
+
+static int
+putenv_utf8(const char *name, const char *value) {
+    wchar_t *wname = kitty_win32_utf8_to_wide(name), *wvalue = NULL;
+    int ret = -1;
+    if (wname && (wvalue = kitty_win32_utf8_to_wide(value))) {
+        errno_t err = _wputenv_s(wname, wvalue);
+        if (err) errno = err;
+        else ret = 0;
+    }
+    free_keep_errno(wname);
+    free_keep_errno(wvalue);
+    return ret;
+}
+
 int
 setenv(const char *name, const char *value, int overwrite) {
     if (!name || !*name || strchr(name, '=')) {
         errno = EINVAL;
         return -1;
     }
-    if (!overwrite && getenv(name)) return 0;
-    return _putenv_s(name, value) == 0 ? 0 : -1;
+    if (!overwrite && kitty_win32_getenv(name)) return 0;
+    return putenv_utf8(name, value);
 }
 
 int
@@ -1497,25 +2045,48 @@ unsetenv(const char *name) {
         errno = EINVAL;
         return -1;
     }
-    return _putenv_s(name, "") == 0 ? 0 : -1;
+    return putenv_utf8(name, "");
 }
 
 char *
 realpath(const char *path, char *resolved_path) {
-    char *ans = _fullpath(resolved_path, path, resolved_path ? PATH_MAX : 0);
-    if (!ans) {
-        errno = ENOENT;
-        return NULL;
+    wchar_t *wpath = kitty_win32_wide_path(path), *final = NULL;
+    if (!wpath) return NULL;
+    // Opening the file resolves symlinks and junctions and fails if it does not exist
+    HANDLE h = CreateFileW(
+        wpath, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h == INVALID_HANDLE_VALUE) set_errno_from_last_error();
+    else {
+        final = final_path_of_handle(h);
+        CloseHandle(h);
     }
+    free_keep_errno(wpath);
+    if (!final) return NULL;
+    char *ans = kitty_win32_wide_to_utf8(final);
+    free_keep_errno(final);
+    if (!ans) return NULL;
     for (char *p = ans; *p; p++)
         if (*p == '\\') *p = '/';
-    return ans;
+    if (!resolved_path) return ans;
+    const size_t len = strlen(ans) + 1;
+    if (len > PATH_MAX) {
+        free(ans);
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    memcpy(resolved_path, ans, len);
+    free(ans);
+    return resolved_path;
 }
 
 bool
 win32_exe_path(char *buf, size_t buf_sz) {
-    DWORD n = GetModuleFileNameA(NULL, buf, (DWORD)buf_sz);
-    if (n == 0 || n >= buf_sz) return false;
+    wchar_t *exe = module_file_name(NULL);
+    if (!exe) return false;
+    strip_long_path_prefix(exe);
+    int n = WideCharToMultiByte(CP_UTF8, 0, exe, -1, buf, (int)buf_sz, NULL, NULL);
+    free(exe);
+    if (n <= 0) return false;
     for (char *p = buf; *p; p++)
         if (*p == '\\') *p = '/';
     return true;
@@ -1624,6 +2195,31 @@ kitty_win32_append_batch_arg(char *buf, size_t buf_sz, size_t *pos, const char *
 }
 #undef emit
 
+// The command line for CreateProcessW() running argv0 with the arguments argv[1:]
+static wchar_t *
+wide_command_line(const char *argv0, char *const argv[]) {
+    // quoting at most doubles an argument and adds a space and two quotes
+    size_t sz = 2 * strlen(argv0) + 4, pos = 0;
+    for (int i = 1; argv[i]; i++) sz += 2 * strlen(argv[i]) + 4;
+    char *cmdline = malloc(sz);
+    if (!cmdline) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    bool ok = kitty_win32_append_quoted_arg(cmdline, sz, &pos, argv0);
+    for (int i = 1; ok && argv[i]; i++) ok = kitty_win32_append_quoted_arg(cmdline, sz, &pos, argv[i]);
+    wchar_t *ans = ok ? kitty_win32_utf8_to_wide(cmdline) : NULL;
+    if (!ok) errno = E2BIG;
+    free_keep_errno(cmdline);
+    // the limit of CreateProcessW()
+    if (ans && wcslen(ans) >= 32767) {
+        free(ans);
+        errno = E2BIG;
+        return NULL;
+    }
+    return ans;
+}
+
 bool
 win32_add_dll_dir_of_module(const wchar_t *module_name) {
     // Extension modules are loaded with LOAD_LIBRARY_SEARCH_DEFAULT_DIRS which
@@ -1631,33 +2227,35 @@ win32_add_dll_dir_of_module(const wchar_t *module_name) {
     // if that directory is explicitly registered.
     HMODULE mod = GetModuleHandleW(module_name);
     if (!mod) return false;
-    wchar_t path[32768];
-    DWORD n = GetModuleFileNameW(mod, path, sizeof(path) / sizeof(path[0]));
-    if (n == 0 || n >= sizeof(path) / sizeof(path[0])) return false;
+    wchar_t *path = module_file_name(mod);
+    if (!path) return false;
     wchar_t *sep = wcsrchr(path, L'\\');
-    if (!sep) return false;
-    *sep = 0;
-    return AddDllDirectory(path) != NULL;
+    bool ok = false;
+    if (sep) {
+        *sep = 0;
+        ok = AddDllDirectory(path) != NULL;
+    }
+    free(path);
+    return ok;
 }
 
 bool
 win32_spawn_detached(char *const argv[]) {
     char exe[PATH_MAX + 1] = {0};
-    if (!win32_exe_path(exe, sizeof(exe))) return false;
-    char cmdline[32768];
-    size_t pos = 0;
-    if (!kitty_win32_append_quoted_arg(cmdline, sizeof(cmdline), &pos, exe)) return false;
-    for (int i = 1; argv[i]; i++)
-        if (!kitty_win32_append_quoted_arg(cmdline, sizeof(cmdline), &pos, argv[i])) return false;
-    STARTUPINFOA si = {.cb = sizeof(si)};
-    PROCESS_INFORMATION pi = {0};
-    if (!CreateProcessA(exe, cmdline, NULL, NULL, FALSE, DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, NULL, NULL, &si, &pi)) {
-        set_errno_from_last_error();
-        return false;
+    wchar_t *wexe = NULL, *cmdline = NULL;
+    bool ok = false;
+    if (win32_exe_path(exe, sizeof(exe)) && (wexe = module_file_name(NULL)) && (cmdline = wide_command_line(exe, argv))) {
+        STARTUPINFOW si = {.cb = sizeof(si)};
+        PROCESS_INFORMATION pi = {0};
+        if (CreateProcessW(wexe, cmdline, NULL, NULL, FALSE, DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, NULL, NULL, &si, &pi)) {
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            ok = true;
+        } else set_errno_from_last_error();
     }
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    return true;
+    free_keep_errno(wexe);
+    free_keep_errno(cmdline);
+    return ok;
 }
 
 static BOOL WINAPI
@@ -1667,25 +2265,21 @@ ignore_console_ctrl_event(DWORD type UNUSED) {
 
 int
 win32_spawn_and_wait(const char *exe, char *const argv[]) {
-    char cmdline[32768];
-    size_t pos = 0;
-    if (!kitty_win32_append_quoted_arg(cmdline, sizeof(cmdline), &pos, exe)) {
-        errno = E2BIG;
+    wchar_t *wexe = kitty_win32_wide_path(exe), *cmdline = NULL;
+    if (!wexe || !(cmdline = wide_command_line(exe, argv))) {
+        free_keep_errno(wexe);
         return -1;
     }
-    for (int i = 1; argv[i]; i++) {
-        if (!kitty_win32_append_quoted_arg(cmdline, sizeof(cmdline), &pos, argv[i])) {
-            errno = E2BIG;
-            return -1;
-        }
-    }
-    STARTUPINFOA si = {.cb = sizeof(si)};
+    STARTUPINFOW si = {.cb = sizeof(si)};
     PROCESS_INFORMATION pi = {0};
     // Ctrl+C is delivered to every process attached to the console, let the
     // child deal with it and keep waiting for its exit code.
     SetConsoleCtrlHandler(ignore_console_ctrl_event, TRUE);
-    if (!CreateProcessA(exe, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
-        set_errno_from_last_error();
+    bool ok = CreateProcessW(wexe, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+    if (!ok) set_errno_from_last_error();
+    free_keep_errno(wexe);
+    free_keep_errno(cmdline);
+    if (!ok) {
         SetConsoleCtrlHandler(ignore_console_ctrl_event, FALSE);
         return -1;
     }

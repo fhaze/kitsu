@@ -38,3 +38,4 @@ _codeql_detected_source_root
 /kitty/launcher/*.dll
 /kitty/launcher/OpenConsole.exe
 /kitty/launcher/OpenConsole-LICENSE.txt
+/tools/cmd/*.syso

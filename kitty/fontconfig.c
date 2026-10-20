@@ -199,6 +199,46 @@ increment_and_return(PyObject *x) {
     return x;
 }
 
+// fontconfig passes file names to the narrow C runtime functions, so on
+// Windows they are in the ANSI code page. That is UTF-8 only when the
+// activeCodePage manifest setting is in effect (Windows 10 1903 and newer).
+static PyObject *
+decode_fc_path(const FcChar8 *path) {
+#ifdef _WIN32
+    return PyUnicode_DecodeMBCS((const char *)path, strlen((const char *)path), "replace");
+#else
+    return PyUnicode_Decode((const char *)path, strlen((const char *)path), "UTF-8", "replace");
+#endif
+}
+
+// The path as bytes for fontconfig, see decode_fc_path()
+static PyObject *
+encode_fc_path(PyObject *path) {
+#ifdef _WIN32
+    PyObject *ans = PyUnicode_AsMBCSString(path);
+    if (ans) return ans;
+    // Not representable in the ANSI code page, so not something fontconfig
+    // could have indexed or can open either
+    PyErr_Clear();
+#endif
+    return PyUnicode_AsUTF8String(path);
+}
+
+// FontConfigFace paths are UTF-8
+static char *
+fc_path_as_utf8(const FcChar8 *path) {
+#ifdef _WIN32
+    RAII_PyObject(p, decode_fc_path(path));
+    const char *utf8 = p ? PyUnicode_AsUTF8(p) : NULL;
+    if (!utf8) return NULL;
+    char *ans = strdup(utf8);
+#else
+    char *ans = strdup((const char *)path);
+#endif
+    if (!ans) PyErr_NoMemory();
+    return ans;
+}
+
 static PyObject *
 pattern_as_dict(FcPattern *pat) {
     RAII_PyObject(ans, Py_BuildValue("{ss}", "descriptor_type", "fontconfig"));
@@ -235,7 +275,7 @@ pattern_as_dict(FcPattern *pat) {
 #define I(which, key) G(int, FcPatternGetInteger, which, PyLong_FromLong, key, PyLong_FromUnsignedLong(0))
 #define B(which, key) G(FcBool, FcPatternGetBool, which, pybool, key, increment_and_return(Py_False))
 #define E(which, key, conv) G(int, FcPatternGetInteger, which, conv, key, PyLong_FromUnsignedLong(0))
-    S(FC_FILE, path);
+    G(FcChar8 *, FcPatternGetString, FC_FILE, decode_fc_path, path, PyUnicode_FromString(""));
     S(FC_FAMILY, family);
     S(FC_STYLE, style);
     S(FC_FULLNAME, full_name);
@@ -581,12 +621,8 @@ extract_face_from_pattern(FcPattern *match, FontConfigFace *ans) {
     g(FcPatternGetInteger, FC_HINT_STYLE, ans->hintstyle);
     g(FcPatternGetBool, FC_HINTING, ans->hinting);
 #undef g
-    ans->path = strdup((char *)out);
-    if (!ans->path) {
-        PyErr_NoMemory();
-        return false;
-    }
-    return true;
+    ans->path = fc_path_as_utf8(out);
+    return ans->path != NULL;
 }
 
 static bool
@@ -708,7 +744,9 @@ specialize_font_descriptor(PyObject *base_descriptor, double font_sz_in_pts, dou
     if (!features) return NULL;
     RAII_PyObject(final_features, NULL);
     RAII_PyObject(ans, NULL);
-    AP(FcPatternAddString, FC_FILE, (const FcChar8 *)PyUnicode_AsUTF8(p), "path");
+    RAII_PyObject(fc_path, encode_fc_path(p));
+    if (!fc_path) goto end;
+    AP(FcPatternAddString, FC_FILE, (const FcChar8 *)PyBytes_AS_STRING(fc_path), "path");
     AP(FcPatternAddInteger, FC_INDEX, face_idx, "index");
     AP(FcPatternAddDouble, FC_SIZE, font_sz_in_pts, "size");
     AP(FcPatternAddDouble, FC_DPI, (dpi_x + dpi_y) / 2.0, "dpi");
@@ -902,9 +940,11 @@ end:
 static PyObject *
 add_font_file(PyObject UNUSED *self, PyObject *args) {
     ensure_initialized();
-    const char *path = NULL;
-    if (!PyArg_ParseTuple(args, "s", &path)) return NULL;
-    if (FcConfigAppFontAddFile(NULL, (const unsigned char *)path)) {
+    PyObject *path = NULL;
+    if (!PyArg_ParseTuple(args, "U", &path)) return NULL;
+    RAII_PyObject(fc_path, encode_fc_path(path));
+    if (!fc_path) return NULL;
+    if (FcConfigAppFontAddFile(NULL, (const unsigned char *)PyBytes_AS_STRING(fc_path))) {
         clear_fallback_candidates(); // the newly added font must be considered for fallback
         Py_RETURN_TRUE;
     }
