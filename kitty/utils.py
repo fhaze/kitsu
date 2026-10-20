@@ -261,6 +261,41 @@ def command_for_open(program: str | list[str] = 'default') -> list[str]:
     return cmd
 
 
+def is_windows_batch_file(path: str) -> bool:
+    # Whether CreateProcess() runs path via cmd.exe, the same check as
+    # kitty_win32_is_batch_file(): .bat or .cmd also with trailing dots or
+    # spaces, which Windows strips from file names unless the path is \\?\
+    if not path.startswith('\\\\?\\'):
+        path = path.rstrip('. ')
+    return path[-4:].lower() in ('.bat', '.cmd')
+
+
+def batch_safe_popen_args(cmd: Sequence[str]) -> tuple[Sequence[str] | str, str | None]:
+    # Returns (args, executable) for subprocess.Popen() to run cmd. On Windows
+    # CreateProcess() runs .bat and .cmd files via cmd.exe, which parses their
+    # command line itself, so the quoting subprocess uses does not stop
+    # arguments from running commands (CVE-2024-24576, aka BatBadBut). Batch
+    # files are run via the system cmd.exe instead, with a command line escaped
+    # for it. Raises OSError (EINVAL) for arguments that cannot be passed to
+    # batch files at all, such as ones containing CR or LF.
+    if not is_windows or not cmd:
+        return cmd, None
+    # resolve the way shutil.which() does, with PATHEXT, so that a bare name
+    # such as code finds code.cmd, which CreateProcess() would not
+    exe = which(cmd[0])
+    # A missing batch file is left to fail to start, rather than cmd.exe
+    # starting and reporting the error itself
+    if not exe or not is_windows_batch_file(exe) or not os.path.isfile(exe):
+        return cmd, None
+    from .fast_data_types import win32_batch_command_line
+
+    q = win32_batch_command_line(exe, tuple(cmd))
+    if q is None:
+        return cmd, None
+    cmd_exe, cmdline = q
+    return cmdline, cmd_exe
+
+
 def open_cmd(
     cmd: Iterable[str] | list[str], arg: None | Iterable[str] | str = None, cwd: str | None = None, extra_env: dict[str, str] | None = None
 ) -> 'PopenType[bytes]':
@@ -276,8 +311,16 @@ def open_cmd(
     if extra_env:
         env = os.environ.copy()
         env.update(extra_env)
+    args, executable = batch_safe_popen_args(tuple(cmd))
     return subprocess.Popen(
-        tuple(cmd), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=cwd or None, **helper_process_popen_kwargs(), env=env
+        args,
+        executable=executable,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        cwd=cwd or None,
+        **helper_process_popen_kwargs(),
+        env=env,
     )
 
 

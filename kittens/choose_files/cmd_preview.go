@@ -7,7 +7,6 @@ import (
 	"github.com/kovidgoyal/kitty/tools/utils"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 
@@ -38,9 +37,9 @@ type CmdResult struct {
 
 func (c cmd_renderer) Render(path string) (m map[string][]byte, mi metadata, img *images.ImageData, err error) {
 	cmdline := slices.Concat(c.cmdline, []string{path}) // append() could share c.cmdline between concurrent renders
-	cmd := exec.Command(cmdline[0], cmdline[1:]...)
+	cmd := utils.Command(cmdline[0], cmdline[1:]...)
 	cmd.Stdin = nil
-	cmd.SysProcAttr = utils.DetachedSysProcAttr()
+	utils.DetachCommand(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

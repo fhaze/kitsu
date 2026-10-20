@@ -202,6 +202,15 @@ Detailed list of changes
 0.49.2 [2026-10-01]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+- Windows: Fix arguments such as URLs and file names running commands when
+  they are passed to a ``.bat`` or ``.cmd`` program started outside a kitty
+  window: :opt:`open_url_with`, :option:`kitty +kitten hints --program`,
+  background launches, :opt:`command_on_bell`, ``launch --hold``,
+  choose-files previewers, the remote file, diff and hyperlinked-grep kittens.
+  Such programs are now run via cmd.exe with escaped arguments, as programs
+  started in kitty windows already were. A bare name such as ``code`` in
+  :opt:`open_url_with` now also finds ``code.cmd``
+
 - Windows: Time rendering to the monitor's vertical blank when
   :opt:`sync_to_monitor` is enabled, instead of a timer and a DWM flush before
   every swap, so scrolling and animations render at the monitor's refresh rate

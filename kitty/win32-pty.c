@@ -482,6 +482,33 @@ resolve_batch_file(wchar_t **exe, char **batch_file) {
     return true;
 }
 
+char *
+win32_pty_batch_command_line(const char *exe, char *const argv[], char **cmd_exe) {
+    *cmd_exe = NULL;
+    wchar_t *wexe = utf8_to_wide(exe), *wcmdline = NULL;
+    char *batch_file = NULL, *ans = NULL;
+    int err = 0;
+    if (!wexe) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    to_backslashes(wexe);
+    if (!resolve_batch_file(&wexe, &batch_file)) err = errno;
+    else if (batch_file) {
+        if (!(wcmdline = build_command_line(argv, batch_file))) err = errno;
+        else if (!(ans = wide_to_utf8(wcmdline)) || !(*cmd_exe = wide_to_utf8(wexe))) {
+            free(ans);
+            ans = NULL;
+            err = ENOMEM;
+        }
+    }
+    free(wexe);
+    free(wcmdline);
+    free(batch_file);
+    errno = err;
+    return ans;
+}
+
 static wchar_t *
 build_environment_block(char *const env[]) {
     size_t total = 1; // trailing NUL

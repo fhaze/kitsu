@@ -15,6 +15,24 @@ from kitty.window import Window
 from .base import BaseTest
 
 
+def batch_file_test_args(inject: str) -> list[str]:
+    # Arguments that must reach a batch file unchanged, without running inject
+    args = [r'C:\tmp\a.txt&' + inject, f'x|{inject}', f'x<a.json&{inject}', f'x>y&{inject}', f'x^&{inject}', f'(x)&{inject}', f'"&{inject}&"']
+    args += [f'a"&{inject}&"b', f'\\"&{inject}', f'^"&{inject}', f'%"&{inject}&"%', f'a\\"&{inject}', '%PATH%', '100%', '%cd%', '%%', '%=C:%']
+    args += ['%~dp0', '%1', '%*', '%%cd:~,%', '!PATH!', '!', '', ' ', 'a b', '\t', 'C:\\dir\\', '\\\\', '"', '""', 'x"y"z', 'a\\\\"b', ';', ',']
+    args += ['=', '[]{}', "`~'", 'y' * 5000]  # the last one is longer than the initial command line buffer
+    return args
+
+
+def write_batch_file_recorder(path: str) -> None:
+    # A batch file that records its arguments in ..\args.json via kitty.exe,
+    # which splits its command line with the C runtime rules the escaping for
+    # batch files relies on
+    with open(path, 'w', encoding='utf-8') as f:
+        code = "import sys, json; open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps(sys.argv[2:]))"
+        f.write(f'@"{kitty_exe()}" +runpy "{code}" "%~dp0..\\args.json" %*\r\n')
+
+
 class ChildMemoryTest(BaseTest):
     def test_windows_shell_detection(self):
         with patch('kitty.child.is_windows', True):
@@ -69,18 +87,13 @@ class ChildMemoryTest(BaseTest):
         k32.WaitForSingleObject.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
         k32.CloseHandle.argtypes = (ctypes.c_void_p,)
         inject = 'echo.>pwned'
-        args = [r'C:\tmp\a.txt&' + inject, f'x|{inject}', f'x<a.json&{inject}', f'x>y&{inject}', f'x^&{inject}', f'(x)&{inject}', f'"&{inject}&"']
-        args += [f'a"&{inject}&"b', f'\\"&{inject}', f'^"&{inject}', f'%"&{inject}&"%', f'a\\"&{inject}', '%PATH%', '100%', '%cd%', '%%', '%=C:%']
-        args += ['%~dp0', '%1', '%*', '%%cd:~,%', '!PATH!', '!', '', ' ', 'a b', '\t', 'C:\\dir\\', '\\\\', '"', '""', 'x"y"z', 'a\\\\"b', ';', ',']
-        args += ['=', '[]{}', "`~'", 'y' * 5000]  # the last one is longer than the initial command line buffer
+        args = batch_file_test_args(inject)
         with tempfile.TemporaryDirectory() as tdir:
             # cmd.exe must be able to run a script whose path has metacharacters as well
             sdir = os.path.join(tdir, 'a b&c%PATH%d^')
             os.mkdir(sdir)
             script, pwned = os.path.join(sdir, 'record args.cmd'), os.path.join(tdir, 'pwned')
-            with open(script, 'w', encoding='utf-8') as f:
-                code = "import sys, json; open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps(sys.argv[2:]))"
-                f.write(f'@"{kitty_exe()}" +runpy "{code}" "%~dp0..\\args.json" %*\r\n')
+            write_batch_file_recorder(script)
 
             def drain(fd: int) -> None:
                 # cmd.exe blocks when nothing reads its output, which includes its window title
@@ -125,6 +138,91 @@ class ChildMemoryTest(BaseTest):
                 with self.assertRaises(OSError) as cm:
                     run(script, arg)
                 self.ae(cm.exception.errno, errno.EINVAL)
+
+    @unittest.skipUnless(is_windows, 'Batch files are Windows only')
+    def test_windows_batch_file_arguments_outside_windows(self):
+        # Programs kitty starts outside its windows must pass arguments to
+        # batch files safely too: via subprocess for open_url_with, hints
+        # --program, launch --type=background and command_on_bell, and via Go
+        # for launch --hold (kitten run-shell), choose-files previewers and
+        # other kittens running programs the user chose
+        import json
+        import tempfile
+
+        from kitty.constants import helper_process_popen_kwargs
+        from kitty.fast_data_types import win32_batch_command_line
+        from kitty.utils import batch_safe_popen_args, is_windows_batch_file, open_url
+
+        for path, expected in {
+            'C:\\x\\a.bat': True, 'C:/x/a.CMD': True, 'C:\\x\\a.cmd. .': True, '\\\\?\\C:\\x\\a.cmd': True,
+            '\\\\?\\C:\\x\\a.cmd.': False, 'C:\\x\\a.exe': False, 'C:\\x\\acmd': False, 'C:\\x.cmd\\a': False,
+        }.items():
+            self.ae(is_windows_batch_file(path), expected, path)
+        with self.assertRaises(ValueError):
+            win32_batch_command_line('C:\\x\\r.cmd', ())
+
+        # The escaping of kitty_win32_append_batch_arg(). The Go port in
+        # tools/utils/command_windows.go is tested against the same string.
+        argv = ('r', 'a b', '', '100%', 'a"b', 'C:\\dir\\', 'x\\"y', 'a&b', 'safe-arg_1')
+        q = win32_batch_command_line('C:\\x\\r.cmd', argv)
+        assert q is not None
+        self.assertTrue(q[0].lower().endswith('\\cmd.exe'), q[0])
+        self.ae(q[1], 'cmd.exe /d /e:ON /v:OFF /s /c " C:\\x\\r.cmd "a b" "" "100%%cd:~,%" "a""b" "C:\\dir\\\\" "x\\\\""y" "a&b" safe-arg_1"')
+        self.assertIsNone(win32_batch_command_line('C:\\x\\r.exe', argv))
+        with self.assertRaises(OSError) as cm:
+            win32_batch_command_line('C:\\x\\r.cmd', ('r', 'a\nb'))
+        self.ae(cm.exception.errno, errno.EINVAL)
+
+        inject = 'echo.>pwned'
+        args = batch_file_test_args(inject)
+        with tempfile.TemporaryDirectory() as tdir:
+            sdir = os.path.join(tdir, 'a b&c%PATH%d^')
+            os.mkdir(sdir)
+            script, pwned, recorded = os.path.join(sdir, 'record args.cmd'), os.path.join(tdir, 'pwned'), os.path.join(tdir, 'args.json')
+            write_batch_file_recorder(script)
+            write_batch_file_recorder(os.path.join(sdir, 'recorder.cmd'))
+
+            def check(how: str) -> None:
+                with self.subTest(how=how):
+                    with open(recorded, encoding='utf-8') as f:
+                        self.ae(json.load(f), args)
+                    os.remove(recorded)
+                    self.assertFalse(os.path.exists(pwned), 'An argument was run as a command')
+
+            def popen(cmd: list[str]) -> None:
+                a, exe = batch_safe_popen_args(cmd)
+                self.assertTrue(exe, 'Not run via cmd.exe')
+                subprocess.run(a, executable=exe, cwd=tdir, timeout=60, **helper_process_popen_kwargs())
+
+            popen([script] + args)
+            check('subprocess with a path')
+            # A bare name resolves to the batch file via PATHEXT, which
+            # CreateProcess() alone would not do
+            path = os.environ['PATH']
+            os.environ['PATH'] = sdir + os.pathsep + path
+            try:
+                popen(['recorder'] + args)
+            finally:
+                os.environ['PATH'] = path
+            check('subprocess with a bare name')
+            p = open_url(args, program=[script], cwd=tdir)
+            assert p is not None
+            p.wait(60)
+            check('open_url')
+            subprocess.run(
+                [kitten_exe(), 'run-shell', '--shell=cmd.exe /d /c exit', '--', script] + args,
+                cwd=tdir, stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+            check('kitten run-shell')
+            with self.assertRaises(OSError) as cm:
+                batch_safe_popen_args([script, 'a\r\ndir'])
+            self.ae(cm.exception.errno, errno.EINVAL)
+            # A missing batch file is left to fail to start, and programs that
+            # are not batch files are passed through unchanged, whatever their
+            # arguments
+            missing = [os.path.join(sdir, 'missing.cmd'), 'x']
+            self.ae(batch_safe_popen_args(missing), (missing, None))
+            other = [os.path.join(os.environ.get('SystemRoot', 'C:\\Windows'), 'System32', 'cmd.exe'), 'a&b', '\udc80']
+            self.ae(batch_safe_popen_args(other), (other, None))
 
     def _spawn_allocating_child(self, alloc_bytes: int) -> subprocess.Popen:
         p = subprocess.Popen(

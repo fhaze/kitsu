@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/kovidgoyal/kitty"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -204,7 +203,7 @@ var _ = debugprintln
 
 func RunCommandRestoringTerminalToSaneStateAfter(cmd []string) {
 	exe := utils.FindExe(cmd[0])
-	c := exec.Command(exe, cmd[1:]...)
+	c := utils.Command(exe, cmd[1:]...)
 	c.Stdout = os.Stdout
 	c.Stdin = os.Stdin
 	c.Stderr = os.Stderr

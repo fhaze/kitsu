@@ -34,7 +34,7 @@ var (
 )
 
 func ffmpeg_thumbnail_cmd(path, outpath string) *exec.Cmd {
-	return exec.Command(
+	return utils.Command(
 		"ffmpeg", "-loglevel", "fatal", "-y", "-an", "-sn", "-dn", "-i", path, "-t", fmt.Sprintf("%f", video_duration),
 		"-vf", fmt.Sprintf("fps=%d,scale=%d:-1:flags=lanczos", video_fps, video_width),
 		"-c:v", "libwebp", "-lossless", "0", "-compression_level", "0", "-q:v",
@@ -46,7 +46,7 @@ func ffmpeg_thumbnail(path, tempath string, wg *sync.WaitGroup) (err error) {
 	defer wg.Done()
 	cmd := ffmpeg_thumbnail_cmd(path, tempath)
 	cmd.Stdin = nil
-	cmd.SysProcAttr = utils.DetachedSysProcAttr()
+	utils.DetachCommand(cmd)
 	var stderr bytes.Buffer
 	cmd.Stdout = nil
 	cmd.Stderr = &stderr
@@ -85,7 +85,7 @@ type FFMpegMetadata struct {
 }
 
 func ffmpeg_metadata_cmd(path string) *exec.Cmd {
-	return exec.Command(
+	return utils.Command(
 		"ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", path,
 	)
 }
@@ -94,7 +94,7 @@ func ffmpeg_metadata(path string, wg *sync.WaitGroup) (ans FFMpegMetadata, err e
 	defer wg.Done()
 	cmd := ffmpeg_metadata_cmd(path)
 	cmd.Stdin = nil
-	cmd.SysProcAttr = utils.DetachedSysProcAttr()
+	utils.DetachCommand(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

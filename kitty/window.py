@@ -108,6 +108,7 @@ from .terminfo import get_capabilities
 from .types import MouseEvent, NeighborsMap, OverlayType, WindowGeometry, ac, run_once
 from .typing_compat import BossType, ChildType, EdgeLiteral, TabType, TypedDict
 from .utils import (
+    batch_safe_popen_args,
     color_as_int,
     docs_url,
     key_val_matcher,
@@ -1616,7 +1617,8 @@ class Window:
 
             env = self.child.foreground_environ
             env['KITTY_CHILD_CMDLINE'] = ' '.join(map(shlex.quote, self.child.cmdline))
-            subprocess.Popen(cb, env=env, cwd=self.child.foreground_cwd, **helper_process_popen_kwargs())
+            args, executable = batch_safe_popen_args(cb)
+            subprocess.Popen(args, executable=executable, env=env, cwd=self.child.foreground_cwd, **helper_process_popen_kwargs())
         if not self.is_active:
             changed = not self.needs_attention
             self.needs_attention = True

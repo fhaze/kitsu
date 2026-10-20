@@ -588,7 +588,7 @@ func run_diff(file1, file2 string, num_of_context_lines int) (ok, is_different b
 		}, diff_cmd)
 
 		cmd = append(cmd, path1, path2)
-		c := exec.Command(cmd[0], cmd[1:]...)
+		c := utils.Command(cmd[0], cmd[1:]...)
 		stdout, stderr := bytes.Buffer{}, bytes.Buffer{}
 		c.Stdout, c.Stderr = &stdout, &stderr
 		err = c.Run()

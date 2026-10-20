@@ -375,12 +375,40 @@ static PyObject*
 win32_conpty_provider(PyObject *self UNUSED, PyObject *args UNUSED) {
     return PyUnicode_FromString(win32_pty_provider());
 }
+
+static PyObject*
+win32_batch_command_line(PyObject *self UNUSED, PyObject *args) {
+    // (cmd_exe, command_line) for running the batch file exe with the
+    // arguments argv[1:] via cmd.exe, None if exe is not a batch file
+    const char *exe;
+    PyObject *argv_p;
+    if (!PyArg_ParseTuple(args, "sO!", &exe, &PyTuple_Type, &argv_p)) return NULL;
+    if (PyTuple_GET_SIZE(argv_p) < 1) {
+        PyErr_SetString(PyExc_ValueError, "argv must contain at least argv[0]");
+        return NULL;
+    }
+    char **argv = serialize_string_tuple(argv_p, 0);
+    if (!argv) return NULL;
+    char *cmd_exe = NULL, *cmdline = win32_pty_batch_command_line(exe, argv, &cmd_exe);
+    int err = errno;
+    free(argv);
+    if (!cmdline) {
+        if (!err) Py_RETURN_NONE;
+        errno = err;
+        return PyErr_SetFromErrno(PyExc_OSError);
+    }
+    PyObject *ans = Py_BuildValue("ss", cmd_exe, cmdline);
+    free(cmd_exe);
+    free(cmdline);
+    return ans;
+}
 #endif
 
 static PyMethodDef module_methods[] = {
     METHODB(spawn, METH_VARARGS),
 #ifdef _WIN32
     METHODB(win32_conpty_provider, METH_NOARGS),
+    METHODB(win32_batch_command_line, METH_VARARGS),
     METHODB(openpty, METH_VARARGS),
     METHODB(set_blocking, METH_VARARGS),
     METHODB(open_directory, METH_VARARGS),

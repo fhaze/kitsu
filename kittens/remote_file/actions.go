@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kovidgoyal/kitty/tools/utils"
 	"github.com/kovidgoyal/kitty/tools/utils/shlex"
 )
 
@@ -26,7 +27,7 @@ func new_control_master(conn *SSHConnectionData, remote_path, dest string) *Cont
 }
 
 func (m *ControlMaster) check_call(argv []string) error {
-	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd := utils.Command(argv[0], argv[1:]...)
 	cmd.Stdin = nil
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -56,7 +57,7 @@ func (m *ControlMaster) Start() (err error) {
 func (m *ControlMaster) Close() {
 	if !m.conn.IsSSHKitten {
 		argv := append(m.conn.batch_cmd_prefix(), "-O", "exit", m.conn.Hostname)
-		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd := utils.Command(argv[0], argv[1:]...)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
 		_ = cmd.Run()
 	}
@@ -70,7 +71,7 @@ func (m *ControlMaster) IsAlive() bool {
 		return true
 	}
 	argv := append(m.conn.batch_cmd_prefix(), "-O", "check", m.conn.Hostname)
-	return exec.Command(argv[0], argv[1:]...).Run() == nil
+	return utils.Command(argv[0], argv[1:]...).Run() == nil
 }
 
 func (m *ControlMaster) Download() error {
@@ -80,7 +81,7 @@ func (m *ControlMaster) Download() error {
 		return err
 	}
 	defer f.Close()
-	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd := utils.Command(argv[0], argv[1:]...)
 	cmd.Stdout = f
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -105,7 +106,7 @@ func (m *ControlMaster) Upload(suppress_output bool) error {
 		return err
 	}
 	defer f.Close()
-	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd := utils.Command(argv[0], argv[1:]...)
 	cmd.Stdin = f
 	if suppress_output {
 		out, err := cmd.CombinedOutput()
@@ -127,7 +128,7 @@ func (m *ControlMaster) remote_hostname() string {
 		return ""
 	}
 	argv := append(m.conn.batch_cmd_prefix(), m.conn.Hostname, "hostname", "-f")
-	out, err := exec.Command(argv[0], argv[1:]...).Output()
+	out, err := utils.Command(argv[0], argv[1:]...).Output()
 	if err != nil {
 		return ""
 	}
@@ -172,7 +173,7 @@ func edit_loop(master *ControlMaster, editor []string) error {
 	// the screen to the user's $EDITOR, and again once it exits.
 	reset_terminal()
 	argv := append(append([]string{}, editor...), master.Dest)
-	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd := utils.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Start(); err != nil {
 		return err
