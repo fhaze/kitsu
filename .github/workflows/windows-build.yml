@@ -157,10 +157,16 @@ jobs:
 
           - name: Test batch file arguments, image file paths and file modes for remote hosts
             shell: cmd
-            run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','windows_batch_file_arguments','windows_image_path_policy','file_metadata_permissions']; main()"
+            run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','windows_batch_file_arguments','windows_batch_file_arguments_outside_windows','windows_image_path_policy','file_metadata_permissions']; main()"
 
           - name: Test file modes sent to remote hosts
             run: go test ./tools/tui/shell_integration ./tools/utils ./kittens/ssh ./kittens/transfer -run 'TestEmbeddedFileModes|TestPosixPermissions|TestCopiedFileModes|TestSendPermissions'
+
+          - name: Test batch file arguments from kittens
+            run: |
+              go test ./tools/utils -run 'TestIsBatchFile|TestBatchCommandLine|TestCommandRunsBatchFilesSafely'
+              go test ./tools/utils/images -run 'TestMagickBatchFilesAreNotUsed'
+              go vet ./tools/utils/... ./tools/tui ./kittens/choose_files ./kittens/remote_file ./kittens/diff ./kittens/hyperlinked_grep
 
           - name: Record shipped MSYS2 dependencies
             run: python .github/workflows/windows_dependencies.py windows-package/kitsu windows-runtime.cdx.json "${{ steps.pkg.outputs.zip }}"

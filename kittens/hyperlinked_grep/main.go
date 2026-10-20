@@ -303,7 +303,7 @@ func main(_ *cli.Command, _ *Options, args []string) (rc int, err error) {
 		return
 	}
 	cmdline := append([]string{"--pretty", "--with-filename"}, sanitized_args...)
-	cmd := exec.Command(RgExe(), cmdline...)
+	cmd := utils.Command(RgExe(), cmdline...)
 	cmd.Stdin = os.Stdin
 	cmd.Stderr = os.Stderr
 	buf := stdout_filter{prefix: make([]byte, 0, 8*1024)}

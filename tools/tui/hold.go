@@ -9,6 +9,7 @@ import (
 	"os/exec"
 
 	"github.com/kovidgoyal/kitty/tools/tui/loop"
+	"github.com/kovidgoyal/kitty/tools/utils"
 )
 
 var _ = fmt.Print
@@ -46,12 +47,7 @@ func ExecAndHoldTillEnter(cmdline []string) (int, error) {
 		HoldTillEnter(false)
 		return 0, nil
 	}
-	var cmd *exec.Cmd
-	if len(cmdline) == 1 {
-		cmd = exec.Command(cmdline[0])
-	} else {
-		cmd = exec.Command(cmdline[0], cmdline[1:]...)
-	}
+	cmd := utils.Command(cmdline[0], cmdline[1:]...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

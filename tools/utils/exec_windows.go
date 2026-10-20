@@ -18,8 +18,14 @@ const NAME_MAX = 255
 // Windows cannot replace the process image, so emulate exec() by running the
 // program with our stdio and exiting with its exit code. Only returns on error.
 func Exec(exe string, argv []string, env []string) error {
-	cmd := exec.Command(exe)
-	if len(argv) > 0 {
+	var args []string
+	if len(argv) > 1 {
+		args = argv[1:]
+	}
+	cmd := Command(exe, args...)
+	if len(argv) > 0 && cmd.SysProcAttr == nil {
+		// the program gets argv[0] as given, like with exec() on POSIX, a
+		// batch file run via cmd.exe gets its path instead
 		cmd.Args = argv
 	}
 	cmd.Env = env
@@ -37,6 +43,16 @@ func Exec(exe string, argv []string, env []string) error {
 
 func DetachedSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW}
+}
+
+// DetachCommand makes cmd run detached, like DetachedSysProcAttr() does,
+// keeping any other attributes cmd already has, such as the command line set
+// by Command() for batch files
+func DetachCommand(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW
 }
 
 func IsTemporarySyscallError(err error) bool {

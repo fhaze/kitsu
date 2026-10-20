@@ -33,3 +33,13 @@ bool win32_pty_signal_pid(pid_t pid, int sig);
 
 void win32_pty_init(void);
 const char *win32_pty_provider(void);
+
+// CreateProcess() runs batch files via cmd.exe, which parses their command
+// line itself, so the usual quoting does not stop arguments from running
+// commands. When exe is a batch file, returns the command line for running it
+// with the arguments argv[1:] via the system cmd.exe, escaped for it, and
+// stores the path of that cmd.exe in *cmd_exe. Both are UTF-8 and must be
+// freed by the caller. Returns NULL with errno 0 when exe is not a batch file
+// and NULL with errno set on failure: EINVAL for arguments that cannot be
+// passed to batch files at all, such as ones containing CR or LF.
+char *win32_pty_batch_command_line(const char *exe, char *const argv[], char **cmd_exe);

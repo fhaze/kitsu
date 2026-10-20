@@ -7,6 +7,7 @@ package utils
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -23,6 +24,15 @@ func Exec(exe string, argv []string, env []string) error {
 // from the controlling terminal of this process
 func DetachedSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setsid: true}
+}
+
+// DetachCommand makes cmd run detached, like DetachedSysProcAttr() does,
+// keeping any other attributes cmd already has
+func DetachCommand(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setsid = true
 }
 
 func IsTemporarySyscallError(err error) bool {

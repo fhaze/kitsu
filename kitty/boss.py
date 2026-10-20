@@ -159,6 +159,7 @@ from .tabs import DropDirection, SpecialWindow, SpecialWindowInstance, Tab, TabD
 from .types import AsyncResponse, LayerShellConfig, SingleInstanceData, WindowSystemMouseEvent, ac
 from .typing_compat import PopenType, TypedDict
 from .utils import (
+    batch_safe_popen_args,
     cleanup_ssh_control_masters,
     cwd_is_kitty_exe_dir,
     func_name,
@@ -3321,7 +3322,18 @@ class Boss:
 
             def run(stdin: int | None, stdout: int | None, stderr: int | None) -> None:
                 try:
-                    p = subprocess.Popen(cmd, env=env, cwd=cwd, **helper_process_popen_kwargs(), pass_fds=pass_fds, stdin=stdin, stdout=stdout, stderr=stderr)
+                    args, executable = batch_safe_popen_args(cmd)
+                    p = subprocess.Popen(
+                        args,
+                        executable=executable,
+                        env=env,
+                        cwd=cwd,
+                        **helper_process_popen_kwargs(),
+                        pass_fds=pass_fds,
+                        stdin=stdin,
+                        stdout=stdout,
+                        stderr=stderr,
+                    )
                     if notify_on_death:
                         self.background_process_death_notify_map[p.pid] = notify_on_death
                         monitor_pid(p.pid)
