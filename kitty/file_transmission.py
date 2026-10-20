@@ -24,6 +24,7 @@ from time import time_ns
 from typing import IO, Any, DefaultDict, Deque, Union
 
 from kittens.transfer.utils import IdentityCompressor, ZlibCompressor, abspath, expand_home, home_path
+from kitty.constants import is_windows
 from kitty.fast_data_types import ESC_OSC, FILE_TRANSFER_CODE, AES256GCMDecrypt, add_timer, base64_decode, base64_encode, get_boss, get_options, monotonic
 from kitty.types import run_once
 from kitty.typing_compat import ReadableBuffer, WriteableBuffer
@@ -70,6 +71,30 @@ def split_for_transfer(
         data = data[chunk_size:]
 
 
+def posix_permissions(path: str, sr: os.stat_result) -> int:
+    # The same as PosixPermissions() in tools/utils/access_windows.go: Windows
+    # has no mode bits, Python reports 0o666 for every writable file and
+    # 0o777 for every directory, which would make them world writable on the
+    # other end. Windows ignores the read-only attribute of directories.
+    if not is_windows:
+        return stat.S_IMODE(sr.st_mode)
+    if stat.S_ISLNK(sr.st_mode):
+        return 0o777
+    if stat.S_ISDIR(sr.st_mode):
+        return 0o755
+    perm = 0o644
+    if os.path.splitext(path)[1].lower() in ('.exe', '.com', '.bat', '.cmd'):
+        perm = 0o755
+    else:
+        with suppress(OSError), open(path, 'rb') as f:
+            head = f.read(4)
+            if head.startswith(b'#!') or head == b'\x7fELF':
+                perm = 0o755
+    if not sr.st_mode & stat.S_IWRITE:  # FILE_ATTRIBUTE_READONLY
+        perm &= ~0o222
+    return perm
+
+
 def iter_file_metadata(file_specs: Iterable[tuple[str, str]]) -> Iterator[Union['FileTransmissionCommand', 'TransmissionError']]:
     file_map: DefaultDict[tuple[int, int], list[FileTransmissionCommand]] = defaultdict(list)
     counter = count()
@@ -92,7 +117,7 @@ def iter_file_metadata(file_specs: Iterable[tuple[str, str]]) -> Iterator[Union[
             action=Action.file,
             file_id=spec_id,
             mtime=sr.st_mtime_ns,
-            permissions=stat.S_IMODE(sr.st_mode),
+            permissions=posix_permissions(path, sr),
             name=path,
             status=str(next(counter)),
             size=sr.st_size,

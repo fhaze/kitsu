@@ -663,6 +663,57 @@ def is_path_in_temp_dir(path: str) -> bool:
     return False
 
 
+@run_once
+def _win32_get_drive_type() -> Callable[[str], int]:
+    import ctypes
+
+    f = ctypes.WinDLL('kernel32').GetDriveTypeW  # ty: ignore[unresolved-attribute]
+    f.argtypes, f.restype = (ctypes.c_wchar_p,), ctypes.c_uint
+    return f
+
+
+def win32_drive_type(drive_letter: str) -> int:
+    return int(_win32_get_drive_type()(f'{drive_letter}:\\'))
+
+
+# DOS device names, which Windows finds in every directory, also with an
+# extension or trailing spaces: C:\x\nul.png and C:\x\COM1 .txt are devices
+_win32_device_names = frozenset(
+    {'CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$', 'CLOCK$'} | {f'{x}{d}' for x in ('COM', 'LPT') for d in '0123456789\xb9\xb2\xb3'}
+)
+# : selects an alternate data stream (name:stream), the others are wildcards
+# and characters that are not allowed in file names
+_win32_invalid_name_chars = frozenset({chr(i) for i in range(32)} | set('"*:<>?|'))
+
+
+def is_ok_to_read_image_path_on_windows(path: str) -> bool:
+    r"""The Windows version of :func:`is_ok_to_read_image_path`.
+
+    It must not touch the file system, not even via os.path.realpath(), which
+    opens the file. Opening \\host\share\x.png makes Windows connect to and
+    authenticate with host, leaking the NTLM hash of the user to whoever sent
+    the escape code, possibly from a remote machine over ssh. Opening
+    \\.\pipe\x connects to whatever process serves that named pipe. So only
+    absolute paths on local drives are allowed, without device names or
+    alternate data streams in them.
+    """
+    # Rejects UNC (\\host\share), device (\\.\pipe\x, \\?\GLOBALROOT, \??\),
+    # rooted (\x.png) and drive or cwd relative (C:x.png, x.png) paths
+    if len(path) < 3 or path[0] not in string.ascii_letters or path[1] != ':' or path[2] not in '\\/':
+        return False
+    for name in path[3:].replace('/', '\\').split('\\'):
+        if name in ('', '.', '..'):
+            continue
+        # Windows strips trailing dots and spaces, making nul. a device as well
+        if name[-1] in '. ' or not _win32_invalid_name_chars.isdisjoint(name):
+            return False
+        if name.partition('.')[0].rstrip(' ').upper() in _win32_device_names:
+            return False
+    # DRIVE_UNKNOWN, DRIVE_NO_ROOT_DIR and DRIVE_REMOTE, mapped network drives
+    # are as bad as UNC paths
+    return win32_drive_type(path[0]) not in (0, 1, 4)
+
+
 def is_ok_to_read_image_path(path: str) -> bool:
     """Check if path may be read, based only on the path itself.
 
@@ -672,6 +723,11 @@ def is_ok_to_read_image_path(path: str) -> bool:
     """
     if not path:
         return False
+    if is_windows:
+        # The resolved path is checked as well, for local symlinks to network
+        # shares or devices. Resolving follows them just as opening would,
+        # and creating them needs local access, unlike the escape code.
+        return is_ok_to_read_image_path_on_windows(path) and is_ok_to_read_image_path_on_windows(os.path.realpath(path))
     path = os.path.abspath(os.path.realpath(path))
     parts = path.split(os.sep)[1:]
     if len(parts) < 1:

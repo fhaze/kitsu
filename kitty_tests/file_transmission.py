@@ -12,8 +12,8 @@ from pathlib import Path
 
 from kittens.transfer.rsync import Differ, Hasher, Patcher, parse_ftc
 from kittens.transfer.utils import set_paths
-from kitty.constants import kitten_exe
-from kitty.file_transmission import Action, Compression, FileTransmissionCommand, FileType, TransmissionType, ZlibDecompressor
+from kitty.constants import is_windows, kitten_exe
+from kitty.file_transmission import Action, Compression, FileTransmissionCommand, FileType, TransmissionType, ZlibDecompressor, iter_file_metadata
 from kitty.file_transmission import TestFileTransmission as FileTransmission
 
 from .base import PTY, BaseTest
@@ -331,6 +331,36 @@ class TestFileTransmission(BaseTest):
         tf.close()
         self.assertPathEqual(os.path.dirname(tf.name), base)
         os.remove(tf.name)
+
+    def test_file_metadata_permissions(self):
+        # Windows has no mode bits, the permissions sent for its files must be
+        # what POSIX systems would have, not 0o666 and 0o777 for everything
+        base = os.path.join(self.tdir, 'perms')
+        for d in (base, os.path.join(base, 'dir')):
+            os.mkdir(d)
+            os.chmod(d, 0o755)
+        expected = {'perms': 0o755, 'dir': 0o755}
+
+        def create(name, mode, data=b''):
+            with open(os.path.join(base, name), 'wb') as f:
+                f.write(data)
+            os.chmod(f.name, mode)
+            expected[name] = mode
+
+        create('plain.txt', 0o644)
+        create('script', 0o755, b'#!/bin/sh\n')
+        create('elf', 0o755, b'\x7fELF\x02\x01')
+        create('read-only.txt', 0o444)
+        create('read-only-script', 0o555, b'#!/bin/sh\n')
+        if is_windows:
+            create('tool.EXE', 0o755, b'MZ')
+            create('tool.cmd', 0o755)
+        try:
+            actual = {os.path.basename(x.name): x.permissions for x in iter_file_metadata((('x', base),)) if isinstance(x, FileTransmissionCommand)}
+            self.ae({k: oct(v) for k, v in actual.items()}, {k: oct(v) for k, v in expected.items()})
+        finally:
+            for name in os.listdir(base):
+                os.chmod(os.path.join(base, name), 0o755)
 
     def test_file_get(self):
         # send refusal

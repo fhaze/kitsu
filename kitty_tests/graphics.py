@@ -12,6 +12,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from io import BytesIO
 
+from kitty.constants import is_windows
 from kitty.fast_data_types import base64_decode, base64_encode, load_png_data, shm_unlink, shm_write
 
 from .base import BaseTest, parse_bytes
@@ -438,7 +439,7 @@ class TestGraphics(BaseTest):
         # visible while in use and must be deleted by the OS when closed.
         import gc
 
-        from kitty.constants import cache_dir, is_windows
+        from kitty.constants import cache_dir
 
         def cache_files():
             return {x for x in os.listdir(cache_dir()) if x.startswith('disk-cache-')}
@@ -627,6 +628,10 @@ class TestGraphics(BaseTest):
                     pl(path, s=1024, v=8, t='f')
             self.ae(before, num_open_fds(), 'File descriptors were leaked when failing to read image files')
 
+        if is_windows:
+            self.ae(pl('NUL', s=1024, v=8, t='f'), generic_error)
+            self.check_image_not_read_from_named_pipe(pl, random_data, generic_error)
+
         # A window of a shared memory object with a non page aligned offset
         name = '/kitty-test-shm-offset'
         shm_write(name, b'x' * 3 + random_data + b'y' * 5)
@@ -646,6 +651,53 @@ class TestGraphics(BaseTest):
 
         s.reset()
         self.assertEqual(g.disk_cache.total_size, 0)
+
+    def check_image_not_read_from_named_pipe(self, pl, data, generic_error):
+        # Only files on disk may be read, and a named pipe server must get only
+        # an identification token for the user, not one to impersonate them
+        # with. Without SECURITY_SQOS_PRESENT impersonation instead fails until
+        # the client writes, and gives a full impersonation token after that.
+        import ctypes
+        import threading
+        from ctypes import wintypes as w
+
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        adv = ctypes.WinDLL('advapi32', use_last_error=True)
+        k32.CreateNamedPipeW.restype = w.HANDLE
+        k32.CreateNamedPipeW.argtypes = (w.LPCWSTR, w.DWORD, w.DWORD, w.DWORD, w.DWORD, w.DWORD, w.DWORD, ctypes.c_void_p)
+        k32.ConnectNamedPipe.argtypes = (w.HANDLE, ctypes.c_void_p)
+        k32.WriteFile.argtypes = (w.HANDLE, ctypes.c_char_p, w.DWORD, ctypes.POINTER(w.DWORD), ctypes.c_void_p)
+        k32.CloseHandle.argtypes = (w.HANDLE,)
+        k32.GetCurrentThread.restype = w.HANDLE
+        adv.ImpersonateNamedPipeClient.argtypes = (w.HANDLE,)
+        adv.OpenThreadToken.argtypes = (w.HANDLE, w.DWORD, w.BOOL, ctypes.POINTER(w.HANDLE))
+        adv.GetTokenInformation.argtypes = (w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, ctypes.POINTER(w.DWORD))
+        name = rf'\\.\pipe\kitty-test-graphics-{os.getpid()}'
+        pipe = k32.CreateNamedPipeW(name, 3, 0, 1, len(data), len(data), 0, None)  # PIPE_ACCESS_DUPLEX
+        self.assertNotEqual(pipe, w.HANDLE(-1).value, ctypes.get_last_error())
+        levels = []
+
+        def serve():
+            k32.ConnectNamedPipe(pipe, None)
+            if adv.ImpersonateNamedPipeClient(pipe):
+                token, level, n = w.HANDLE(), ctypes.c_int(), w.DWORD()
+                if adv.OpenThreadToken(k32.GetCurrentThread(), 8, True, ctypes.byref(token)):  # TOKEN_QUERY
+                    adv.GetTokenInformation(token, 9, ctypes.byref(level), 4, ctypes.byref(n))  # TokenImpersonationLevel
+                    k32.CloseHandle(token)
+                    levels.append(level.value)
+                adv.RevertToSelf()
+            # Valid image data, so that only refusing to read it fails the load
+            k32.WriteFile(pipe, data[: 1024 * 8 * 3], 1024 * 8 * 3, ctypes.byref(w.DWORD()), None)
+
+        t = threading.Thread(target=serve, daemon=True)
+        t.start()
+        try:
+            self.ae(pl(name, s=1024, v=8, t='f'), generic_error)
+        finally:
+            t.join(10)
+            k32.CloseHandle(pipe)
+        self.assertFalse(t.is_alive())
+        self.ae(levels, [1], 'The named pipe was not opened with SECURITY_IDENTIFICATION')  # SecurityIdentification
 
     def test_graphics_file_reading_policy(self):
         from kitty.fast_data_types import set_boss
@@ -678,6 +730,22 @@ class TestGraphics(BaseTest):
             # alone, without ever being opened, since both opening a file and
             # the error from a failed open leak its existence
             protected = ('/proc/self/cmdline', '/proc/does-not-exist', '/sys/kernel/does-not-exist', '/dev/null', '/dev/does-not-exist')
+            if is_windows:
+                # Opening a UNC path authenticates with its server, leaking the
+                # NTLM hash of the user, a named pipe server can impersonate the
+                # user and devices are not files
+                protected += (
+                    r'\\kitty-test.invalid\share\x.png',
+                    '//kitty-test.invalid/share/x.png',
+                    r'\\?\UNC\kitty-test.invalid\share\x.png',
+                    r'\\.\pipe\kitty-test-does-not-exist',
+                    r'\\?\C:\Windows\win.ini',
+                    r'C:\Windows\win.ini:stream',
+                    'NUL',
+                    'CON',
+                    r'C:\x\nul.png',
+                    'relative.png',
+                )
             for path in protected:
                 self.ae(pl(path, s=1024, v=8, t='f'), generic_error, path)
             self.assertFalse(boss.fd_checks, 'A file in a protected location was opened before the policy was applied')

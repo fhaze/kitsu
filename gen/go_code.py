@@ -12,7 +12,7 @@ import struct
 import subprocess
 import sys
 import tarfile
-from collections.abc import Generator, Iterator, Sequence
+from collections.abc import Generator, Iterable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from functools import lru_cache
 from itertools import chain
@@ -969,6 +969,31 @@ def generate_unicode_names(src: TextIO, dest: BinaryIO) -> None:
     write_compressed_data(gob.getvalue(), dest)
 
 
+def executable_files(paths: Iterable[str]) -> set[str]:
+    # Windows has no executable bit, so it comes from git, which records it on
+    # every OS. Untracked files, or no git at all, fall back to the file system,
+    # or on Windows to looking for a #! line.
+    wanted = set(paths)
+    ans: set[str] = set()
+    tracked: set[str] = set()
+    with suppress(OSError, subprocess.CalledProcessError):
+        out = subprocess.check_output(['git', 'ls-files', '--stage', '-z', '--', *sorted(wanted)], stderr=subprocess.DEVNULL)
+        for entry in out.decode('utf-8').split('\0'):
+            meta, sep, path = entry.partition('\t')
+            if sep:
+                tracked.add(path)
+                if meta.split()[0] == '100755':
+                    ans.add(path)
+    for path in wanted - tracked:
+        if sys.platform == 'win32':
+            with open(path, 'rb') as f:
+                if f.read(2) == b'#!':
+                    ans.add(path)
+        elif os.stat(path).st_mode & 0o111:
+            ans.add(path)
+    return ans
+
+
 def generate_ssh_kitten_data() -> None:
     files = {
         'terminfo/kitty.terminfo',
@@ -979,29 +1004,39 @@ def generate_ssh_kitten_data() -> None:
             path = os.path.join(dirpath, f)
             files.add(path.replace(os.sep, '/'))
     dest = 'tools/tui/shell_integration/data_generated.bin'
+    if not newer(dest, *files):
+        return
+    executables = executable_files(files)
 
     def normalize(t: tarfile.TarInfo) -> tarfile.TarInfo:
         t.uid = t.gid = 0
         t.uname = t.gname = ''
         t.mtime = 0
+        # The modes must not depend on the OS of the build machine, Windows
+        # reports every file as 0o666, which would make the scripts sourced on
+        # the remote world writable and its kitty and kitten wrappers not
+        # executable
+        if t.isdir():
+            t.mode = 0o755
+        elif t.isreg():
+            t.mode = 0o755 if t.name in executables else 0o644
         return t
 
-    if newer(dest, *files):
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode='w') as tf:
-            for f in sorted(files):
-                if os.path.isfile(f) and not os.path.islink(f):
-                    # these scripts run on the remote host, so they must have
-                    # LF line endings even when checked out with autocrlf on Windows
-                    with open(f, 'rb') as src:
-                        data = src.read().replace(b'\r\n', b'\n')
-                    t = normalize(tf.gettarinfo(f))
-                    t.size = len(data)
-                    tf.addfile(t, io.BytesIO(data))
-                else:
-                    tf.add(f, filter=normalize)
-        with open(dest, 'wb') as d:
-            write_compressed_data(buf.getvalue(), d)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w') as tf:
+        for f in sorted(files):
+            if os.path.isfile(f) and not os.path.islink(f):
+                # these scripts run on the remote host, so they must have
+                # LF line endings even when checked out with autocrlf on Windows
+                with open(f, 'rb') as src:
+                    data = src.read().replace(b'\r\n', b'\n')
+                t = normalize(tf.gettarinfo(f))
+                t.size = len(data)
+                tf.addfile(t, io.BytesIO(data))
+            else:
+                tf.add(f, filter=normalize)
+    with open(dest, 'wb') as d:
+        write_compressed_data(buf.getvalue(), d)
 
 
 def start_simdgen() -> 'subprocess.Popen[bytes]':

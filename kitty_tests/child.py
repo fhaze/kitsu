@@ -1,13 +1,15 @@
 #!/usr/bin/env python
 # License: GPL v3 Copyright: 2026, Kovid Goyal <kovid at kovidgoyal.net>
 
+import errno
 import os
 import subprocess
+import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from kitty.child import Child, add_kitty_vars_to_wslenv, memory_used_by_process_tree_rooted_at
-from kitty.constants import is_macos, kitty_exe
+from kitty.constants import is_macos, is_windows, kitten_exe, kitty_exe
 from kitty.window import Window
 
 from .base import BaseTest
@@ -46,6 +48,83 @@ class ChildMemoryTest(BaseTest):
             child.is_shell = False
             child.pid_for_cwd = child.pid
             self.assertTrue(Window.has_running_program.fget(window))
+
+    @unittest.skipUnless(is_windows, 'Batch files are Windows only')
+    def test_windows_batch_file_arguments(self):
+        # cmd.exe parses the command line of batch files itself, arguments must
+        # reach the script unchanged instead of running commands via its
+        # metacharacters (CVE-2024-24576, aka BatBadBut). EDITOR=code for
+        # instance resolves to code.cmd, which the default open action passes
+        # file names from hyperlinks to.
+        import ctypes
+        import json
+        import tempfile
+        import threading
+        from contextlib import suppress
+
+        from kitty.fast_data_types import openpty, spawn
+
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        k32.OpenProcess.restype = ctypes.c_void_p
+        k32.WaitForSingleObject.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+        k32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        inject = 'echo.>pwned'
+        args = [r'C:\tmp\a.txt&' + inject, f'x|{inject}', f'x<a.json&{inject}', f'x>y&{inject}', f'x^&{inject}', f'(x)&{inject}', f'"&{inject}&"']
+        args += [f'a"&{inject}&"b', f'\\"&{inject}', f'^"&{inject}', f'%"&{inject}&"%', f'a\\"&{inject}', '%PATH%', '100%', '%cd%', '%%', '%=C:%']
+        args += ['%~dp0', '%1', '%*', '%%cd:~,%', '!PATH!', '!', '', ' ', 'a b', '\t', 'C:\\dir\\', '\\\\', '"', '""', 'x"y"z', 'a\\\\"b', ';', ',']
+        args += ['=', '[]{}', "`~'", 'y' * 5000]  # the last one is longer than the initial command line buffer
+        with tempfile.TemporaryDirectory() as tdir:
+            # cmd.exe must be able to run a script whose path has metacharacters as well
+            sdir = os.path.join(tdir, 'a b&c%PATH%d^')
+            os.mkdir(sdir)
+            script, pwned = os.path.join(sdir, 'record args.cmd'), os.path.join(tdir, 'pwned')
+            with open(script, 'w', encoding='utf-8') as f:
+                code = "import sys, json; open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps(sys.argv[2:]))"
+                f.write(f'@"{kitty_exe()}" +runpy "{code}" "%~dp0..\\args.json" %*\r\n')
+
+            def drain(fd: int) -> None:
+                # cmd.exe blocks when nothing reads its output, which includes its window title
+                with suppress(OSError):
+                    while os.read(fd, 65536):
+                        pass
+
+            def environ() -> tuple[str, ...]:
+                # not stored in a local, as those are printed when a test fails
+                return tuple(f'{k}={v}' for k, v in os.environ.items())
+
+            def run(exe: str, *args: str) -> None:
+                # The pseudoconsole is closed when its child exits, so every
+                # run needs its own. The master is left open, os.close() would
+                # leave the pty registered under its fd number, kitty closes it
+                # from C.
+                master, slave = openpty()
+                threading.Thread(target=drain, args=(master,), daemon=True).start()
+                try:
+                    pid = spawn(exe, tdir, (exe,) + args, environ(), master, slave, -1, -1, -1, -1, (), kitten_exe(), False, ())
+                finally:
+                    os.close(slave)
+                h = k32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+                self.assertTrue(h, ctypes.get_last_error())
+                try:
+                    self.ae(k32.WaitForSingleObject(h, 60000), 0)
+                finally:
+                    k32.CloseHandle(h)
+
+            for exe in (script, script.upper(), script + '. .'):
+                with self.subTest(exe=exe):
+                    run(exe, *args)
+                    with open(os.path.join(tdir, 'args.json'), encoding='utf-8') as f:
+                        self.ae(json.load(f), args)
+                    os.remove(os.path.join(tdir, 'args.json'))
+                    self.assertFalse(os.path.exists(pwned), 'An argument was run as a command')
+            # kitty.exe cannot receive non-ASCII arguments, so only check that these do not run anything
+            run(script, f'ünïcødé&{inject}', f'漢字|{inject}', f'x\x85&{inject}')
+            self.assertFalse(os.path.exists(pwned), 'An argument was run as a command')
+            # CR and LF end the command, there is no way to escape them
+            for arg in ('a\r\ndir', 'a\ndir', 'a\rdir'):
+                with self.assertRaises(OSError) as cm:
+                    run(script, arg)
+                self.ae(cm.exception.errno, errno.EINVAL)
 
     def _spawn_allocating_child(self, alloc_bytes: int) -> subprocess.Popen:
         p = subprocess.Popen(

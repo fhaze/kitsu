@@ -1076,9 +1076,25 @@ kitty_win32_open_readonly_shared(const char *path) {
         errno = ENAMETOOLONG;
         return -1;
     }
-    HANDLE h = CreateFileW(wpath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    // The path comes from a client, so: should it name a named pipe, its
+    // server may only identify us, not impersonate us. Do not fetch files
+    // from offline storage, such as cloud files that are not on disk. And
+    // only read actual files, not pipes or devices such as CON.
+    HANDLE h = CreateFileW(
+        wpath,
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_NO_RECALL | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+        NULL);
     if (h == INVALID_HANDLE_VALUE) {
         set_errno_from_last_error();
+        return -1;
+    }
+    if (GetFileType(h) != FILE_TYPE_DISK) {
+        CloseHandle(h);
+        errno = EACCES;
         return -1;
     }
     int fd = _open_osfhandle((intptr_t)h, _O_RDONLY | _O_BINARY | _O_NOINHERIT);
@@ -1505,15 +1521,19 @@ win32_exe_path(char *buf, size_t buf_sz) {
     return true;
 }
 
+#define emit(ch)                    \
+    {                               \
+        if (*pos + 1 >= buf_sz) {   \
+            errno = E2BIG;          \
+            return false;           \
+        }                           \
+        buf[(*pos)++] = ch;         \
+    }
+
 bool
 kitty_win32_append_quoted_arg(char *buf, size_t buf_sz, size_t *pos, const char *arg) {
     // Quoting rules for CommandLineToArgvW()
     bool needs_quotes = !*arg || strpbrk(arg, " \t\"") != NULL;
-#define emit(ch)                              \
-    {                                         \
-        if (*pos + 1 >= buf_sz) return false; \
-        buf[(*pos)++] = ch;                   \
-    }
     if (*pos) emit(' ');
     if (needs_quotes) emit('"');
     size_t backslashes = 0;
@@ -1533,9 +1553,76 @@ kitty_win32_append_quoted_arg(char *buf, size_t buf_sz, size_t *pos, const char 
     for (size_t i = 0; i < (needs_quotes ? 2 * backslashes : backslashes); i++) emit('\\');
     if (needs_quotes) emit('"');
     buf[*pos] = 0;
-#undef emit
     return true;
 }
+
+static bool
+is_safe_unquoted_batch_char(unsigned char ch) {
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || (ch && strchr("#$*+-./:?@\\_", ch));
+}
+
+bool
+kitty_win32_is_batch_file(const wchar_t *path) {
+    // CreateProcess() runs files with a .bat or .cmd extension via cmd.exe,
+    // also when the name has trailing dots or spaces, which Windows strips
+    // from file names unless the path is a \\?\ one.
+    size_t n = wcslen(path);
+    if (wcsncmp(path, L"\\\\?\\", 4) != 0)
+        while (n && (path[n - 1] == L'.' || path[n - 1] == L' ')) n--;
+    return n >= 4 && (_wcsnicmp(path + n - 4, L".bat", 4) == 0 || _wcsnicmp(path + n - 4, L".cmd", 4) == 0);
+}
+
+bool
+kitty_win32_append_batch_arg(char *buf, size_t buf_sz, size_t *pos, const char *arg) {
+    // cmd.exe parses the command line of batch files itself, so the
+    // CommandLineToArgvW() rules do not protect their arguments. Outside
+    // double quotes & | < > ^ ( ) are metacharacters and %var% is expanded
+    // even inside them, allowing command injection (CVE-2024-24576, aka
+    // BatBadBut). This follows the fix in the Rust standard library: quote
+    // every argument with anything but known safe characters, escape embedded
+    // quotes by doubling them, which keeps cmd.exe inside the quoted region,
+    // and turn every % into the zero length substring %%cd:~,% so that no
+    // variable name can be formed. That needs command extensions, and
+    // delayed expansion disabled so that ! is not special, see
+    // KITTY_WIN32_BATCH_PREFIX. CR and LF end the command and cannot be
+    // escaped at all.
+    if (strpbrk(arg, "\r\n")) {
+        errno = EINVAL;
+        return false;
+    }
+    // Quote empty arguments so they are not dropped and those ending with a
+    // backslash so that it does not escape the closing quote of "%~1"
+    bool needs_quotes = !*arg || arg[strlen(arg) - 1] == '\\';
+    for (const unsigned char *p = (const unsigned char *)arg; *p && !needs_quotes; p++) {
+        if (*p < 0x80) needs_quotes = !is_safe_unquoted_batch_char(*p);
+        else if (*p == 0xc2 && p[1] >= 0x80 && p[1] < 0xa0) needs_quotes = true; // C1 control characters
+    }
+    if (*pos) emit(' ');
+    if (needs_quotes) emit('"');
+    size_t backslashes = 0;
+    for (const char *p = arg; *p; p++) {
+        if (*p == '\\') {
+            backslashes++;
+        } else {
+            if (*p == '"') {
+                // n backslashes before a quote become 2n, followed by ""
+                for (size_t i = 0; i < backslashes; i++) emit('\\');
+                emit('"');
+            } else if (*p == '%') {
+                for (const char *q = "%%cd:~,"; *q; q++) emit(*q);
+            }
+            backslashes = 0;
+        }
+        emit(*p);
+    }
+    if (needs_quotes) {
+        for (size_t i = 0; i < backslashes; i++) emit('\\');
+        emit('"');
+    }
+    buf[*pos] = 0;
+    return true;
+}
+#undef emit
 
 bool
 win32_add_dll_dir_of_module(const wchar_t *module_name) {
