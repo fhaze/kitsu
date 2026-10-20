@@ -11,7 +11,7 @@ import socket
 import subprocess
 import sys
 from collections import deque
-from collections.abc import Callable, Collection, Container, Generator, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Container, Generator, Iterable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from functools import partial
@@ -270,12 +270,22 @@ def listen_on(spec: str, robust_atexit: Atexit) -> tuple[int, str]:
 def create_dcs_channel(robust_atexit: Atexit) -> tuple[int, str, str]:
     # ConPTY strips unknown DCS escape codes, so on Windows kittens send
     # @kitty-* DCS messages over a loopback socket instead of the tty.
+    # Any local process, including ones running as other users, can connect
+    # to it, so it must only ever act on messages carrying the token, see
+    # Boss.handle_dcs_channel_message()
     try:
         fd, address = listen_on('tcp:127.0.0.1:0', robust_atexit)
     except Exception as err:
         log_error(f'Failed to create DCS channel socket with error: {err}')
         return -1, '', ''
     return fd, address, secrets.token_urlsafe(32)
+
+
+def dcs_channel_message_prefix(token: str) -> bytes:
+    # Every message on the DCS channel starts with exactly these bytes (see
+    # tools/utils/dcs_channel.go) so that the token can be checked before
+    # parsing anything sent by the peer.
+    return b'{"cmd":"dcs","token":' + json.dumps(token).encode() + b','
 
 
 def data_for_at(w: Window | None, arg: str, add_wrap_markers: bool = False) -> str | None:
@@ -1014,9 +1024,23 @@ class Boss:
                 return None
             raise
 
-    def handle_dcs_channel_message(self, data: Mapping[str, Any]) -> None:
-        if not self.dcs_channel_token or not secrets.compare_digest(str(data.get('token', '')), self.dcs_channel_token):
-            log_error('Ignoring DCS channel message with invalid token')
+    def handle_dcs_channel_message(self, msg_bytes: bytes) -> None:
+        token = self.dcs_channel_token.encode()
+        prefix = dcs_channel_message_prefix(self.dcs_channel_token)
+        if not token or not secrets.compare_digest(msg_bytes[: len(prefix)], prefix):
+            log_error('Rejected message without a valid token on the DCS channel')
+            return
+        try:
+            data = json.loads(msg_bytes)
+        except Exception:
+            log_error('Ignoring malformed DCS channel message')
+            return
+        # JSON objects can repeat keys with the last one winning, so check the
+        # parsed values too. Only DCS messages are ever accepted here, never
+        # new_instance or anything else meant for the single instance socket.
+        if not isinstance(data, dict) or data.get('cmd') != 'dcs' or not secrets.compare_digest(str(data.get('token', '')).encode(), token):
+            cmd = data.get('cmd') if isinstance(data, dict) else None
+            log_error(f'Rejected message with cmd: {cmd!r} on the DCS channel')
             return
         try:
             window_id = int(data['window_id'])
@@ -1050,14 +1074,16 @@ class Boss:
                 return encode_response_for_peer(response)
             log_error('Malformatted remote control message received from peer, ignoring')
             return None
+        if self.dcs_channel_token:
+            # The talk socket is the DCS channel rather than a single instance
+            # socket, it must never be used to run anything.
+            self.handle_dcs_channel_message(msg_bytes)
+            return None
 
         try:
             data: SingleInstanceData = json.loads(msg_bytes.decode('utf-8'))
         except Exception:
             log_error('Malformed command received over single instance socket, ignoring')
-            return None
-        if isinstance(data, dict) and data.get('cmd') == 'dcs':
-            self.handle_dcs_channel_message(data)
             return None
         if isinstance(data, dict) and data.get('cmd') == 'new_instance':
             if data['args'][0] == 'panel':
