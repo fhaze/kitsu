@@ -5774,6 +5774,12 @@ MODE_GETSET(paste_events, PASTE_EVENTS)
 MODE_GETSET(auto_repeat_enabled, DECARM)
 MODE_GETSET(cursor_visible, DECTCEM)
 MODE_GETSET(cursor_key_mode, DECCKM)
+#ifdef _WIN32
+static PyObject *
+win32_input_mode_get(Screen *self, void UNUSED *closure) {
+    return PyBool_FromLong(self->modes.mWIN32_INPUT);
+}
+#endif
 
 static PyObject *
 disable_ligatures_get(Screen *self, void UNUSED *closure) {
@@ -7267,6 +7273,9 @@ static PyMethodDef methods[] = {
 };
 
 static PyGetSetDef getsetters[] = {
+#ifdef _WIN32
+    {"win32_input_mode", (getter)win32_input_mode_get, NULL, NULL, NULL},
+#endif
     GETSET(in_bracketed_paste_mode) GETSET(color_preference_notification) GETSET(auto_repeat_enabled) GETSET(focus_tracking_enabled)
         GETSET(in_band_resize_notification) GETSET(paste_events) GETSET(cursor_visible) GETSET(cursor_key_mode) GETSET(disable_ligatures)
             GETSET(render_unfocused_cursor){NULL} /* Sentinel */

@@ -2676,6 +2676,7 @@ class Window:
             text=key_event.text,
             key_encoding_flags=self.screen.current_key_encoding_flags(),
             cursor_key_mode=self.screen.cursor_key_mode,
+            win32_input_mode=is_windows and self.screen.win32_input_mode,
         ).encode('ascii')
 
     @ac('cp', 'Copy the selected text from the active window to the clipboard, if no selection, send SIGINT (aka :kbd:`ctrl+c`)')

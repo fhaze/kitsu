@@ -11,6 +11,10 @@
 #include "glfw-wrapper.h"
 #include <structmember.h>
 
+#ifdef _WIN32
+bool synthesize_win32_key(GLFWkeyevent *ev);
+#endif
+
 #if !defined(__APPLE__) && !defined(_WIN32)
 #define HAS_XKB 1
 #include <xkbcommon/xkbcommon.h>
@@ -463,6 +467,11 @@ pyencode_key_for_tty(PyObject *self UNUSED, PyObject *args, PyObject *kw) {
         .win32_char = win32_char,
         .win32_control_state = win32_control_state};
     if (win32_input_mode) {
+#ifdef _WIN32
+        if (ev.key && !ev.win32_vk && !ev.native_key && !ev.win32_char && !ev.win32_control_state && !synthesize_win32_key(&ev)) {
+            return PyUnicode_FromString("");
+        }
+#endif
         size_t size = encode_win32_key_event(&ev, NULL, 0);
         RAII_ALLOC(char, buf, malloc(size + 1));
         if (!buf) return PyErr_NoMemory();
