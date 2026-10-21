@@ -2612,14 +2612,21 @@ class Boss:
             return x
 
         cmd = list(map(prepare_arg, get_options().scrollback_pager))
+        bundled_less = os.path.join(os.path.dirname(kitty_exe()), 'less.exe') if is_windows else ''
+        if bundled_less and not os.path.isfile(bundled_less):
+            bundled_less = ''
         if not os.path.isabs(cmd[0]):
-            resolved_exe = which(cmd[0])
+            resolved_exe = bundled_less if is_windows and cmd[0].lower() in ('less', 'less.exe') else which(cmd[0])
+            if not resolved_exe:
+                resolved_exe = which(cmd[0])
             if not resolved_exe:
                 log_error(f'The scrollback_pager {cmd[0]} was not found in PATH, falling back to less')
-                resolved_exe = which('less') or 'less'
+                resolved_exe = bundled_less or which('less') or 'less'
+                if is_windows:
+                    cmd = ['less', '--chop-long-lines', '--RAW-CONTROL-CHARS', f'+{input_line_number}']
             cmd[0] = resolved_exe
 
-        if os.path.basename(cmd[0]) == 'less':
+        if (os.path.splitext(os.path.basename(cmd[0]))[0].lower() if is_windows else os.path.basename(cmd[0])) == 'less':
             cmd.append('-+F')  # reset --quit-if-one-screen
         tab = self.active_tab
         if tab is not None:
@@ -2633,9 +2640,14 @@ class Boss:
                     else:
                         bdata = re.sub(rb'\x1b\].*?\x1b\\', b'', bdata)
 
-            return tab.new_special_window(
-                SpecialWindow(cmd, bdata, title or _('History'), overlay_for=window.id, cwd=window.cwd_of_child), copy_colors_from=self.active_window
-            )
+            try:
+                return tab.new_special_window(
+                    SpecialWindow(cmd, bdata, title or _('History'), overlay_for=window.id, cwd=window.cwd_of_child), copy_colors_from=self.active_window
+                )
+            except OSError as err:
+                if not is_windows:
+                    raise
+                self.show_error(_('Cannot launch scrollback pager'), f'{cmd[0]}: {err}')
         return None
 
     @ac('misc', 'Edit the kitty.conf config file in your favorite text editor')
@@ -2649,11 +2661,22 @@ class Boss:
         if not os.path.isabs(exe):
             exe = which(exe) or ''
             if not exe or not os.access(exe, os.X_OK):
-                self.show_error(_('Cannot find editor'), _('Could not edit the file {0} because the editor {1} was not found.').format(editor_cmd[0]))
+                self.show_error(_('Cannot find editor'), _('Could not edit the file {0} because the editor {1} was not found.').format(path, editor_cmd[0]))
                 return
             editor_cmd[0] = exe
         path = os.path.abspath(os.path.expanduser(path))
-        self.new_os_window(*editor_cmd, path)
+        if sys.platform == 'win32':
+            from .utils import is_windows_gui_executable
+
+            try:
+                if is_windows_gui_executable(exe):
+                    subprocess.Popen([*editor_cmd, path], creationflags=subprocess.DETACHED_PROCESS)
+                else:
+                    self.new_os_window(*editor_cmd, path)
+            except OSError as err:
+                self.show_error(_('Cannot launch editor'), f'{exe}: {err}')
+        else:
+            self.new_os_window(*editor_cmd, path)
 
     def run_kitten_with_metadata(
         self,

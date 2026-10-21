@@ -1920,6 +1920,34 @@ CONPTY_NUGET_SHA256 = '02b07b349af66d801159bdf9e440d4a1ce78bb951f37fc8609731665a
 SLANG_RUNTIME_FILES = ('slang-compiler.dll', 'slang-glsl-module.dll', 'slang-glslang.dll')
 
 
+def bundle_windows_less(launcher_dir: str) -> None:
+    import zipfile
+    from urllib.request import urlopen
+
+    version = '685'
+    hashes = {
+        'x86_64': ('x64', '13a265128ae05ddfd362a791fcc70eadf7dac66b2f45f888d7b2016e27ba4871'),
+        'arm64': ('arm64', 'eadbef3dd7bc000471780371090102f6f015dbf21a696c91a60cc36e9d07dd7b'),
+    }
+    arch, expected = hashes[windows_package_arch()]
+    cache_dir = os.path.join(build_dir, 'less')
+    safe_makedirs(cache_dir)
+    archive = os.path.join(cache_dir, f'less-{version}-{arch}.zip')
+    if not os.path.exists(archive):
+        url = f'https://github.com/jftuga/less-Windows/releases/download/less-v{version}/less-{arch}.zip'
+        print('Downloading', url)
+        with urlopen(url) as src, open(archive, 'wb') as dst:
+            shutil.copyfileobj(src, dst)
+    with open(archive, 'rb') as f:
+        digest = hashlib.sha256(f.read()).hexdigest()
+    if digest != expected:
+        os.remove(archive)
+        raise SystemExit(f'SHA256 mismatch for {archive}: expected {expected} got {digest}')
+    with zipfile.ZipFile(archive) as zf, zf.open('less.exe') as src, open(os.path.join(launcher_dir, 'less.exe'), 'wb') as dst:
+        shutil.copyfileobj(src, dst)
+    shutil.copy2(os.path.join(src_base, 'windows', 'less-LICENSE.txt'), launcher_dir)
+
+
 def bundle_slangc(launcher_dir: str) -> None:
     slangc = shutil.which(os.environ.get('SLANGC', 'slangc'))
     if not slangc:
@@ -2605,6 +2633,7 @@ def package(args: Options, bundle_type: str, do_build_all: bool = True) -> None:
         bundle_windows_runtime(ddir, launcher_dir)
         bundle_conpty(launcher_dir)
         bundle_slangc(launcher_dir)
+        bundle_windows_less(launcher_dir)
     if not for_freeze:
         if not bundle_type.startswith('macos-'):
             build_static_kittens(args, launcher_dir=launcher_dir)

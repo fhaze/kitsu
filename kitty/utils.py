@@ -783,12 +783,27 @@ def get_editor_from_env_vars(opts: Options | None = None) -> list[str]:
         shell_env = read_shell_environment(opts)
         editor = get_editor_from_env(shell_env)
 
-    for ans in (editor, 'vim', 'nvim', 'vi', 'emacs', 'hx', 'kak', 'micro', 'nano', 'vis'):
+    candidates = ('vim', 'nvim', 'vi', 'emacs', 'hx', 'kak', 'micro', 'nano', 'vis')
+    if is_windows:
+        candidates = ('edit.exe', 'nvim', 'vim', 'code --wait', 'notepad.exe')
+    for ans in (editor, *candidates):
         if ans and which(next(shlex_split(ans)), only_system=True):
             break
     else:
-        ans = 'vim'
+        ans = 'notepad.exe' if is_windows else 'vim'
     return list(shlex_split(ans))
+
+
+def is_windows_gui_executable(path: str) -> bool:
+    if sys.platform != 'win32':
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    get_file_info = ctypes.WinDLL('shell32').SHGetFileInfoW
+    get_file_info.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p, wintypes.UINT, wintypes.UINT)
+    get_file_info.restype = ctypes.c_size_t
+    return bool(get_file_info(path, 0, None, 0, 0x2000) >> 16)  # SHGFI_EXETYPE: high word is nonzero for GUI executables
 
 
 def get_editor(opts: Options | None = None, path_to_edit: str = '', line_number: int = 0) -> list[str]:
