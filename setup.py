@@ -1807,22 +1807,30 @@ def build_launcher(args: Options, launcher_dir: str = '.', bundle_type: str = 's
         # and PowerShell resolve "kitty" to it (.COM precedes .EXE in PATHEXT)
         # and so wait for kitty @ ..., kitty +kitten ..., --version etc.
         shim_src = 'kitty/launcher/win32-console-shim.c'
-        shim_obj = os.path.join(build_dir, shim_src.replace('/', '-').replace('.c', '.o'))
-        shim_dest = os.path.join(launcher_dir, 'kitsu.com')
-        link_targets.append(os.path.abspath(shim_dest))
-        cmd = env.cc + cppflags + cflags + ['-c', shim_src, '-o', shim_obj]
-        args.compilation_database.add_command(
-            f'Compiling {emphasis(shim_src)} ...',
-            cmd,
-            partial(newer, shim_obj, shim_src),
-            key=CompileKey(shim_src, os.path.basename(shim_obj)),
-            keyfile=shim_src,
-        )
-        shim_ldflags = [x for x in ldflags if x != '-mwindows'] + ['-mconsole', '-municode']
-        cmd = env.cc + shim_ldflags + [shim_obj, resource_obj] + ['-o', shim_dest]
-        args.compilation_database.add_command(
-            f'Linking {emphasis("kitty.com")} ...', cmd, partial(newer, shim_dest, shim_obj, resource_obj), key=LinkKey('kitty.com')
-        )
+        shim_dirs = [(launcher_dir, [])]
+        if bundle_type == 'windows-package':
+            path_launcher_dir = os.path.join(os.path.dirname(launcher_dir), 'cmd')
+            os.makedirs(path_launcher_dir, exist_ok=True)
+            shim_dirs.append((path_launcher_dir, ['-DKITTY_PATH_LAUNCHER']))
+        for shim_dir, extra_flags in shim_dirs:
+            shim_name = 'kitty-path' if extra_flags else 'kitty'
+            shim_obj = os.path.join(build_dir, f'{shim_name}-console-shim.o')
+            shim_dest = os.path.join(shim_dir, 'kitsu.com')
+            link_targets.append(os.path.abspath(shim_dest))
+            cmd = env.cc + cppflags + cflags + extra_flags + ['-c', shim_src, '-o', shim_obj]
+            args.compilation_database.add_command(
+                f'Compiling {emphasis(shim_src)} ...',
+                cmd,
+                partial(newer, shim_obj, shim_src),
+                key=CompileKey(shim_src, os.path.basename(shim_obj)),
+                keyfile=shim_src,
+            )
+            shim_ldflags = [x for x in ldflags if x != '-mwindows'] + ['-mconsole', '-municode']
+            cmd = env.cc + shim_ldflags + [shim_obj, resource_obj] + ['-o', shim_dest]
+            args.compilation_database.add_command(
+                f'Linking {emphasis(shim_name + ".com")} ...', cmd,
+                partial(newer, shim_dest, shim_obj, resource_obj), key=LinkKey(shim_name + '.com')
+            )
     if args.build_dsym and is_macos:
         desc = f'Linking dSYM {emphasis("launcher")} ...'
         dsym = f'{dest}.dSYM/Contents/Resources/DWARF/{os.path.basename(dest)}'
@@ -1831,6 +1839,9 @@ def build_launcher(args: Options, launcher_dir: str = '.', bundle_type: str = 's
     if is_windows:
         for ext in ('.exe', '.com'):
             shutil.copy2(os.path.join(launcher_dir, 'kitsu' + ext), os.path.join(launcher_dir, 'kitty' + ext))
+        if bundle_type == 'windows-package':
+            for name in ('kitsu.exe', 'kitty.exe', 'kitty.com'):
+                shutil.copy2(os.path.join(path_launcher_dir, 'kitsu.com'), os.path.join(path_launcher_dir, name))
     return kitty_exe
 
 
@@ -2547,6 +2558,8 @@ def copy_shell_integration(dest: str, normalize_line_endings: bool = False) -> N
 
 def package(args: Options, bundle_type: str, do_build_all: bool = True) -> None:
     ddir = args.prefix
+    if bundle_type == 'windows-package':
+        shutil.rmtree(os.path.join(ddir, 'cmd'), ignore_errors=True)
     for_freeze = bundle_type.endswith('-freeze')
     if bundle_type == 'linux-freeze':
         args.libdir_name = 'lib'
@@ -2644,6 +2657,7 @@ def package(args: Options, bundle_type: str, do_build_all: bool = True) -> None:
     if bundle_type.startswith('macos-'):
         create_macos_bundle_gunk(ddir, for_freeze, args)
     elif bundle_type == 'windows-package':
+        shutil.copy2(os.path.join(launcher_dir, 'kitten.exe'), os.path.join(ddir, 'cmd', 'kitten.exe'))
         bundle_wsl_kittens(args, libdir)
         create_windows_zip(ddir)
         # Stamp the release tag into the installed libdir so kitty +update can
