@@ -6,7 +6,7 @@ image:logo/kitsu.png[Kitsu, width=240]
 with native Win32 windows, ConPTY shells, and WSL integration. It brings Kitty's
 GPU rendering, tabs, layouts, kittens, and terminal protocols to Windows.
 
-This is an independent fork maintained by https://github.com/fhaze[FHaze], not
+This is an independent fork maintained by https://github.com/fhaze[Eder Matumoto (fhaze)], not
 an official Windows release of Kitty. Kitty was created by Kovid Goyal; upstream
 copyright notices and the link:LICENSE[GPLv3 license] are retained.
 
