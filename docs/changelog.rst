@@ -209,6 +209,10 @@ Detailed list of changes
   ``default``. Such links are now opened only after confirming, and links are
   opened without blocking the UI
 
+- Windows: :code:`kitsu +update` now only runs installers that are signed by
+  the Kitsu release signing key, instead of trusting the SHA-256 digest
+  GitHub reports for the release asset it downloads
+
 - Windows: Use Cascadia Mono, or Consolas or Lucida Console when it is not
   installed, as the default font instead of Courier New
 

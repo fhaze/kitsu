@@ -30,11 +30,50 @@ jobs:
             with:
               name: kitsu-windows-x86_64
 
+          - name: Check out the update signing keys pinned in kitty/update.py
+            uses: actions/checkout@v7.0.1
+            with:
+              path: src
+              sparse-checkout: kitty/update.py
+              sparse-checkout-cone-mode: false
+              persist-credentials: false
+
+          - name: Sign the installer for kitsu +update
+            env:
+              KITSU_UPDATE_SIGNING_KEY: ${{ secrets.KITSU_UPDATE_SIGNING_KEY }}
+            run: |
+              set -euo pipefail
+              if [ -z "${KITSU_UPDATE_SIGNING_KEY:-}" ]; then
+                echo '::error::The KITSU_UPDATE_SIGNING_KEY secret is not set, kitsu +update rejects unsigned releases'
+                exit 1
+              fi
+              umask 077
+              key="$RUNNER_TEMP/update-signing-key.pem"
+              manifest="$RUNNER_TEMP/update-manifest"
+              trap 'rm -f "$key"' EXIT
+              printf '%s' "$KITSU_UPDATE_SIGNING_KEY" > "$key"
+              pub=$(openssl pkey -in "$key" -pubout -outform DER | base64 -w0)
+              if ! grep -qF "'$pub'" src/kitty/update.py; then
+                echo "::error::The public key of KITSU_UPDATE_SIGNING_KEY ($pub) is not in UPDATE_SIGNING_KEYS in kitty/update.py"
+                exit 1
+              fi
+              setup=$(ls kitsu-*-windows-*-setup.exe)
+              # must match signed_manifest() in kitty/update.py
+              {
+                echo 'kitsu-update-v1'
+                echo "tag=$GITHUB_REF_NAME"
+                echo "name=$setup"
+                echo "sha256=$(sha256sum "$setup" | cut -d ' ' -f 1)"
+              } > "$manifest"
+              openssl dgst -sha256 -sign "$key" -out "$setup.sig" "$manifest"
+              openssl pkey -in "$key" -pubout -out "$RUNNER_TEMP/update-signing-key.pub"
+              openssl dgst -sha256 -verify "$RUNNER_TEMP/update-signing-key.pub" -signature "$setup.sig" "$manifest"
+
           - name: Create release
             env:
               GH_TOKEN: ${{ github.token }}
             run: |
-              gh release create "$GITHUB_REF_NAME" kitsu-*-windows-*-setup.exe kitsu-*-windows-*.zip \
+              gh release create "$GITHUB_REF_NAME" kitsu-*-windows-*-setup.exe kitsu-*-windows-*-setup.exe.sig kitsu-*-windows-*.zip \
                 --repo "$GITHUB_REPOSITORY" \
                 --title "Kitsu $GITHUB_REF_NAME" \
                 --notes 'Windows downloads: use the .exe installer for installation and WSL kitten setup, or the .zip for portable use. Standalone kitten binaries are not published; use the installer and kitsu +wsl-setup for WSL.' \
