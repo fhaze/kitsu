@@ -79,7 +79,36 @@ class TestParser(BaseTest):
         parse_bytes(s, b'\x1b[?9001l')
         check(2 if sys.platform == 'win32' else 0)
         parse_bytes(s, b'\x1b[?9001h\x1bc')
-        check(2 if sys.platform == 'win32' else 0)
+        check(1 if sys.platform == 'win32' else 0)
+
+    def test_reset_conpty_modes(self):
+        for reset in (b'\x1b[!p', b'\x1bc', None):
+            for win32_input in (False, True):
+                for focus_tracking in (False, True):
+                    with self.subTest(reset=reset, win32_input=win32_input, focus_tracking=focus_tracking):
+                        s = self.create_screen()
+                        c = s.callbacks
+                        parse_bytes(s, b'\x1b[?2004h')
+                        for mode, enabled in ((9001, win32_input), (1004, focus_tracking)):
+                            parse_bytes(s, f'\x1b[?{mode}{"h" if enabled else "l"}'.encode())
+                        c.clear()
+                        if reset is None:
+                            s.reset()
+                        else:
+                            parse_bytes(s, reset)
+                        self.ae(c.wtcbuf, b'')
+                        for mode, enabled in ((9001, win32_input), (1004, focus_tracking), (2004, False)):
+                            expected = 1 if enabled and sys.platform == 'win32' else 2
+                            if mode == 9001 and sys.platform != 'win32':
+                                expected = 0
+                            parse_bytes(s, f'\x1b[?{mode}$p'.encode())
+                            self.ae(c.wtcbuf, f'\x1b[?{mode};{expected}$y'.encode())
+                            c.clear()
+                        parse_bytes(s, b'\x1b[?9001;1004l')
+                        self.assertFalse(s.focus_tracking_enabled)
+                        c.clear()
+                        parse_bytes(s, b'\x1b[?9001$p')
+                        self.ae(c.wtcbuf, b'\x1b[?9001;2$y' if sys.platform == 'win32' else b'\x1b[?9001;0$y')
 
     def create_write_buffer(self, screen):
         return screen.test_create_write_buffer()

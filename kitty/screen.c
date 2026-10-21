@@ -239,7 +239,15 @@ do_screen_reset(Screen *self, bool is_hard_reset) {
         grman_clear(self->main_grman, false, self->cell_size); // dont delete images in scrollback
         grman_clear(self->alt_grman, true, self->cell_size);
     }
+#ifdef _WIN32
+    // ConPTY can retain these connection modes without renegotiating after a reset.
+    const bool win32_input = self->modes.mWIN32_INPUT, focus_tracking = self->modes.mFOCUS_TRACKING;
+#endif
     self->modes = empty_modes;
+#ifdef _WIN32
+    self->modes.mWIN32_INPUT = win32_input;
+    self->modes.mFOCUS_TRACKING = focus_tracking;
+#endif
     self->saved_modes = empty_modes;
     self->active_hyperlink_id = 0;
     zero_at_ptr(&self->color_profile->overridden);
