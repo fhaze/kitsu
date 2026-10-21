@@ -456,7 +456,7 @@ handle_key_message(_GLFWwindow *window, UINT uMsg, WPARAM wParam, LPARAM lParam)
 static void
 send_scroll(_GLFWwindow *window, double x, double y) {
     GLFWScrollEvent ev = {
-        .x_offset = x, .y_offset = y, .unscaled.x = x, .unscaled.y = y, .offset_type = GLFW_SCROLL_OFFSET_LINES, .keyboard_modifiers = getKeyMods()};
+        .x_offset = x, .y_offset = y, .unscaled.x = x, .unscaled.y = y, .offset_type = GLFW_SCROLL_OFFEST_V120, .keyboard_modifiers = getKeyMods()};
     _glfwInputScroll(window, &ev);
 }
 
@@ -1316,14 +1316,14 @@ windowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_MOUSEWHEEL: {
-            send_scroll(window, 0.0, (SHORT)HIWORD(wParam) / (double)WHEEL_DELTA);
+            send_scroll(window, 0.0, (SHORT)HIWORD(wParam));
             return 0;
         }
 
         case WM_MOUSEHWHEEL: {
             // This message is only sent on Windows Vista and later
             // NOTE: The X-axis is inverted for consistency with macOS and X11
-            send_scroll(window, -((SHORT)HIWORD(wParam) / (double)WHEEL_DELTA), 0.0);
+            send_scroll(window, -((SHORT)HIWORD(wParam)), 0.0);
             return 0;
         }
 
@@ -2562,6 +2562,11 @@ _glfwPlatformSetClipboard(GLFWClipboardType t) {
 
 void
 _glfwPlatformGetClipboard(GLFWClipboardType clipboard_type, const char *mime_type, GLFWclipboardwritedatafun write_data, void *object) {
+    if (clipboard_type == GLFW_PRIMARY_SELECTION) {
+        // Windows has no system primary selection; use the process-local self offer, including its MIME types.
+        write_data(object, NULL, 0);
+        return;
+    }
     if (clipboard_type != GLFW_CLIPBOARD) return;
     if (!OpenClipboard(_glfw.win32.helperWindowHandle)) {
         _glfwInputErrorWin32(GLFW_PLATFORM_ERROR, "Win32: Failed to open clipboard");
