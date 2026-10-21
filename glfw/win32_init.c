@@ -424,12 +424,6 @@ int
 _glfwPlatformInit(bool *supports_window_occlusion) {
     *supports_window_occlusion = false;
     _glfw.win32.mainThreadId = GetCurrentThreadId();
-    // To make SetForegroundWindow work as we want, we need to fiddle
-    // with the FOREGROUNDLOCKTIMEOUT system setting (we do this as early
-    // as possible in the hope of still being the foreground process)
-    SystemParametersInfoW(SPI_GETFOREGROUNDLOCKTIMEOUT, 0, &_glfw.win32.foregroundLockTimeout, 0);
-    SystemParametersInfoW(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, UIntToPtr(0), SPIF_SENDCHANGE);
-
     if (!loadLibraries()) return false;
 
     // Without this, main loop timeouts (repaint_delay, input_delay, cursor blink,
@@ -457,9 +451,6 @@ _glfwPlatformTerminate(void) {
     if (_glfw.win32.helperWindowHandle) DestroyWindow(_glfw.win32.helperWindowHandle);
 
     _glfwUnregisterWindowClassWin32();
-
-    // Restore previous foreground lock timeout system setting
-    SystemParametersInfoW(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, UIntToPtr(_glfw.win32.foregroundLockTimeout), SPIF_SENDCHANGE);
 
     free(_glfw.win32.clipboardString);
     free(_glfw.win32.rawInput);

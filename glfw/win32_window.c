@@ -1996,15 +1996,24 @@ _glfwPlatformHideWindow(_GLFWwindow *window) {
     ShowWindow(window->win32.handle, SW_HIDE);
 }
 
+static void
+flashWindow(_GLFWwindow *window) {
+    // FLASHW_TIMERNOFG flashes until the window is activated
+    FLASHWINFO fi = {.cbSize = sizeof(fi), .hwnd = window->win32.handle, .dwFlags = FLASHW_TRAY | FLASHW_TIMERNOFG};
+    FlashWindowEx(&fi);
+}
+
 void
 _glfwPlatformRequestWindowAttention(_GLFWwindow *window) {
-    FlashWindow(window->win32.handle, TRUE);
+    flashWindow(window);
 }
 
 void
 _glfwPlatformFocusWindow(_GLFWwindow *window) {
     BringWindowToTop(window->win32.handle);
-    SetForegroundWindow(window->win32.handle);
+    // Windows refuses this unless we are allowed to take the foreground, for
+    // example via AllowSetForegroundWindow() in the process requesting focus
+    if (!SetForegroundWindow(window->win32.handle)) flashWindow(window);
     SetFocus(window->win32.handle);
 }
 
