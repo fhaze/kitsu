@@ -150,6 +150,10 @@ jobs:
               gcc -std=gnu11 -Wall -Wextra -Werror -Wno-missing-field-initializers $(python3-config --includes) windows/test_notifications.c -o build/test-notifications.exe $(python3-config --embed --ldflags) -lruntimeobject -lole32 -lshlwapi -lshell32 -ladvapi32 -luuid
               ./build/test-notifications.exe
 
+          - name: Test Windows synthetic key input
+            shell: cmd
+            run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','--module','keys']; main()"
+
           - name: Test Windows graphics replies
             shell: cmd
             run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','--module','graphics']; main()"
