@@ -158,6 +158,10 @@ jobs:
             shell: cmd
             run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','--module','options','icat_launcher']; main()"
 
+          - name: Test Windows terminfo environment
+            shell: cmd
+            run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','terminfo_environment','wslenv']; main()"
+
           - name: Test batch file arguments, image file paths, file modes for remote hosts, dropped paths and the default font
             shell: cmd
             run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','windows_batch_file_arguments','windows_batch_file_arguments_outside_windows','windows_image_path_policy','file_metadata_permissions','windows_dropped_paths','windows_default_monospace_font']; main()"
