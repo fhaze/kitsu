@@ -2122,6 +2122,9 @@ screen_modify_other_keys(Screen *self, unsigned val, unsigned val2) {
 
 uint8_t
 screen_current_key_encoding_flags(Screen *self) {
+#ifdef _WIN32
+    if (self->modes.mWIN32_INPUT) return 0;
+#endif
     for (unsigned i = arraysz(self->main_key_encoding_flags); i-- > 0;) {
         if (self->key_encoding_flags[i] & 0x80) return self->key_encoding_flags[i] & 0x7f;
     }
@@ -2130,6 +2133,10 @@ screen_current_key_encoding_flags(Screen *self) {
 
 void
 screen_report_key_encoding_flags(Screen *self) {
+#ifdef _WIN32
+    // ConPTY encodes Win32 input records but does not implement the kitty keyboard protocol.
+    if (self->modes.mWIN32_INPUT) return;
+#endif
     char buf[16] = {0};
     debug_input("\x1b[35mReporting key encoding flags: %u\x1b[39m\n", screen_current_key_encoding_flags(self));
     snprintf(buf, sizeof(buf), "?%uu", screen_current_key_encoding_flags(self));
@@ -2138,6 +2145,9 @@ screen_report_key_encoding_flags(Screen *self) {
 
 void
 screen_set_key_encoding_flags(Screen *self, uint32_t val, uint32_t how) {
+#ifdef _WIN32
+    if (self->modes.mWIN32_INPUT) return;
+#endif
     unsigned idx = 0;
     for (unsigned i = arraysz(self->main_key_encoding_flags); i-- > 0;) {
         if (self->key_encoding_flags[i] & 0x80) {
@@ -2155,6 +2165,9 @@ screen_set_key_encoding_flags(Screen *self, uint32_t val, uint32_t how) {
 
 void
 screen_push_key_encoding_flags(Screen *self, uint32_t val) {
+#ifdef _WIN32
+    if (self->modes.mWIN32_INPUT) return;
+#endif
     uint8_t q = val & 0x7f;
     const unsigned sz = arraysz(self->main_key_encoding_flags);
     unsigned current_idx = 0;
@@ -2172,6 +2185,9 @@ screen_push_key_encoding_flags(Screen *self, uint32_t val) {
 
 void
 screen_pop_key_encoding_flags(Screen *self, uint32_t num) {
+#ifdef _WIN32
+    if (self->modes.mWIN32_INPUT) return;
+#endif
     for (unsigned i = arraysz(self->main_key_encoding_flags); num && i-- > 0;) {
         if (self->key_encoding_flags[i] & 0x80) {
             num--;

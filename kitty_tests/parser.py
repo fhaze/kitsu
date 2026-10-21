@@ -3,6 +3,7 @@
 
 import random
 import sys
+import unittest
 from binascii import hexlify
 from functools import partial
 
@@ -55,6 +56,38 @@ class CmdDump(list):
 
 
 class TestParser(BaseTest):
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows ConPTY input mode')
+    def test_win32_input_keyboard_protocol(self):
+        for alternate in (False, True):
+            s = self.create_screen()
+            c = s.callbacks
+            if alternate:
+                parse_bytes(s, b'\x1b[?1049h')
+
+            def query(expected):
+                c.clear()
+                parse_bytes(s, b'\x1b[?u\x1b[c')
+                self.ae(c.wtcbuf, expected)
+                self.ae(len(c.da1), 1)
+
+            parse_bytes(s, b'\x1b[?9001h')
+            query(b'')
+            parse_bytes(s, b'\x1b[?9001l')
+            query(b'\x1b[?0u')
+            parse_bytes(s, b'\x1b[=3u\x1b[>9u')
+            for command in (b'>1u', b'>31u', b'=31u', b'=16;2u', b'=1;3u', b'<u', b'<2u'):
+                with self.subTest(alternate=alternate, command=command):
+                    parse_bytes(s, b'\x1b[?9001h')
+                    self.ae(s.current_key_encoding_flags(), 0)
+                    parse_bytes(s, b'\x1b[' + command)
+                    self.ae(s.current_key_encoding_flags(), 0)
+                    query(b'')
+                    parse_bytes(s, b'\x1b[?9001l')
+                    self.ae(s.current_key_encoding_flags(), 9)
+                    query(b'\x1b[?9u')
+            parse_bytes(s, b'\x1b[<u')
+            query(b'\x1b[?3u')
+
     def test_win32_input_mode(self):
         s = self.create_screen()
         c = s.callbacks
