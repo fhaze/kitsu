@@ -1172,6 +1172,9 @@ defaults.mouse_map = [
 ]
 
 
+if kitty.constants.is_windows:
+    Options.terminfo_type = 'direct'
+
 nullable_colors = frozenset({
     'cursor',
     'cursor_text_color',

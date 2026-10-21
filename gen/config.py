@@ -71,6 +71,7 @@ def main(args: list[str] = sys.argv) -> None:
     write_output(
         'kitty',
         definition,
+        "\nif kitty.constants.is_windows:\n    Options.terminfo_type = 'direct'\n"
         f'\nnullable_colors = frozenset({{\n    {nc}\n}})\n\nspecial_colors = frozenset({{\n    {sc}\n}})\n\nall_colors = frozenset({{\n    {ac}\n}})\n',
     )
     os.execl(os.path.abspath('autoformat'), 'autoformat')

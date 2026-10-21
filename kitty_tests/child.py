@@ -369,6 +369,44 @@ time.sleep(300)
         add_kitty_vars_to_wslenv(env)
         self.assertNotIn('WSLENV', env)
 
+    def test_terminfo_environment(self):
+        from base64 import b64decode
+
+        from kitty.config import load_config
+        from kitty.fast_data_types import terminfo_data
+        from kitty.options.types import Options, defaults
+
+        default_type = 'direct' if is_windows else 'path'
+        self.ae(Options().terminfo_type, default_type)
+        self.ae(defaults.terminfo_type, default_type)
+        boss = SimpleNamespace(encryption_public_key='', listening_on='', dcs_channel_address='')
+        tdir = r'C:\Kitsu\lib\kitty\terminfo'
+        for setting in ('', 'direct', 'path', 'none'):
+            with self.subTest(setting=setting or 'default'):
+                overrides = ['shell_integration disabled']
+                if setting:
+                    overrides.append(f'terminfo_type {setting}')
+                opts = load_config(overrides=overrides)
+                mode = setting or default_type
+                self.ae(opts.terminfo_type, mode)
+                with (
+                    patch('kitty.child.default_env', return_value={'TERMINFO': 'inherited'}),
+                    patch('kitty.fast_data_types.get_options', return_value=opts),
+                    patch('kitty.fast_data_types.get_boss', return_value=boss),
+                    patch('kitty.child.checked_terminfo_dir', return_value=tdir),
+                ):
+                    env, _ = Child(['cmd.exe' if is_windows else '/bin/sh'], os.getcwd()).get_final_env()
+                self.ae(env['TERM'], 'xterm-kitty')
+                if mode == 'direct':
+                    self.assertTrue(env['TERMINFO'].startswith('b64:'))
+                    self.ae(b64decode(env['TERMINFO'][4:]), terminfo_data())
+                else:
+                    self.ae(env['TERMINFO'], tdir if mode == 'path' else 'inherited')
+                if is_windows:
+                    entries = env['WSLENV'].split(':')
+                    self.assertIn('TERMINFO/p' if mode == 'path' else 'TERMINFO', entries)
+                    self.assertNotIn('TERMINFO' if mode == 'path' else 'TERMINFO/p', entries)
+
     def test_memory_cgroup_path_returns_positive(self):
         # The fast cgroup path (check_if_cgroup_root=False, the default) must
         # return a usable value on Linux.
