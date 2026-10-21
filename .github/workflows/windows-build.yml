@@ -118,6 +118,9 @@ jobs:
           - name: Test raw Windows wheel deltas
             run: python windows/test_scroll.py windows-package/kitsu
 
+          - name: Test the Win32 primary selection and clipboard isolation
+            run: python windows/test_primary_selection.py windows-package/kitsu
+
           - name: Smoke test the packaged executables
             shell: cmd
             run: |
