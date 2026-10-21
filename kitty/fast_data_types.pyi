@@ -1088,6 +1088,8 @@ class Screen:
     cursor: Cursor
     disable_ligatures: int
     cursor_key_mode: bool
+    @property
+    def win32_input_mode(self) -> bool: ...
     auto_repeat_enabled: bool
     render_unfocused_cursor: bool
     last_reported_cwd: Optional[bytes]

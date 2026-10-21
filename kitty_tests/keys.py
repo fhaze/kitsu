@@ -3,16 +3,95 @@
 
 from functools import partial
 from types import SimpleNamespace
+from unittest import skipUnless
+from unittest.mock import patch
 
 import kitty.fast_data_types as defines
+from kitty.constants import is_windows
 from kitty.key_encoding import EventType, KeyEvent, decode_key_event, encode_key_event
 from kitty.keys import Mappings
 from kitty.options.utils import KeyFallbackType
 
-from .base import BaseTest
+from .base import BaseTest, parse_bytes
 
 
 class TestKeys(BaseTest):
+    @skipUnless(is_windows, 'Windows input mode')
+    def test_windows_synthetic_keys(self):
+        import ctypes
+
+        from kitty.rc.send_key import send_key
+        from kitty.window import Window
+
+        user32 = ctypes.WinDLL('user32', use_last_error=True)
+        user32.LoadKeyboardLayoutW.restype = ctypes.c_void_p
+        user32.ActivateKeyboardLayout.argtypes = (ctypes.c_void_p, ctypes.c_uint)
+        user32.ActivateKeyboardLayout.restype = ctypes.c_void_p
+        layout = user32.LoadKeyboardLayoutW('00000409', 0)
+        self.assertTrue(layout)
+        previous_layout = user32.ActivateKeyboardLayout(layout, 0)
+        self.assertTrue(previous_layout)
+        self.addCleanup(user32.ActivateKeyboardLayout, previous_layout, 0)
+
+        class TestWindow(Window):
+            def write_to_child(self, data):
+                sent.append(data)
+
+            def scroll_end(self):
+                pass
+
+        w = TestWindow.__new__(TestWindow)
+        w.screen = self.create_screen()
+        sent = []
+
+        def send(*keys):
+            sent.clear()
+            self.assertFalse(w.send_key(*keys))
+            return b''.join(sent)
+
+        def event(vk, sc, char=0, down=1, state=0):
+            return f'\x1b[{vk};{sc};{char};{down};{state};1_'.encode()
+
+        def pair(vk, sc, char=0, state=0):
+            return event(vk, sc, char, state=state) + event(vk, sc, char, down=0, state=state)
+
+        self.ae(send('escape'), b'\x1b')
+        parse_bytes(w.screen, b'\x1b[?9001h')
+        self.ae(send('escape'), pair(27, 1, 27))
+        self.assertTrue(w.screen.win32_input_mode)
+        # Kitty keyboard flags must never leak CSI u into a Win32-mode ConPTY.
+        parse_bytes(w.screen, b'\x1b[>31u')
+        self.ae(send('escape'), pair(27, 1, 27))
+        self.ae(send('ctrl+enter'), pair(13, 28, 10, 8))
+        self.ae(send('shift+enter'), pair(13, 28, 13, 16))
+        self.ae(send('ctrl+c'), pair(67, 46, 3, 8))
+        self.ae(send('up'), pair(38, 72, state=256))
+        self.ae(send('kp_enter'), pair(13, 28, 13, 256))
+        self.ae(send('f3'), pair(114, 61))
+        self.ae(send('print_screen'), pair(44, 55, state=256))
+        self.ae(send('pause'), pair(19, 69))
+        self.ae(send('a', 'a'), event(65, 30, 97) * 2 + event(65, 30, 97, down=0) * 2)
+        self.ae(send('/'), pair(191, 53, 47))
+        self.ae(send('shift+a'), pair(65, 30, 65, 16))
+        self.ae(w.encoded_key(defines.KeyEvent(key=0x1f408)), event(0, 0, 0xd83d) + event(0, 0, 0xdc08))
+        self.ae(w.encoded_key(defines.KeyEvent(key=defines.GLFW_FKEY_F35)), b'')
+
+        sent.clear()
+        w.send_key_sequence(defines.KeyEvent(key=defines.GLFW_FKEY_ESCAPE), defines.KeyEvent(key=ord('c'), mods=defines.GLFW_MOD_CONTROL))
+        self.ae(b''.join(sent), pair(27, 1, 27) + pair(67, 46, 3, 8))
+        sent.clear()
+        w.send_key_sequence(defines.KeyEvent(key=defines.GLFW_FKEY_ENTER), synthesize_release_events=False)
+        self.ae(sent, [event(13, 28, 13)])
+
+        sent.clear()
+        with patch.object(type(send_key), 'windows_for_payload', return_value=[w]):
+            send_key.response_from_kitty(None, None, {'keys': ['escape']}.get)
+        self.ae(b''.join(sent), pair(27, 1, 27))
+        parse_bytes(w.screen, b'\x1b[?9001l\x1b[<u')
+        self.assertFalse(w.screen.win32_input_mode)
+        self.ae(send('escape'), b'\x1b')
+        self.ae(send('ctrl+enter'), b'\r')
+
     def test_encode_win32_key_event(self):
         enc = partial(defines.encode_key_for_tty, key=0, win32_input_mode=True)
         self.ae(enc(win32_vk=65, native_key=30, text='a'), '\x1b[65;30;97;1;0;1_')

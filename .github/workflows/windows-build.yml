@@ -115,6 +115,12 @@ jobs:
           - name: Test that GLFW leaves the foreground lock timeout alone
             run: python windows/test_foreground_lock.py windows-package/kitsu
 
+          - name: Test raw Windows wheel deltas
+            run: python windows/test_scroll.py windows-package/kitsu
+
+          - name: Test the Win32 primary selection and clipboard isolation
+            run: python windows/test_primary_selection.py windows-package/kitsu
+
           - name: Smoke test the packaged executables
             shell: cmd
             run: |
@@ -150,6 +156,14 @@ jobs:
               gcc -std=gnu11 -Wall -Wextra -Werror -Wno-missing-field-initializers $(python3-config --includes) windows/test_notifications.c -o build/test-notifications.exe $(python3-config --embed --ldflags) -lruntimeobject -lole32 -lshlwapi -lshell32 -ladvapi32 -luuid
               ./build/test-notifications.exe
 
+          - name: Test Windows ConPTY reset modes
+            shell: cmd
+            run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','win32_input_mode','reset_conpty_modes']; main()"
+
+          - name: Test Windows synthetic key input
+            shell: cmd
+            run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','--module','keys']; main()"
+
           - name: Test Windows graphics replies
             shell: cmd
             run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','--module','graphics']; main()"
@@ -157,6 +171,10 @@ jobs:
           - name: Test stock Windows pager and editor defaults
             shell: cmd
             run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','--module','windows_defaults']; main()"
+
+          - name: Test Windows keyboard protocol negotiation
+            shell: cmd
+            run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','win32_input_keyboard_protocol','key_encoding_flags_stack','encode_win32_key_event']; main()"
 
           - name: Test Windows icat launcher
             shell: cmd

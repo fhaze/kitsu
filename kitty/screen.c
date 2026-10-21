@@ -239,7 +239,15 @@ do_screen_reset(Screen *self, bool is_hard_reset) {
         grman_clear(self->main_grman, false, self->cell_size); // dont delete images in scrollback
         grman_clear(self->alt_grman, true, self->cell_size);
     }
+#ifdef _WIN32
+    // ConPTY can retain these connection modes without renegotiating after a reset.
+    const bool win32_input = self->modes.mWIN32_INPUT, focus_tracking = self->modes.mFOCUS_TRACKING;
+#endif
     self->modes = empty_modes;
+#ifdef _WIN32
+    self->modes.mWIN32_INPUT = win32_input;
+    self->modes.mFOCUS_TRACKING = focus_tracking;
+#endif
     self->saved_modes = empty_modes;
     self->active_hyperlink_id = 0;
     zero_at_ptr(&self->color_profile->overridden);
@@ -2114,6 +2122,9 @@ screen_modify_other_keys(Screen *self, unsigned val, unsigned val2) {
 
 uint8_t
 screen_current_key_encoding_flags(Screen *self) {
+#ifdef _WIN32
+    if (self->modes.mWIN32_INPUT) return 0;
+#endif
     for (unsigned i = arraysz(self->main_key_encoding_flags); i-- > 0;) {
         if (self->key_encoding_flags[i] & 0x80) return self->key_encoding_flags[i] & 0x7f;
     }
@@ -2122,6 +2133,10 @@ screen_current_key_encoding_flags(Screen *self) {
 
 void
 screen_report_key_encoding_flags(Screen *self) {
+#ifdef _WIN32
+    // ConPTY encodes Win32 input records but does not implement the kitty keyboard protocol.
+    if (self->modes.mWIN32_INPUT) return;
+#endif
     char buf[16] = {0};
     debug_input("\x1b[35mReporting key encoding flags: %u\x1b[39m\n", screen_current_key_encoding_flags(self));
     snprintf(buf, sizeof(buf), "?%uu", screen_current_key_encoding_flags(self));
@@ -2130,6 +2145,9 @@ screen_report_key_encoding_flags(Screen *self) {
 
 void
 screen_set_key_encoding_flags(Screen *self, uint32_t val, uint32_t how) {
+#ifdef _WIN32
+    if (self->modes.mWIN32_INPUT) return;
+#endif
     unsigned idx = 0;
     for (unsigned i = arraysz(self->main_key_encoding_flags); i-- > 0;) {
         if (self->key_encoding_flags[i] & 0x80) {
@@ -2147,6 +2165,9 @@ screen_set_key_encoding_flags(Screen *self, uint32_t val, uint32_t how) {
 
 void
 screen_push_key_encoding_flags(Screen *self, uint32_t val) {
+#ifdef _WIN32
+    if (self->modes.mWIN32_INPUT) return;
+#endif
     uint8_t q = val & 0x7f;
     const unsigned sz = arraysz(self->main_key_encoding_flags);
     unsigned current_idx = 0;
@@ -2164,6 +2185,9 @@ screen_push_key_encoding_flags(Screen *self, uint32_t val) {
 
 void
 screen_pop_key_encoding_flags(Screen *self, uint32_t num) {
+#ifdef _WIN32
+    if (self->modes.mWIN32_INPUT) return;
+#endif
     for (unsigned i = arraysz(self->main_key_encoding_flags); num && i-- > 0;) {
         if (self->key_encoding_flags[i] & 0x80) {
             num--;
@@ -5750,6 +5774,12 @@ MODE_GETSET(paste_events, PASTE_EVENTS)
 MODE_GETSET(auto_repeat_enabled, DECARM)
 MODE_GETSET(cursor_visible, DECTCEM)
 MODE_GETSET(cursor_key_mode, DECCKM)
+#ifdef _WIN32
+static PyObject *
+win32_input_mode_get(Screen *self, void UNUSED *closure) {
+    return PyBool_FromLong(self->modes.mWIN32_INPUT);
+}
+#endif
 
 static PyObject *
 disable_ligatures_get(Screen *self, void UNUSED *closure) {
@@ -7243,6 +7273,9 @@ static PyMethodDef methods[] = {
 };
 
 static PyGetSetDef getsetters[] = {
+#ifdef _WIN32
+    {"win32_input_mode", (getter)win32_input_mode_get, NULL, NULL, NULL},
+#endif
     GETSET(in_bracketed_paste_mode) GETSET(color_preference_notification) GETSET(auto_repeat_enabled) GETSET(focus_tracking_enabled)
         GETSET(in_band_resize_notification) GETSET(paste_events) GETSET(cursor_visible) GETSET(cursor_key_mode) GETSET(disable_ligatures)
             GETSET(render_unfocused_cursor){NULL} /* Sentinel */

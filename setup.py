@@ -1199,7 +1199,7 @@ def find_c_files() -> Tuple[List[str], List[str]]:
     else:
         exclude = {'core_text.m', 'cocoa_window.m', 'macos_process_info.c'}
     if not is_windows:
-        exclude |= {'win32-compat.c', 'win32-pty.c', 'win32_process_info.c', 'win32-notifications.c'}
+        exclude |= {'win32-compat.c', 'win32-pty.c', 'win32_process_info.c', 'win32-notifications.c', 'win32-key-synthesis.c'}
     for x in sorted(os.listdir(d)):
         ext = os.path.splitext(x)[1]
         if ext in ('.c', '.m') and os.path.basename(x) not in exclude:
