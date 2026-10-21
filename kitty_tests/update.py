@@ -1,18 +1,30 @@
 #!/usr/bin/env python
 # License: GPLv3 Copyright: 2025, Kovid Goyal <kovid at kovidgoyal.net>
 
+import base64
 import json
 import os
 import subprocess
+import sys
 import tempfile
+import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from kitty import update_check
-from kitty.constants import Version
-from kitty.update import ReleaseInfo, is_newer, parse_release_tag, windows_setup_asset
+from kitty import update, update_check
+from kitty.constants import Version, is_windows
+from kitty.update import ReleaseInfo, ecdsa_der_to_raw, installer_signature_url, is_newer, is_validly_signed, parse_release_tag, windows_setup_asset
 
 from .base import BaseTest
+
+# Test-only ECDSA P-256 keys, SIGNATURE_1 and SIGNATURE_2 are signatures of
+# signed_manifest(SIGNED_TAG, SIGNED_NAME, SIGNED_SHA256) made with
+# openssl dgst -sha256 -sign by the private halves of KEY_1 and KEY_2
+KEY_1 = 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfyYivcFLnu6LejF6DywNerB39wJHdzeu7gZMK56ELzPRFdMSVW8aSFlZmHDgegp2LJUcHKPpH0JVzK+8mcc8Xg=='
+KEY_2 = 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAExpypbI+O4MJAiBiksv12Hn3XwnF5QWfXz8EuyYDp8zkj+FLumQaQM9Ag2daiDa2S+0fDiCNQlY/qknwoj39idw=='
+SIGNATURE_1 = base64.b64decode('MEUCIQCp9IDAmm4IoJsj7OuZ8PfWkMwHmEQ50Sc7/B+D1T0qnQIgXHcHqRu+Hog1cf01dK/IhTN65mKN2N62/BtKkpSlHFc=')
+SIGNATURE_2 = base64.b64decode('MEUCIQDBUcfEstXlTHY1Fm+2VU/JzW7ovFYrGM5Uf10MWJHzvwIgE5KYK8qG1tMflktAPO686en14URAANdRi9P+hN4PuTg=')
+SIGNED_TAG, SIGNED_NAME, SIGNED_SHA256 = 'v0.49.2-windows.1', 'kitsu-0.49.2-windows-x86_64-setup.exe', 'a' * 64
 
 
 class TestUpdate(BaseTest):
@@ -37,6 +49,101 @@ class TestUpdate(BaseTest):
         for name in ('kitsu-0.49.2-windows-arm64-setup.exe', 'kitsu-0.49.2-windows-x86_64.zip'):
             with self.assertRaisesRegex(SystemExit, 'no Windows Kitsu installer'):
                 windows_setup_asset({'assets': [{'name': name}]})
+
+    def test_installer_signature_url(self):
+        release = {
+            'tag_name': SIGNED_TAG,
+            'assets': [
+                {'name': SIGNED_NAME, 'browser_download_url': 'https://example.org/setup.exe'},
+                {'name': SIGNED_NAME + '.sig', 'browser_download_url': 'https://example.org/setup.exe.sig'},
+            ],
+        }
+        self.ae(installer_signature_url(release, SIGNED_NAME), 'https://example.org/setup.exe.sig')
+        release['assets'].pop()
+        with self.assertRaisesRegex(SystemExit, 'no signature'):
+            installer_signature_url(release, SIGNED_NAME)
+
+    def test_ecdsa_der_to_raw(self):
+        raw = ecdsa_der_to_raw(SIGNATURE_1)
+        self.ae(len(raw), 64)
+        self.ae(raw[:32], SIGNATURE_1[5:37])
+        self.ae(raw[32:], SIGNATURE_1[39:])
+        self.ae(ecdsa_der_to_raw(bytes((0x30, 6, 2, 1, 5, 2, 1, 7))), bytes(31) + bytes((5,)) + bytes(31) + bytes((7,)))
+        for bad in (
+            b'',
+            SIGNATURE_1[:-1],
+            SIGNATURE_1 + bytes(1),
+            bytes((0x31,)) + SIGNATURE_1[1:],
+            bytes((0x30, 6, 2, 1, 5, 3, 1, 7)),
+            bytes((0x30, 38, 2, 34)) + bytes((1,)) * 34 + bytes((2, 0)),
+        ):
+            with self.assertRaises(ValueError):
+                ecdsa_der_to_raw(bad)
+
+    @unittest.skipUnless(is_windows, 'kitsu +update verifies signatures with Windows CNG')
+    def test_installer_signature(self):
+        def ok(sig=SIGNATURE_1, keys=(KEY_1,), tag=SIGNED_TAG, name=SIGNED_NAME, sha256=SIGNED_SHA256):
+            return is_validly_signed(tag, name, sha256, sig, keys)
+
+        self.assertTrue(ok())
+        self.assertTrue(ok(keys=(KEY_2, KEY_1)))
+        self.assertTrue(ok(SIGNATURE_2, (KEY_2,)))
+        self.assertFalse(ok(keys=(KEY_2,)))
+        self.assertFalse(ok(SIGNATURE_2))
+        self.assertFalse(ok(keys=()))
+        self.assertFalse(ok(tag='v0.49.2-windows.2'))
+        self.assertFalse(ok(name='kitsu-0.49.3-windows-x86_64-setup.exe'))
+        self.assertFalse(ok(sha256='b' * 64))
+        self.assertFalse(ok(b'not a signature'))
+        self.assertFalse(ok(SIGNATURE_1[:-1] + bytes((SIGNATURE_1[-1] ^ 1,))))
+        with patch.object(update, 'UPDATE_SIGNING_KEYS', (KEY_1,)):
+            self.assertTrue(is_validly_signed(SIGNED_TAG, SIGNED_NAME, SIGNED_SHA256, SIGNATURE_1))
+        self.assertFalse(is_validly_signed(SIGNED_TAG, SIGNED_NAME, SIGNED_SHA256, SIGNATURE_1))
+
+    @unittest.skipUnless(is_windows, 'kitsu +update verifies signatures with Windows CNG')
+    def test_update_runs_only_signed_installers(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        installer = os.path.join(temp.name, SIGNED_NAME)
+        release = {
+            'tag_name': SIGNED_TAG,
+            'assets': [
+                {'name': SIGNED_NAME, 'browser_download_url': 'https://example.org/setup.exe', 'digest': 'sha256:' + SIGNED_SHA256},
+                {'name': SIGNED_NAME + '.sig', 'browser_download_url': 'https://example.org/setup.exe.sig'},
+            ],
+        }
+
+        def download(url, sha256, dest_dir, name):
+            with open(installer, 'wb'):
+                pass
+            return installer
+
+        def run(signature, keys=(KEY_1,)):
+            with (
+                patch.object(update, 'is_windows', True),
+                patch.object(update, 'inno_install_prefix', lambda: temp.name),
+                patch.object(sys, 'kitty_run_data', {'bundle_exe_dir': temp.name}, create=True),
+                patch.object(update, 'UPDATE_SIGNING_KEYS', keys),
+                patch.object(update, 'fetch_release', lambda ref: release),
+                patch.object(update, 'fetch_signature', lambda url: signature),
+                patch.object(update, 'download_with_progress', download),
+                patch.object(update.subprocess, 'Popen') as spawn,
+                patch('tempfile.mkdtemp', lambda prefix: temp.name),
+                self.assertRaises(SystemExit) as cm,
+            ):
+                update.main(['update', '--fetch-version', SIGNED_TAG])
+            return spawn, cm.exception
+
+        spawn, e = run(SIGNATURE_2)
+        spawn.assert_not_called()
+        self.assertIn('not signed by the Kitsu release signing key', str(e))
+        self.assertFalse(os.path.exists(installer))
+        spawn, e = run(SIGNATURE_1, ())
+        spawn.assert_not_called()
+        self.assertIn('no update signing key', str(e))
+        spawn, e = run(SIGNATURE_1)
+        spawn.assert_called_once_with([installer])
+        self.ae(e.code, 0)
 
     def test_parse_release_tag(self):
         def t(tag, base, build):
@@ -73,11 +180,14 @@ class TestUpdateCheck(BaseTest):
         self.now = 2000000.0
         self.notifications = []
         self.boss = SimpleNamespace(
-            update_check_process=None, set_update_check_process=Mock(),
+            update_check_process=None,
+            set_update_check_process=Mock(),
             notification_manager=SimpleNamespace(send_new_version_notification=lambda *args: self.notifications.append(args) or len(self.notifications)),
         )
         for target, value in (
-            ('is_windows', True), ('get_boss', lambda: self.boss), ('installed_release_info', lambda: parse_release_tag('v0.49.2-windows.1')),
+            ('is_windows', True),
+            ('get_boss', lambda: self.boss),
+            ('installed_release_info', lambda: parse_release_tag('v0.49.2-windows.1')),
             ('notification_pending', False),
         ):
             p = patch.object(update_check, target, value)
