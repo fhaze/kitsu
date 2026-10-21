@@ -330,9 +330,151 @@ def open_url(
     if sys.platform == 'win32' and program in ('default', ['default']):
         urls = (url,) if isinstance(url, str) else url
         for item in urls:
-            open_with_default_app(item, cwd=cwd)
+            windows_open_with_default_app(item, cwd=cwd)
         return None
     return open_cmd(command_for_open(program), url, cwd=cwd, extra_env=extra_env)
+
+
+# URL schemes ShellExecute() hands to a browser or mail client
+WINDOWS_SHELL_SAFE_SCHEMES = frozenset(('http', 'https', 'mailto'))
+# File types ShellExecute() runs as, or that can launch, programs. Checked in
+# addition to PATHEXT and AssocIsDangerous()
+WINDOWS_SHELL_DANGEROUS_EXTENSIONS = frozenset((
+    '.application', '.appref-ms', '.bat', '.chm', '.cmd', '.com', '.cpl', '.exe', '.gadget', '.hta', '.inf', '.jar',
+    '.js', '.jse', '.library-ms', '.lnk', '.msc', '.msi', '.msp', '.pif', '.ps1', '.reg', '.scf', '.scr',
+    '.search-ms', '.searchconnector-ms', '.settingcontent-ms', '.url', '.vbe', '.vbs', '.ws', '.wsc', '.wsf', '.wsh',
+))
+
+
+@lru_cache(maxsize=256)
+def windows_assoc_is_dangerous(ext: str) -> bool:
+    if sys.platform != 'win32':
+        return False
+    try:
+        import ctypes
+
+        f = ctypes.WinDLL('shlwapi').AssocIsDangerous
+    except Exception:
+        return False
+    f.argtypes = [ctypes.c_wchar_p]
+    f.restype = ctypes.c_int
+    return bool(f(ext))
+
+
+def windows_shell_open_risk(url: str, cwd: str | None = None) -> str:
+    # Why opening url with ShellExecute() can run a program or connect to a
+    # network host, or an empty string if it just opens a web page, mail or
+    # document. Unlike xdg-open, ShellExecute() runs executables and scripts.
+    from urllib.parse import unquote, urlparse
+
+    m = re.match(r'([a-zA-Z][a-zA-Z0-9+.-]+):', url)
+    path = url
+    if m is not None:
+        scheme = m.group(1).lower()
+        if scheme in WINDOWS_SHELL_SAFE_SCHEMES:
+            return ''
+        if scheme != 'file':
+            return f'it is handed to the program registered for {scheme}: links'
+        try:
+            purl = urlparse(url)
+        except ValueError:
+            return 'it is not a valid URL'
+        path = windows_path_from_file_url(purl.netloc, unquote(purl.path))
+    path = path.strip().strip('"').replace('/', '\\')
+    if path.startswith('\\\\?\\') and re.match(r'[a-zA-Z]:\\', path[4:]):
+        path = path[4:]
+    if cwd:
+        path = ntpath.join(cwd.replace('/', '\\'), path)
+    if path.startswith('\\\\'):
+        return 'it is on a network share or device, which Windows connects to'
+    if os.path.isdir(path):
+        return ''
+    ext = ntpath.splitext(ntpath.basename(path).rstrip('. '))[1].lower()
+    if not ext:
+        return 'it has no file type, so Windows may run a program of that name'
+    pathext = os.environ.get('PATHEXT') or '.COM;.EXE;.BAT;.CMD'
+    if ext in WINDOWS_SHELL_DANGEROUS_EXTENSIONS or ext in pathext.lower().split(';') or windows_assoc_is_dangerous(ext):
+        return f'Windows runs {ext} files as programs'
+    return ''
+
+
+def windows_shell_open(url: str, cwd: str | None = None) -> None:
+    # ShellExecute() can block for a long time, for example on an unreachable
+    # host, so it runs on its own thread with COM initialized, as it requires
+    import threading
+
+    def run() -> None:
+        if sys.platform != 'win32':
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes as w
+        except Exception:
+            try:
+                open_with_default_app(url, cwd=cwd)
+            except OSError as e:
+                log_error(f'Failed to open {url}: {e}')
+            return
+
+        class SHELLEXECUTEINFOW(ctypes.Structure):
+            _fields_ = [
+                ('cbSize', w.DWORD), ('fMask', w.ULONG), ('hwnd', w.HWND), ('lpVerb', w.LPCWSTR), ('lpFile', w.LPCWSTR),
+                ('lpParameters', w.LPCWSTR), ('lpDirectory', w.LPCWSTR), ('nShow', ctypes.c_int), ('hInstApp', w.HINSTANCE),
+                ('lpIDList', ctypes.c_void_p), ('lpClass', w.LPCWSTR), ('hkeyClass', w.HKEY), ('dwHotKey', w.DWORD),
+                ('hIconOrMonitor', w.HANDLE), ('hProcess', w.HANDLE),
+            ]
+
+        COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, SEE_MASK_NOASYNC, SW_SHOWNORMAL = 0x2, 0x4, 0x100, 1
+        ole32 = ctypes.WinDLL('ole32')
+        ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, w.DWORD]
+        ole32.CoInitializeEx.restype = ctypes.c_long
+        shell32 = ctypes.WinDLL('shell32', use_last_error=True)
+        shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFOW)]
+        shell32.ShellExecuteExW.restype = w.BOOL
+        initialized = ole32.CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) >= 0
+        try:
+            info = SHELLEXECUTEINFOW(
+                cbSize=ctypes.sizeof(SHELLEXECUTEINFOW), fMask=SEE_MASK_NOASYNC, lpVerb='open', lpFile=url, lpDirectory=cwd or None,
+                nShow=SW_SHOWNORMAL)
+            if not shell32.ShellExecuteExW(ctypes.byref(info)):
+                log_error(f'Failed to open {url}: {ctypes.WinError(ctypes.get_last_error())}')
+        finally:
+            if initialized:
+                ole32.CoUninitialize()
+
+    threading.Thread(target=run, name='ShellOpen', daemon=True).start()
+
+
+def windows_open_with_default_app(url: str, cwd: str | None = None) -> None:
+    risk = windows_shell_open_risk(url, cwd)
+    if not risk:
+        windows_shell_open(url, cwd)
+        return
+    boss = get_boss()
+    window = None if boss is None else boss.active_window
+    if boss is None or window is None:
+        log_error(f'Not opening {url} as {risk}')
+        return
+    from kittens.tui.operations import styled
+
+    def on_choice(q: str) -> None:
+        if q == 'o':
+            windows_shell_open(url, cwd)
+        elif q == 'c':
+            from .clipboard import set_clipboard_string
+
+            set_clipboard_string(url)
+
+    boss.choose(
+        f'This link may be unsafe to open because {risk}:\n' + styled(sanitize_url_for_display_to_user(url), fg='yellow'),
+        on_choice,
+        'o;red:Open',
+        'c:Copy to clipboard',
+        'n:Nothing',
+        default='n',
+        window=window,
+        title='Unsafe link activated',
+    )
 
 
 def init_startup_notification_x11(window_handle: int, startup_id: str | None = None) -> Optional['StartupCtx']:
