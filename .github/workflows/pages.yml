@@ -1,0 +1,93 @@
+name: Website
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'website/**'
+      - 'logo/kitsu*.png'
+      - '.github/workflows/pages.yml'
+  pull_request:
+    paths:
+      - 'website/**'
+      - 'logo/kitsu*.png'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+  # Releases are created with GITHUB_TOKEN, which does not emit a new
+  # release-triggered workflow run. Refresh once the Release workflow succeeds.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-${{ github.event.pull_request.number || 'production' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    if: >-
+      github.repository == 'fhaze/kitsu' &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - name: Checkout website
+        uses: actions/checkout@v7.0.1
+        with:
+          # Always publish trusted default-branch source after a Release run.
+          ref: ${{ github.event_name == 'workflow_run' && 'master' || github.ref }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22.23.2'
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install website dependencies
+        run: npm ci --no-fund --no-audit
+
+      - name: Test release download selection
+        run: npm test
+
+      - name: Build website
+        run: npm run build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KITSU_REQUIRE_RELEASE: '1'
+          ASTRO_TELEMETRY_DISABLED: '1'
+
+      - name: Check generated links and routes
+        run: npm run check
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: website/dist
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Deploy website
+        id: deployment
+        uses: actions/deploy-pages@v4

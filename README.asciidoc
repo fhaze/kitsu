@@ -51,6 +51,7 @@ Existing configuration and WSL setups do not need to be renamed.
 
 == Documentation and support
 
+* https://fhaze.github.io/kitsu/[Kitsu website and Windows guides]
 * link:docs/windows-health-check.rst[Windows diagnostics]
 * https://sw.kovidgoyal.net/kitty/[Upstream Kitty documentation] for shared
   configuration, key bindings, kittens, and protocols. Where it says `kitty`,

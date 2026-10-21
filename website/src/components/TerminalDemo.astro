@@ -1,0 +1,277 @@
+---
+import Icon from './Icon.astro';
+import { url } from '../lib/site';
+---
+
+<figure class="terminal-figure">
+    <div class="terminal-window">
+        <div class="terminal-titlebar">
+            <span>
+                <img src={url('kitsu-128.png')} alt="" width="17" height="17" />{' '}
+                <span data-window-title>C:\Users\you\Projects\kitsu</span>
+            </span>
+            <div class="window-controls" aria-hidden="true">
+                <span>−</span>
+                <span>□</span>
+                <span>×</span>
+            </div>
+        </div>
+        <div
+            class="terminal-session"
+            id="demo-powershell"
+            role="tabpanel"
+            aria-labelledby="tab-powershell"
+            tabindex="0"
+        >
+            <div class="terminal-pane main-pane">
+                <div class="terminal-welcome">
+                    <img
+                        src={url('kitsu-128.png')}
+                        width="64"
+                        height="64"
+                        alt=""
+                    />
+                    <div>
+                        <span class="terminal-eyebrow">
+                            A LITTLE FOX. A LOT OF TERMINAL.
+                        </span>
+                        <strong>Make yourself at home.</strong>
+                        <span>Windows, meet your new command line.</span>
+                    </div>
+                </div>
+                <p class="prompt">
+                    <span class="t-green">❯</span>{' '}
+                    <span class="t-blue">~\Projects\kitsu</span>{' '}
+                    <span class="t-dim">on</span>{' '}
+                    <span class="t-yellow">git:main</span>
+                </p>
+                <p class="command">git status</p>
+                <p class="terminal-output">
+                    On branch main
+                    <br />
+                    Your branch is up to date with 'origin/main'.
+                </p>
+                <p class="terminal-output t-green">
+                    nothing to commit, working tree clean
+                </p>
+                <p class="prompt">
+                    <span class="t-green">❯</span>{' '}
+                    <span class="t-blue">~\Projects\kitsu</span>
+                </p>
+                <p class="command">kitsu +kitten themes</p>
+                <p class="terminal-output t-dim">
+                    A new look for your next big idea.
+                </p>
+                <div
+                    class="color-swatches"
+                    aria-label="Example terminal colors"
+                >
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                <p class="prompt last-prompt">
+                    <span class="t-green">❯</span>{' '}
+                    <span class="cursor" aria-hidden="true"></span>
+                </p>
+            </div>
+            <div class="terminal-pane config-pane">
+                <div class="pane-label">
+                    <span class="t-dim">⌘</span> kitty.conf{' '}
+                    <span>your terminal, your rules</span>
+                </div>
+                <div class="config-code">
+                    <p class="t-dim"># A little breathing room</p>
+                    <p>
+                        <span class="t-purple">font_family</span>{' '}
+                        <span class="t-yellow">Cascadia Mono</span>
+                    </p>
+                    <p>
+                        <span class="t-purple">font_size</span>{' '}
+                        <span class="t-orange">12.0</span>
+                    </p>
+                    <p>
+                        <span class="t-purple">window_padding_width</span>{' '}
+                        <span class="t-orange">12</span>
+                    </p>
+                    <br />
+                    <p class="t-dim"># Find your flow</p>
+                    <p>
+                        <span class="t-purple">enabled_layouts</span>{' '}
+                        <span class="t-yellow">splits,tall,stack</span>
+                    </p>
+                    <p>
+                        <span class="t-purple">cursor_shape</span>{' '}
+                        <span class="t-yellow">beam</span>
+                    </p>
+                    <br />
+                    <p class="t-dim"># Keep the good stuff</p>
+                    <p>
+                        <span class="t-purple">scrollback_lines</span>{' '}
+                        <span class="t-orange">10000</span>
+                    </p>
+                </div>
+                <div class="pane-note">
+                    <span class="t-green">✓</span> Familiar Kitty configuration.
+                    <br />
+                    <span class="t-dim">Right at home on Windows.</span>
+                </div>
+            </div>
+        </div>
+        <div
+            class="terminal-session"
+            id="demo-wsl"
+            role="tabpanel"
+            aria-labelledby="tab-wsl"
+            tabindex="0"
+            hidden
+        >
+            <div class="terminal-pane main-pane">
+                <div class="terminal-welcome">
+                    <span class="wsl-mark" aria-hidden="true">
+                        ~
+                    </span>
+                    <div>
+                        <span class="terminal-eyebrow">
+                            SAME TERMINAL. ANOTHER WORLD.
+                        </span>
+                        <strong>Hello from the Linux side.</strong>
+                        <span>Your WSL workflow has a new home.</span>
+                    </div>
+                </div>
+                <p class="prompt">
+                    <span class="t-green">❯</span>{' '}
+                    <span class="t-blue">~/projects</span>{' '}
+                    <span class="t-dim">on</span>{' '}
+                    <span class="t-yellow">git:main</span>
+                </p>
+                <p class="command">uname -s</p>
+                <p class="terminal-output">Linux</p>
+                <p class="prompt">
+                    <span class="t-green">❯</span>{' '}
+                    <span class="t-blue">~/projects</span>
+                </p>
+                <p class="command">kitten icat ./hello.png</p>
+                <div class="terminal-image-demo">
+                    <img
+                        src={url('kitsu-128.png')}
+                        alt="Kitsu fox, illustrating image display inside a terminal"
+                        width="80"
+                        height="80"
+                    />
+                    <span class="t-dim">
+                        Pixels. In your terminal.
+                        <br />
+                        That’s the Kitty graphics protocol.
+                    </span>
+                </div>
+                <p class="prompt last-prompt">
+                    <span class="t-green">❯</span>{' '}
+                    <span class="cursor" aria-hidden="true"></span>
+                </p>
+            </div>
+            <div class="terminal-pane config-pane">
+                <div class="pane-label">
+                    <span>WSL integration</span>
+                </div>
+                <div class="config-code">
+                    <p class="t-dim"># Run once from PowerShell</p>
+                    <p>
+                        <span class="t-green">❯</span> kitsu +wsl-setup
+                    </p>
+                    <br />
+                    <p class="t-dim"># Then inside your distribution</p>
+                    <p>
+                        <span class="t-green">❯</span> kitten --version
+                    </p>
+                    <br />
+                    <p class="t-dim"># Use the Linux kitten in WSL.</p>
+                    <p class="t-dim"># The installer brings it along.</p>
+                </div>
+                <div class="pane-note">
+                    <span class="t-yellow">↗</span>{' '}
+                    <a href={url('windows/#wsl')}>Read the WSL setup guide</a>
+                    <br />
+                    <span class="t-dim">A few steps to settle in.</span>
+                </div>
+            </div>
+        </div>
+        <div
+            class="terminal-tabs"
+            role="tablist"
+            aria-label="Illustrative terminal sessions"
+        >
+            <button
+                id="tab-powershell"
+                class="terminal-tab"
+                role="tab"
+                aria-label="PowerShell session: C:\Users\you\Projects\kitsu"
+                aria-selected="true"
+                aria-controls="demo-powershell"
+                data-session-title="C:\Users\you\Projects\kitsu"
+                tabindex="0"
+            >
+                <span>C:\Users\you\Projects\kitsu</span>
+            </button>
+            <button
+                id="tab-wsl"
+                class="terminal-tab"
+                role="tab"
+                aria-label="Ubuntu WSL session: you@ubuntu:~/projects"
+                aria-selected="false"
+                aria-controls="demo-wsl"
+                data-session-title="you@ubuntu:~/projects"
+                tabindex="-1"
+            >
+                <span>you@ubuntu:~/projects</span>
+            </button>
+        </div>
+    </div>
+    <figcaption>
+        <span>YOUR SHELL. YOUR SPACE. YOUR RULES.</span>
+        <span>
+            Interactive illustration — try the tabs{' '}
+            <Icon name="external" size={12} />
+        </span>
+    </figcaption>
+</figure>
+<script>
+    const tabs = [
+        ...document.querySelectorAll<HTMLButtonElement>('.terminal-tab'),
+    ];
+    function selectTab(tab: HTMLButtonElement) {
+        tabs.forEach((item) => {
+            const selected = item === tab;
+            item.setAttribute('aria-selected', String(selected));
+            item.tabIndex = selected ? 0 : -1;
+            const panel = document.getElementById(
+                item.getAttribute('aria-controls') ?? '',
+            );
+            if (panel) panel.hidden = !selected;
+        });
+        const title = document.querySelector('[data-window-title]');
+        if (title) title.textContent = tab.dataset.sessionTitle ?? '';
+    }
+    tabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => selectTab(tab));
+        tab.addEventListener('keydown', (event) => {
+            let next: HTMLButtonElement | undefined;
+            if (event.key === 'ArrowRight')
+                next = tabs[(index + 1) % tabs.length];
+            if (event.key === 'ArrowLeft')
+                next = tabs[(index - 1 + tabs.length) % tabs.length];
+            if (event.key === 'Home') next = tabs[0];
+            if (event.key === 'End') next = tabs[tabs.length - 1];
+            if (next) {
+                event.preventDefault();
+                selectTab(next);
+                next.focus();
+            }
+        });
+    });
+</script>

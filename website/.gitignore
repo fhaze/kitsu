@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.astro/
+.generated/
+public/kitsu.png
+public/kitsu-128.png
+.qa/
