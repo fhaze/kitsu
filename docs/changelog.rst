@@ -202,6 +202,13 @@ Detailed list of changes
 0.49.2 [2026-10-01]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+- Windows: Fix clicking a link or path to an executable, script or shortcut
+  such as a ``.exe``, ``.bat``, ``.hta`` or ``.lnk`` file, to a network share,
+  or with a protocol other than http, https and mailto running it or
+  connecting to the host without confirmation when :opt:`open_url_with` is
+  ``default``. Such links are now opened only after confirming, and links are
+  opened without blocking the UI
+
 - Windows: Use Cascadia Mono, or Consolas or Lucida Console when it is not
   installed, as the default font instead of Courier New
 

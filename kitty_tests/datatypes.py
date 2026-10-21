@@ -70,12 +70,12 @@ class TestDataTypes(BaseTest):
     def test_open_url(self):
         from kitty import utils
 
-        with patch('kitty.utils.sys.platform', 'win32'), patch('kitty.utils.open_with_default_app', create=True) as startfile:
+        with patch('kitty.utils.sys.platform', 'win32'), patch('kitty.utils.windows_shell_open') as startfile:
             self.assertIsNone(utils.open_url(['https://example.com', 'https://example.org'], cwd='C:\\'))
             self.ae(
                 [
-                    (('https://example.com',), {'cwd': 'C:\\'}),
-                    (('https://example.org',), {'cwd': 'C:\\'}),
+                    (('https://example.com', 'C:\\'), {}),
+                    (('https://example.org', 'C:\\'), {}),
                 ],
                 startfile.call_args_list,
             )
