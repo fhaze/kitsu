@@ -1,0 +1,93 @@
+---
+import Base from './Base.astro';
+import Icon from '../components/Icon.astro';
+import {
+    url,
+    repository,
+    upstream,
+    release,
+    installerUrl,
+    portableUrl,
+} from '../lib/site';
+
+const {
+    title,
+    description,
+    eyebrow = 'THE KITSU FIELD GUIDE',
+    slug = '',
+} = Astro.props.frontmatter ?? Astro.props;
+const guides = [
+    { path: 'docs/', name: 'Start here', icon: 'book' },
+    { path: 'install/', name: 'Installation', icon: 'download' },
+    { path: 'windows/', name: 'Windows & WSL', icon: 'terminal' },
+    { path: 'troubleshooting/', name: 'Troubleshooting', icon: 'cpu' },
+];
+---
+
+<Base title={`${title} — Kitsu`} description={description}>
+    <div class="docs-banner wrap">
+        <p class="eyebrow">
+            <span></span>
+            {eyebrow}
+        </p>
+        <h1>{title}</h1>
+        <p>{description}</p>
+    </div>
+    <div class="docs-grid wrap">
+        <aside class="docs-sidebar">
+            <p>MAKE YOURSELF AT HOME</p>
+            <nav aria-label="Documentation">
+                {guides.map((guide) => (
+                    <a
+                        href={url(guide.path)}
+                        aria-current={
+                            Astro.url.pathname === url(guide.path)
+                                ? 'page'
+                                : undefined
+                        }
+                    >
+                        <Icon name={guide.icon} size={16} />
+                        {guide.name}
+                    </a>
+                ))}
+                <a class="sidebar-external" href={upstream}>
+                    Kitty reference <Icon name="external" size={13} />
+                </a>
+                <a href={`${repository}/issues`}>
+                    Get help <Icon name="external" size={13} />
+                </a>
+            </nav>
+        </aside>
+        <article class="guide-content">
+            {slug === 'install' && (
+                <div class="guide-download">
+                    <a class="button" href={installerUrl}>
+                        <Icon name="windows" size={17} />
+                        {release.installer
+                            ? 'Download installer'
+                            : 'View Windows downloads'}
+                        <Icon name="download" size={16} />
+                    </a>
+                    <div>
+                        <a href={portableUrl}>
+                            {release.portable
+                                ? 'Download portable ZIP'
+                                : 'Browse release assets'}
+                        </a>
+                        <span>
+                            {release.tag ?? 'Latest stable release'} · Windows
+                            x86_64
+                        </span>
+                    </div>
+                </div>
+            )}
+            <slot />
+            <div class="guide-ending">
+                <span>A little guidance goes a long way.</span>
+                <a href={`${repository}/tree/master/website/src/pages`}>
+                    Improve these docs <Icon name="external" size={12} />
+                </a>
+            </div>
+        </article>
+    </div>
+</Base>

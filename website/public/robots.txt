@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://fhaze.github.io/kitsu/sitemap.xml

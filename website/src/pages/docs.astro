@@ -1,0 +1,81 @@
+---
+import Guide from '../layouts/Guide.astro';
+import Icon from '../components/Icon.astro';
+import { url, upstream, repository } from '../lib/site';
+const guides = [
+    {
+        path: 'install/',
+        title: 'First, a place to land.',
+        description:
+            'Install Kitsu, pick the right download, and get your first terminal window open.',
+        icon: 'download',
+    },
+    {
+        path: 'windows/',
+        title: 'Bring your workflow along.',
+        description:
+            'PowerShell, cmd, WSL, and the configuration that makes your terminal yours.',
+        icon: 'terminal',
+    },
+    {
+        path: 'troubleshooting/',
+        title: 'A little help finding your way.',
+        description:
+            'Check your installation, untangle common issues, and send a useful bug report.',
+        icon: 'cpu',
+    },
+];
+---
+
+<Guide
+    title="A little guidance. A lot to explore."
+    description="Everything you need to get Kitsu settled into your Windows workflow. Start small. Make it your own."
+>
+    <div class="doc-cards">
+        {guides.map((guide) => (
+            <a class="doc-card" href={url(guide.path)}>
+                <div class="doc-card-icon">
+                    <Icon name={guide.icon} size={23} />
+                </div>
+                <div>
+                    <h2>{guide.title}</h2>
+                    <p>{guide.description}</p>
+                </div>
+                <Icon name="arrow" size={20} />
+            </a>
+        ))}
+    </div>
+    <div class="reference-box">
+        <h2>Familiar Kitty. Windows specifics.</h2>
+        <p>
+            Kitsu is an independent Windows fork of Kitty. These guides cover
+            what’s different on Windows. For shared configuration, key bindings,
+            kittens, and protocols, use the upstream Kitty documentation.
+        </p>
+        <p>
+            When an upstream example launches <code>kitty</code>, use{' '}
+            <code>kitsu</code> on Windows. Configuration keys,{' '}
+            <code>kitty.conf</code>, and the <code>kitten</code> helper keep
+            their names.
+        </p>
+        <div class="reference-links">
+            <a href={`${upstream}conf/`}>
+                Configuration <Icon name="external" size={12} />
+            </a>
+            <a href={`${upstream}overview/`}>
+                Key bindings & layouts <Icon name="external" size={12} />
+            </a>
+            <a href={`${upstream}kittens_intro/`}>
+                Meet the kittens <Icon name="external" size={12} />
+            </a>
+        </div>
+    </div>
+    <h2>Building something of your own?</h2>
+    <p>
+        The Windows build uses MSYS2 UCRT64. From the repository, run{' '}
+        <code>./build-windows.sh --install-deps</code> for your first build,
+        then <code>./build-windows.sh</code> for subsequent builds. The{' '}
+        <a href={`${repository}/blob/master/AGENTS.md`}>Windows build notes</a>{' '}
+        cover the toolchain and packaging details.
+    </p>
+</Guide>
