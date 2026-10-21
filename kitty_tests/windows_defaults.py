@@ -26,8 +26,8 @@ class WindowsDefaultsTest(BaseTest):
                     'kitty.utils.which', side_effect=lambda exe, **kw: exe if exe in (candidate, 'notepad.exe') else None
                 ):
                     self.ae(get_editor_from_env_vars(), expected)
-        with patch('kitty.child.default_env', return_value={'VISUAL': 'custom-editor --wait'}), patch('kitty.utils.which', return_value='custom-editor'):
-            self.ae(get_editor_from_env_vars(), ['custom-editor', '--wait'])
+        with patch('kitty.child.default_env', return_value={'VISUAL': 'C:/custom-editor.exe --wait'}), patch('kitty.utils.which', return_value='custom-editor'):
+            self.ae(get_editor_from_env_vars(), ['C:/custom-editor.exe', '--wait'])
 
     def test_windows_editor_launch(self):
         boss = SimpleNamespace(show_error=Mock(), new_os_window=Mock())
