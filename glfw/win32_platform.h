@@ -321,7 +321,6 @@ typedef struct _GLFWtimerWin32 {
 typedef struct _GLFWlibraryWin32 {
     HINSTANCE instance;
     HWND helperWindowHandle;
-    DWORD foregroundLockTimeout;
     int acquiredMonitorCount;
     char *clipboardString;
     // scancode -> kitty key (unicode codepoint or GLFW_FKEY_*), 0 if unmapped
