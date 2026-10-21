@@ -162,8 +162,8 @@ jobs:
             shell: cmd
             run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','windows_batch_file_arguments','windows_batch_file_arguments_outside_windows','windows_image_path_policy','file_metadata_permissions','windows_dropped_paths','windows_default_monospace_font']; main()"
 
-          - name: Test file modes sent to remote hosts
-            run: go test ./tools/tui/shell_integration ./tools/utils ./kittens/ssh ./kittens/transfer -run 'TestEmbeddedFileModes|TestPosixPermissions|TestCopiedFileModes|TestSendPermissions'
+          - name: Test file modes and identities sent to remote hosts
+            run: go test ./tools/tui/shell_integration ./tools/utils ./kittens/ssh ./kittens/transfer -run 'TestEmbeddedFileModes|TestPosixPermissions|TestCopiedFileModes|TestSendPermissions|TestFileIdentity|TestCopyFolderFileIdentity|TestCopiedFileIdentity|TestSendFileIdentity'
 
           - name: Test batch file arguments from kittens
             run: |

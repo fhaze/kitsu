@@ -176,9 +176,9 @@ func CopyFolderContents(ctx context.Context, src_folder *os.File, dest_folder *o
 	// are changed to point to the relative location of the previously copied
 	// target
 	type dir_ident struct{ dev, inode uint64 }
-	get_dir_ident := func(i os.FileInfo) dir_ident {
-		dev, inode := FileIdentity(i)
-		return dir_ident{dev, inode}
+	get_dir_ident := func(i os.FileInfo, path string) (dir_ident, error) {
+		dev, inode, err := FileIdentity(i, path)
+		return dir_ident{dev, inode}, err
 	}
 	var seen_map map[dir_ident]string
 	if opts.Follow_symlinks {
@@ -186,7 +186,11 @@ func CopyFolderContents(ctx context.Context, src_folder *os.File, dest_folder *o
 		if s, err := src_folder.Stat(); err != nil {
 			return err
 		} else {
-			seen_map[get_dir_ident(s)] = dest_folder.Name()
+			id, err := get_dir_ident(s, src_folder.Name())
+			if err != nil {
+				return err
+			}
+			seen_map[id] = dest_folder.Name()
 		}
 	}
 
@@ -233,11 +237,16 @@ func CopyFolderContents(ctx context.Context, src_folder *os.File, dest_folder *o
 		final_error = lerr
 		return false
 	}
-	mark_as_seen := func(dest_parent *os.File, child os.FileInfo) {
+	mark_as_seen := func(src_parent, dest_parent *os.File, child os.FileInfo) bool {
 		if opts.Follow_symlinks {
+			id, err := get_dir_ident(child, filepath.Join(src_parent.Name(), child.Name()))
+			if err != nil {
+				return fail(err)
+			}
 			path := filepath.Join(dest_parent.Name(), child.Name())
-			seen_map[get_dir_ident(child)] = filepath.Clean(path)
+			seen_map[id] = filepath.Clean(path)
 		}
+		return true
 	}
 
 	var do_one_child func(src *RefCountedFile, dest *RefCountedFile, child os.FileInfo, from_symlink bool) bool
@@ -246,7 +255,9 @@ func CopyFolderContents(ctx context.Context, src_folder *os.File, dest_folder *o
 			queue.PushBack(&item{src.NewRef(), dest.NewRef(), child})
 			return true
 		}
-		mark_as_seen(dest.File(), child)
+		if !mark_as_seen(src.File(), dest.File(), child) {
+			return false
+		}
 		// First try a hardlink which works for regular files and symlinks at least
 		if !opts.Disallow_hardlinks && LinkAt(src.File(), child.Name(), dest.File(), child.Name(), opts.Follow_symlinks) == nil {
 			return true
@@ -288,7 +299,10 @@ func CopyFolderContents(ctx context.Context, src_folder *os.File, dest_folder *o
 					if err != nil {
 						return do_one_child(src, dest, child, true)
 					}
-					id := get_dir_ident(st)
+					id, err := get_dir_ident(st, rpath)
+					if err != nil {
+						return fail(err)
+					}
 					if existing_path, found := seen_map[id]; found {
 						target, err := filepath.Rel(dest.File().Name(), existing_path)
 						if err != nil {
@@ -355,7 +369,6 @@ func CopyFolderContents(ctx context.Context, src_folder *os.File, dest_folder *o
 
 	next_dir := func(src_parent *RefCountedFile, dest_parent *RefCountedFile, child os.FileInfo) (ok bool) {
 		src, dest = nil, nil
-		mark_as_seen(dest_parent.File(), child)
 		defer func() {
 			src_parent.Unref()
 			dest_parent.Unref()
@@ -368,6 +381,9 @@ func CopyFolderContents(ctx context.Context, src_folder *os.File, dest_folder *o
 				}
 			}
 		}()
+		if !mark_as_seen(src_parent.File(), dest_parent.File(), child) {
+			return false
+		}
 		sf, err := OpenDirAt(src_parent.File(), child.Name())
 		if err != nil {
 			final_error = err

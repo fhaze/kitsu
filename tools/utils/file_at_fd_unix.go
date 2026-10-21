@@ -26,12 +26,12 @@ func OpenDir(path string) (*os.File, error) {
 }
 
 // Device and inode numbers that uniquely identify a file
-func FileIdentity(i os.FileInfo) (dev, inode uint64) {
+func FileIdentity(i os.FileInfo, path string) (dev, inode uint64, err error) {
 	switch s := i.Sys().(type) {
 	case *syscall.Stat_t:
-		return uint64(s.Dev), uint64(s.Ino)
+		return uint64(s.Dev), uint64(s.Ino), nil
 	case *unix.Stat_t:
-		return uint64(s.Dev), uint64(s.Ino)
+		return uint64(s.Dev), uint64(s.Ino), nil
 	}
 	panic("unknown stat result type from os.FileInfo")
 }
