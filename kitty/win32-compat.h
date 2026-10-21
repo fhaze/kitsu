@@ -221,6 +221,8 @@ bool kitty_win32_append_batch_arg(char *buf, size_t buf_sz, size_t *pos, const c
 void set_errno_from_last_error(void);
 // Creates a connected pair of loopback TCP sockets (SOCKET handles)
 int kitty_win32_socketpair(uintptr_t out[2]);
+// For tests: called with the port of the listener before connecting to it
+extern void (*kitty_win32_socketpair_listening_hook)(unsigned short port);
 // Wraps a SOCKET handle (as returned by Python's socket.fileno()) in a CRT fd
 int kitty_win32_fd_from_socket_handle(intptr_t sock);
 bool kitty_win32_set_current_thread_name(const char *name);

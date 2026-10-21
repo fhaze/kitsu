@@ -717,21 +717,54 @@ kitty_win32_peer_credentials_are_available(int fd) {
     return addr.ss_family == AF_UNIX;
 }
 
+void (*kitty_win32_socketpair_listening_hook)(unsigned short port) = NULL;
+
+static bool
+same_inet_address(SOCKET s, bool peer_of_s, const struct sockaddr_in *expected) {
+    struct sockaddr_in addr = {0};
+    int addrlen = sizeof(addr);
+    int ret = peer_of_s ? getpeername(s, (struct sockaddr *)&addr, &addrlen) : getsockname(s, (struct sockaddr *)&addr, &addrlen);
+    return ret != SOCKET_ERROR && addrlen == (int)sizeof(addr) && addr.sin_family == AF_INET &&
+        addr.sin_addr.s_addr == expected->sin_addr.s_addr && addr.sin_port == expected->sin_port;
+}
+
 int
 kitty_win32_socketpair(uintptr_t out[2]) {
     SOCKET listener = INVALID_SOCKET, a = INVALID_SOCKET, b = INVALID_SOCKET;
     struct sockaddr_in addr = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK), .sin_port = 0};
+    struct sockaddr_in a_local = {0}, a_peer = {0};
     int addrlen = sizeof(addr);
     listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listener == INVALID_SOCKET) goto fail;
+    BOOL exclusive = TRUE;
+    if (setsockopt(listener, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char *)&exclusive, sizeof(exclusive)) == SOCKET_ERROR) goto fail;
     if (bind(listener, (struct sockaddr *)&addr, addrlen) == SOCKET_ERROR) goto fail;
     if (getsockname(listener, (struct sockaddr *)&addr, &addrlen) == SOCKET_ERROR) goto fail;
-    if (listen(listener, 1) == SOCKET_ERROR) goto fail;
+    // Any local process, of any user, can connect to the listener, so a full
+    // backlog must not make our own connect() fail and the accepted socket
+    // must be checked to be the peer of a (CVE-2024-3219 in CPython)
+    if (listen(listener, SOMAXCONN) == SOCKET_ERROR) goto fail;
+    if (kitty_win32_socketpair_listening_hook) kitty_win32_socketpair_listening_hook(ntohs(addr.sin_port));
     a = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (a == INVALID_SOCKET) goto fail;
     if (connect(a, (struct sockaddr *)&addr, addrlen) == SOCKET_ERROR) goto fail;
-    b = accept(listener, NULL, NULL);
-    if (b == INVALID_SOCKET) goto fail;
+    addrlen = sizeof(a_local);
+    if (getsockname(a, (struct sockaddr *)&a_local, &addrlen) == SOCKET_ERROR) goto fail;
+    addrlen = sizeof(a_peer);
+    if (getpeername(a, (struct sockaddr *)&a_peer, &addrlen) == SOCKET_ERROR) goto fail;
+    // connections are accepted in order, so a is found once those that were
+    // queued before it are dropped, unless it was reset
+    for (int attempts = 0; ; attempts++) {
+        if (attempts >= 1024) {
+            WSASetLastError(WSAECONNABORTED);
+            goto fail;
+        }
+        b = accept(listener, NULL, NULL);
+        if (b == INVALID_SOCKET) goto fail;
+        if (same_inet_address(b, true, &a_local) && same_inet_address(b, false, &a_peer)) break;
+        closesocket(b);
+        b = INVALID_SOCKET;
+    }
     closesocket(listener);
     out[0] = b;
     out[1] = a;
