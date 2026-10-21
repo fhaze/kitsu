@@ -122,6 +122,7 @@ test_dir_and_file(const char *dir) {
 
 static void
 test_at_functions(const char *dir) {
+    struct stat st;
     int dirfd = open(dir, O_RDONLY | O_DIRECTORY);
     CHECK(dirfd >= 0);
     if (dirfd < 0) return;
@@ -139,8 +140,31 @@ test_at_functions(const char *dir) {
         close(fd);
     }
     CHECK(openat(dirfd, "子 " UNICODE_NAME, O_RDONLY | O_DIRECTORY) == -1 && errno == ENOTDIR);
+    CHECK(openat(dirfd, "子 " UNICODE_NAME, O_CREAT | O_WRONLY | O_EXCL, 0600) == -1 && errno == EEXIST);
+    fd = openat(dirfd, "子 " UNICODE_NAME, O_WRONLY | O_APPEND | O_NOFOLLOW);
+    CHECK(fd >= 0);
+    if (fd >= 0) {
+        CHECK(write(fd, "!", 1) == 1);
+        close(fd);
+    }
+    char *at_file = join(dir, "子 " UNICODE_NAME);
+    CHECK(file_has_contents(at_file, "at!"));
+    fd = openat(dirfd, "子 " UNICODE_NAME, O_CREAT | O_RDWR | O_TRUNC | O_NOFOLLOW, 0600);
+    CHECK(fd >= 0);
+    if (fd >= 0) {
+        CHECK(write(fd, "new", 3) == 3);
+        close(fd);
+    }
+    CHECK(file_has_contents(at_file, "new"));
+    free(at_file);
+    fd = openat(dirfd, "新 " UNICODE_NAME, O_CREAT | O_WRONLY | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    CHECK(fd >= 0);
+    if (fd >= 0) close(fd);
+    char *excl_file = join(dir, "新 " UNICODE_NAME);
+    CHECK(stat(excl_file, &st) == 0 && S_ISREG(st.st_mode) && st.st_size == 0);
+    CHECK(unlink(excl_file) == 0);
+    free(excl_file);
     CHECK(mkdirat(dirfd, "サブ " UNICODE_NAME, 0700) == 0);
-    struct stat st;
     char *sub = join(dir, "サブ " UNICODE_NAME);
     CHECK(stat(sub, &st) == 0 && S_ISDIR(st.st_mode));
     int subfd = openat(dirfd, "サブ " UNICODE_NAME, O_RDONLY | O_DIRECTORY);
@@ -231,7 +255,22 @@ test_symlinks(const char *dir) {
         CHECK(real_link && real_target && strcmp(real_link, real_target) == 0);
         free(real_link);
         free(real_target);
+        // writes must not follow a symlink either, nor create through one
+        CHECK(openat(dirfd, "link " UNICODE_NAME, O_WRONLY | O_NOFOLLOW) == -1 && errno == ELOOP);
+        CHECK(openat(dirfd, "link " UNICODE_NAME, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW, 0600) == -1 && errno == ELOOP);
+        CHECK(openat(dirfd, "link " UNICODE_NAME, O_CREAT | O_WRONLY | O_EXCL, 0600) == -1 && errno == EEXIST);
+        CHECK(file_has_contents(target, "target"));
         CHECK(unlink(link) == 0);
+        char *dangling_target = join(dir, "dangling target " UNICODE_NAME);
+        CHECK(symlinkat(dangling_target, dirfd, "dangling " UNICODE_NAME) == 0);
+        CHECK(openat(dirfd, "dangling " UNICODE_NAME, O_CREAT | O_WRONLY | O_EXCL, 0600) == -1 && errno == EEXIST);
+        CHECK(openat(dirfd, "dangling " UNICODE_NAME, O_CREAT | O_WRONLY | O_NOFOLLOW, 0600) == -1 && errno == ELOOP);
+        CHECK(mkdirat(dirfd, "dangling " UNICODE_NAME, 0700) == -1 && errno == EEXIST);
+        CHECK(lstat(dangling_target, &st) == -1 && errno == ENOENT);
+        char *dangling = join(dir, "dangling " UNICODE_NAME);
+        CHECK(unlink(dangling) == 0);
+        free(dangling);
+        free(dangling_target);
     } else {
         CHECK(errno == EPERM || errno == EACCES);
         printf("symlinks cannot be created here, skipped testing them in: %s\n", dir);

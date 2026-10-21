@@ -865,6 +865,55 @@ open_dir_or_nofollow(const wchar_t *wpath, bool want_dir, bool nofollow) {
     return fd;
 }
 
+// CRT open() follows a symlink at the final component, even for O_CREAT |
+// O_EXCL, where POSIX fails with EEXIST. Open the name itself instead, so that
+// CREATE_NEW fails on an existing symlink and O_NOFOLLOW can refuse one.
+// Truncation is deferred until the file is known not to be a reparse point.
+static int
+open_file_without_following(const wchar_t *wpath, int flags, int mode) {
+    const bool nofollow = flags & O_NOFOLLOW;
+    DWORD access = GENERIC_READ, disposition = OPEN_EXISTING, attrs = FILE_ATTRIBUTE_NORMAL;
+    if (flags & O_WRONLY) access = GENERIC_WRITE;
+    else if (flags & O_RDWR) access |= GENERIC_WRITE;
+    if (flags & O_CREAT) {
+        disposition = (flags & O_EXCL) ? CREATE_NEW : OPEN_ALWAYS;
+        if (!(mode & _S_IWRITE)) attrs = FILE_ATTRIBUTE_READONLY;
+    }
+    SECURITY_ATTRIBUTES sa = {.nLength = sizeof(sa), .bInheritHandle = !(flags & O_CLOEXEC)};
+    HANDLE h = CreateFileW(
+        wpath, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &sa, disposition, attrs | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        set_errno_from_last_error();
+        return -1;
+    }
+    BY_HANDLE_FILE_INFORMATION info;
+    if (!GetFileInformationByHandle(h, &info)) {
+        set_errno_from_last_error();
+        CloseHandle(h);
+        return -1;
+    }
+    if (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+        // only reachable with O_NOFOLLOW, CREATE_NEW never opens an existing name
+        CloseHandle(h);
+        errno = nofollow ? ELOOP : EEXIST;
+        return -1;
+    }
+    if ((flags & O_TRUNC) && (access & GENERIC_WRITE)) {
+        FILE_END_OF_FILE_INFO eof = {0};
+        if (!SetFileInformationByHandle(h, FileEndOfFileInfo, &eof, sizeof(eof))) {
+            set_errno_from_last_error();
+            CloseHandle(h);
+            return -1;
+        }
+    }
+    int fd = _open_osfhandle((intptr_t)h, _O_BINARY | (flags & (O_APPEND | O_CLOEXEC)));
+    if (fd < 0) {
+        CloseHandle(h);
+        errno = EMFILE;
+    }
+    return fd;
+}
+
 int
 openat(int dirfd, const char *path, int flags, ...) {
     va_list ap;
@@ -877,6 +926,7 @@ openat(int dirfd, const char *path, int flags, ...) {
     const bool readonly = (flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND)) == 0;
     int fd;
     if (want_dir || (nofollow && readonly)) fd = open_dir_or_nofollow(wpath, want_dir, nofollow);
+    else if (nofollow || (flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) fd = open_file_without_following(wpath, flags, mode);
     else fd = _wopen(wpath, (flags & ~KITTY_WIN32_NON_CRT_OPEN_FLAGS) | _O_BINARY, mode);
     free_keep_errno(wpath);
     return fd;
