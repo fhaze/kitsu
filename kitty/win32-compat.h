@@ -221,6 +221,8 @@ bool kitty_win32_append_batch_arg(char *buf, size_t buf_sz, size_t *pos, const c
 void set_errno_from_last_error(void);
 // Creates a connected pair of loopback TCP sockets (SOCKET handles)
 int kitty_win32_socketpair(uintptr_t out[2]);
+// For tests: called with the port of the listener before connecting to it
+extern void (*kitty_win32_socketpair_listening_hook)(unsigned short port);
 // Wraps a SOCKET handle (as returned by Python's socket.fileno()) in a CRT fd
 int kitty_win32_fd_from_socket_handle(intptr_t sock);
 bool kitty_win32_set_current_thread_name(const char *name);
@@ -317,7 +319,7 @@ int kitty_win32_close(int fd);
 // reported as verifiable so that callers fail closed (deny the peer)
 // rather than silently trusting it
 bool kitty_win32_peer_credentials_are_available(int fd);
-// open() honoring O_DIRECTORY and (for read-only opens) O_NOFOLLOW
+// open() honoring O_DIRECTORY, O_NOFOLLOW and, for symlinks, O_CREAT | O_EXCL
 int kitty_win32_open(const char *path, int flags, ...);
 #ifndef KITTY_WIN32_COMPAT_IMPL
 #define read(fd, buf, count) kitty_win32_read(fd, buf, count)

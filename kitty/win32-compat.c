@@ -717,21 +717,54 @@ kitty_win32_peer_credentials_are_available(int fd) {
     return addr.ss_family == AF_UNIX;
 }
 
+void (*kitty_win32_socketpair_listening_hook)(unsigned short port) = NULL;
+
+static bool
+same_inet_address(SOCKET s, bool peer_of_s, const struct sockaddr_in *expected) {
+    struct sockaddr_in addr = {0};
+    int addrlen = sizeof(addr);
+    int ret = peer_of_s ? getpeername(s, (struct sockaddr *)&addr, &addrlen) : getsockname(s, (struct sockaddr *)&addr, &addrlen);
+    return ret != SOCKET_ERROR && addrlen == (int)sizeof(addr) && addr.sin_family == AF_INET &&
+        addr.sin_addr.s_addr == expected->sin_addr.s_addr && addr.sin_port == expected->sin_port;
+}
+
 int
 kitty_win32_socketpair(uintptr_t out[2]) {
     SOCKET listener = INVALID_SOCKET, a = INVALID_SOCKET, b = INVALID_SOCKET;
     struct sockaddr_in addr = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK), .sin_port = 0};
+    struct sockaddr_in a_local = {0}, a_peer = {0};
     int addrlen = sizeof(addr);
     listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listener == INVALID_SOCKET) goto fail;
+    BOOL exclusive = TRUE;
+    if (setsockopt(listener, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char *)&exclusive, sizeof(exclusive)) == SOCKET_ERROR) goto fail;
     if (bind(listener, (struct sockaddr *)&addr, addrlen) == SOCKET_ERROR) goto fail;
     if (getsockname(listener, (struct sockaddr *)&addr, &addrlen) == SOCKET_ERROR) goto fail;
-    if (listen(listener, 1) == SOCKET_ERROR) goto fail;
+    // Any local process, of any user, can connect to the listener, so a full
+    // backlog must not make our own connect() fail and the accepted socket
+    // must be checked to be the peer of a (CVE-2024-3219 in CPython)
+    if (listen(listener, SOMAXCONN) == SOCKET_ERROR) goto fail;
+    if (kitty_win32_socketpair_listening_hook) kitty_win32_socketpair_listening_hook(ntohs(addr.sin_port));
     a = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (a == INVALID_SOCKET) goto fail;
     if (connect(a, (struct sockaddr *)&addr, addrlen) == SOCKET_ERROR) goto fail;
-    b = accept(listener, NULL, NULL);
-    if (b == INVALID_SOCKET) goto fail;
+    addrlen = sizeof(a_local);
+    if (getsockname(a, (struct sockaddr *)&a_local, &addrlen) == SOCKET_ERROR) goto fail;
+    addrlen = sizeof(a_peer);
+    if (getpeername(a, (struct sockaddr *)&a_peer, &addrlen) == SOCKET_ERROR) goto fail;
+    // connections are accepted in order, so a is found once those that were
+    // queued before it are dropped, unless it was reset
+    for (int attempts = 0; ; attempts++) {
+        if (attempts >= 1024) {
+            WSASetLastError(WSAECONNABORTED);
+            goto fail;
+        }
+        b = accept(listener, NULL, NULL);
+        if (b == INVALID_SOCKET) goto fail;
+        if (same_inet_address(b, true, &a_local) && same_inet_address(b, false, &a_peer)) break;
+        closesocket(b);
+        b = INVALID_SOCKET;
+    }
     closesocket(listener);
     out[0] = b;
     out[1] = a;
@@ -865,6 +898,55 @@ open_dir_or_nofollow(const wchar_t *wpath, bool want_dir, bool nofollow) {
     return fd;
 }
 
+// CRT open() follows a symlink at the final component, even for O_CREAT |
+// O_EXCL, where POSIX fails with EEXIST. Open the name itself instead, so that
+// CREATE_NEW fails on an existing symlink and O_NOFOLLOW can refuse one.
+// Truncation is deferred until the file is known not to be a reparse point.
+static int
+open_file_without_following(const wchar_t *wpath, int flags, int mode) {
+    const bool nofollow = flags & O_NOFOLLOW;
+    DWORD access = GENERIC_READ, disposition = OPEN_EXISTING, attrs = FILE_ATTRIBUTE_NORMAL;
+    if (flags & O_WRONLY) access = GENERIC_WRITE;
+    else if (flags & O_RDWR) access |= GENERIC_WRITE;
+    if (flags & O_CREAT) {
+        disposition = (flags & O_EXCL) ? CREATE_NEW : OPEN_ALWAYS;
+        if (!(mode & _S_IWRITE)) attrs = FILE_ATTRIBUTE_READONLY;
+    }
+    SECURITY_ATTRIBUTES sa = {.nLength = sizeof(sa), .bInheritHandle = !(flags & O_CLOEXEC)};
+    HANDLE h = CreateFileW(
+        wpath, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &sa, disposition, attrs | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        set_errno_from_last_error();
+        return -1;
+    }
+    BY_HANDLE_FILE_INFORMATION info;
+    if (!GetFileInformationByHandle(h, &info)) {
+        set_errno_from_last_error();
+        CloseHandle(h);
+        return -1;
+    }
+    if (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+        // only reachable with O_NOFOLLOW, CREATE_NEW never opens an existing name
+        CloseHandle(h);
+        errno = nofollow ? ELOOP : EEXIST;
+        return -1;
+    }
+    if ((flags & O_TRUNC) && (access & GENERIC_WRITE)) {
+        FILE_END_OF_FILE_INFO eof = {0};
+        if (!SetFileInformationByHandle(h, FileEndOfFileInfo, &eof, sizeof(eof))) {
+            set_errno_from_last_error();
+            CloseHandle(h);
+            return -1;
+        }
+    }
+    int fd = _open_osfhandle((intptr_t)h, _O_BINARY | (flags & (O_APPEND | O_CLOEXEC)));
+    if (fd < 0) {
+        CloseHandle(h);
+        errno = EMFILE;
+    }
+    return fd;
+}
+
 int
 openat(int dirfd, const char *path, int flags, ...) {
     va_list ap;
@@ -877,6 +959,7 @@ openat(int dirfd, const char *path, int flags, ...) {
     const bool readonly = (flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND)) == 0;
     int fd;
     if (want_dir || (nofollow && readonly)) fd = open_dir_or_nofollow(wpath, want_dir, nofollow);
+    else if (nofollow || (flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) fd = open_file_without_following(wpath, flags, mode);
     else fd = _wopen(wpath, (flags & ~KITTY_WIN32_NON_CRT_OPEN_FLAGS) | _O_BINARY, mode);
     free_keep_errno(wpath);
     return fd;

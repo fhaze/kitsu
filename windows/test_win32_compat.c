@@ -12,6 +12,12 @@
  */
 
 #define WIN32_LEAN_AND_MEAN
+// winsock2.h has its own struct pollfd with a SOCKET fd member
+#define pollfd wsa_pollfd
+#include <winsock2.h>
+#undef pollfd
+#undef POLLIN
+#undef POLLOUT
 #include <windows.h>
 #include "win32-compat.h"
 #include <string.h>
@@ -122,6 +128,7 @@ test_dir_and_file(const char *dir) {
 
 static void
 test_at_functions(const char *dir) {
+    struct stat st;
     int dirfd = open(dir, O_RDONLY | O_DIRECTORY);
     CHECK(dirfd >= 0);
     if (dirfd < 0) return;
@@ -139,8 +146,31 @@ test_at_functions(const char *dir) {
         close(fd);
     }
     CHECK(openat(dirfd, "子 " UNICODE_NAME, O_RDONLY | O_DIRECTORY) == -1 && errno == ENOTDIR);
+    CHECK(openat(dirfd, "子 " UNICODE_NAME, O_CREAT | O_WRONLY | O_EXCL, 0600) == -1 && errno == EEXIST);
+    fd = openat(dirfd, "子 " UNICODE_NAME, O_WRONLY | O_APPEND | O_NOFOLLOW);
+    CHECK(fd >= 0);
+    if (fd >= 0) {
+        CHECK(write(fd, "!", 1) == 1);
+        close(fd);
+    }
+    char *at_file = join(dir, "子 " UNICODE_NAME);
+    CHECK(file_has_contents(at_file, "at!"));
+    fd = openat(dirfd, "子 " UNICODE_NAME, O_CREAT | O_RDWR | O_TRUNC | O_NOFOLLOW, 0600);
+    CHECK(fd >= 0);
+    if (fd >= 0) {
+        CHECK(write(fd, "new", 3) == 3);
+        close(fd);
+    }
+    CHECK(file_has_contents(at_file, "new"));
+    free(at_file);
+    fd = openat(dirfd, "新 " UNICODE_NAME, O_CREAT | O_WRONLY | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    CHECK(fd >= 0);
+    if (fd >= 0) close(fd);
+    char *excl_file = join(dir, "新 " UNICODE_NAME);
+    CHECK(stat(excl_file, &st) == 0 && S_ISREG(st.st_mode) && st.st_size == 0);
+    CHECK(unlink(excl_file) == 0);
+    free(excl_file);
     CHECK(mkdirat(dirfd, "サブ " UNICODE_NAME, 0700) == 0);
-    struct stat st;
     char *sub = join(dir, "サブ " UNICODE_NAME);
     CHECK(stat(sub, &st) == 0 && S_ISDIR(st.st_mode));
     int subfd = openat(dirfd, "サブ " UNICODE_NAME, O_RDONLY | O_DIRECTORY);
@@ -231,7 +261,22 @@ test_symlinks(const char *dir) {
         CHECK(real_link && real_target && strcmp(real_link, real_target) == 0);
         free(real_link);
         free(real_target);
+        // writes must not follow a symlink either, nor create through one
+        CHECK(openat(dirfd, "link " UNICODE_NAME, O_WRONLY | O_NOFOLLOW) == -1 && errno == ELOOP);
+        CHECK(openat(dirfd, "link " UNICODE_NAME, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW, 0600) == -1 && errno == ELOOP);
+        CHECK(openat(dirfd, "link " UNICODE_NAME, O_CREAT | O_WRONLY | O_EXCL, 0600) == -1 && errno == EEXIST);
+        CHECK(file_has_contents(target, "target"));
         CHECK(unlink(link) == 0);
+        char *dangling_target = join(dir, "dangling target " UNICODE_NAME);
+        CHECK(symlinkat(dangling_target, dirfd, "dangling " UNICODE_NAME) == 0);
+        CHECK(openat(dirfd, "dangling " UNICODE_NAME, O_CREAT | O_WRONLY | O_EXCL, 0600) == -1 && errno == EEXIST);
+        CHECK(openat(dirfd, "dangling " UNICODE_NAME, O_CREAT | O_WRONLY | O_NOFOLLOW, 0600) == -1 && errno == ELOOP);
+        CHECK(mkdirat(dirfd, "dangling " UNICODE_NAME, 0700) == -1 && errno == EEXIST);
+        CHECK(lstat(dangling_target, &st) == -1 && errno == ENOENT);
+        char *dangling = join(dir, "dangling " UNICODE_NAME);
+        CHECK(unlink(dangling) == 0);
+        free(dangling);
+        free(dangling_target);
     } else {
         CHECK(errno == EPERM || errno == EACCES);
         printf("symlinks cannot be created here, skipped testing them in: %s\n", dir);
@@ -427,6 +472,85 @@ test_spawn(const char *dir) {
     free(wcopy);
 }
 
+#define NUM_RACING_CONNECTIONS 4
+static SOCKET racing_sockets[NUM_RACING_CONNECTIONS];
+static int num_racing_sockets = 0;
+
+static void
+connect_before_socketpair(unsigned short port) {
+    // Stands in for another local process that connects to the listener
+    // before kitty_win32_socketpair() does
+    struct sockaddr_in addr = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK), .sin_port = htons(port)};
+    for (int i = 0; i < NUM_RACING_CONNECTIONS; i++) {
+        SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        CHECK(s != INVALID_SOCKET);
+        if (s == INVALID_SOCKET) continue;
+        CHECK((connect)(s, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+        racing_sockets[num_racing_sockets++] = s;
+    }
+}
+
+static bool
+sockets_are_peers(SOCKET a, SOCKET b) {
+    struct sockaddr_in a_local, a_peer, b_local, b_peer;
+    int la = sizeof(a_local), pa = sizeof(a_peer), lb = sizeof(b_local), pb = sizeof(b_peer);
+    if (getsockname(a, (struct sockaddr *)&a_local, &la) || getpeername(a, (struct sockaddr *)&a_peer, &pa)) return false;
+    if (getsockname(b, (struct sockaddr *)&b_local, &lb) || getpeername(b, (struct sockaddr *)&b_peer, &pb)) return false;
+    return a_local.sin_addr.s_addr == b_peer.sin_addr.s_addr && a_local.sin_port == b_peer.sin_port &&
+        b_local.sin_addr.s_addr == a_peer.sin_addr.s_addr && b_local.sin_port == a_peer.sin_port;
+}
+
+// The parentheses skip the win32-compat.h macros, these take CRT fds not SOCKETs
+static bool
+socket_roundtrip(SOCKET from, SOCKET to) {
+    char buf[8] = {0};
+    return (send)(from, "ping", 4, 0) == 4 && (recv)(to, buf, sizeof(buf), 0) == 4 && memcmp(buf, "ping", 4) == 0;
+}
+
+static void
+check_socketpair(void) {
+    uintptr_t s[2];
+    CHECK(kitty_win32_socketpair(s) == 0);
+    CHECK(sockets_are_peers((SOCKET)s[0], (SOCKET)s[1]));
+    CHECK(socket_roundtrip((SOCKET)s[0], (SOCKET)s[1]));
+    CHECK(socket_roundtrip((SOCKET)s[1], (SOCKET)s[0]));
+    for (int i = 0; i < num_racing_sockets; i++) {
+        CHECK(!sockets_are_peers((SOCKET)s[0], racing_sockets[i]));
+        // the racing connection must be dropped, not left queued or connected
+        DWORD timeout_ms = 5000;
+        setsockopt(racing_sockets[i], SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout_ms, sizeof(timeout_ms));
+        char buf[8];
+        int n = (recv)(racing_sockets[i], buf, sizeof(buf), 0);
+        CHECK(n == 0 || (n == SOCKET_ERROR && WSAGetLastError() != WSAETIMEDOUT));
+        closesocket(racing_sockets[i]);
+    }
+    closesocket((SOCKET)s[0]);
+    closesocket((SOCKET)s[1]);
+}
+
+static void
+test_socketpair(void) {
+    check_socketpair();
+    kitty_win32_socketpair_listening_hook = connect_before_socketpair;
+    num_racing_sockets = 0;
+    DWORD start = GetTickCount();
+    check_socketpair();
+    // the racing connections must neither be handed out nor make connect()
+    // stall or fail, as it did with a backlog of one
+    CHECK(GetTickCount() - start < 1000);
+    CHECK(num_racing_sockets == NUM_RACING_CONNECTIONS);
+    kitty_win32_socketpair_listening_hook = NULL;
+    num_racing_sockets = 0;
+
+    int fds[2];
+    CHECK(pipe2(fds, O_CLOEXEC) == 0);
+    char buf[8] = {0};
+    CHECK(write(fds[1], "pipe", 4) == 4);
+    CHECK(read(fds[0], buf, sizeof(buf)) == 4 && memcmp(buf, "pipe", 4) == 0);
+    close(fds[0]);
+    close(fds[1]);
+}
+
 static void
 remove_tree(const char *path) {
     DIR *d = opendir(path);
@@ -452,6 +576,8 @@ main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "--child") == 0) return run_child(argc, argv);
     if (argc > 1 && strcmp(argv[1], "--crt-rules") == 0) return run_crt_rules_child();
     SetConsoleOutputCP(CP_UTF8);
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return 1;
     printf("ANSI code page: %u\n", GetACP());
     wchar_t wtmp[MAX_PATH + 1];
     DWORD n = GetTempPathW(MAX_PATH + 1, wtmp);
@@ -473,6 +599,7 @@ main(int argc, char **argv) {
     test_invalid_utf8();
     test_crt_argv_rules();
     test_spawn(dir);
+    test_socketpair();
 
     // A directory whose path is longer than MAX_PATH, both in UTF-16 units and
     // bytes of UTF-8. Each component is within the 255 unit limit.

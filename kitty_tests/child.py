@@ -224,6 +224,68 @@ class ChildMemoryTest(BaseTest):
             other = [os.path.join(os.environ.get('SystemRoot', 'C:\\Windows'), 'System32', 'cmd.exe'), 'a&b', '\udc80']
             self.ae(batch_safe_popen_args(other), (other, None))
 
+    @unittest.skipUnless(is_windows, 'ShellExecute() is Windows only')
+    def test_windows_default_url_opening(self):
+        # The default open_url_with must not let a clicked link run programs
+        # or connect to network hosts without confirmation, as ShellExecute()
+        # runs executables and scripts, unlike xdg-open
+        import tempfile
+        import time
+
+        from kitty.utils import open_url, windows_shell_open, windows_shell_open_risk
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tdir:
+            for url, cwd in (
+                ('https://example.com/x.exe', None), ('HTTP://example.com', None), ('mailto:a@example.com', None),
+                ('file:///C:/Users/Public/readme.txt', None), ('file://localhost/C:/a%20b/notes.pdf', None),
+                ('C:\\x\\notes.pdf', None), ('notes.txt', 'C:\\x'), ('\\\\?\\C:\\x\\a.txt', None), (tdir, None),
+                ('file:///' + tdir.replace('\\', '/'), None),
+            ):
+                self.ae(windows_shell_open_risk(url, cwd), '', url)
+            for url, cwd in (
+                ('file:///C:/Users/Public/x.bat', None), ('file:///C:/x/y.EXE', None), ('file:///C:/a%20b/x.lnk', None),
+                ('C:\\x\\y.hta', None), ('C:\\x\\y.cmd. .', None), ('C:/x/y.vbs', None), ('C:\\x\\a.txt:b.exe', None),
+                ('y.js', 'C:\\x'), ('x.ps1', None), ('x.msi', None), ('x.url', None), ('x.reg', None), ('cmd', None),
+                ('C:\\x\\README', None), ('file://attacker.example/share/x.txt', None),
+                ('file:////attacker.example/share/x.txt', None), ('\\\\attacker.example\\share\\a.pdf', None),
+                ('//attacker.example/share/a.pdf', None), ('\\\\attacker.example@SSL\\DavWWWRoot\\a.txt', None),
+                ('a.txt', '\\\\attacker.example\\share'), ('\\\\.\\C:\\x.txt', None), ('ms-msdt:/id PCWDiagnostic', None),
+                ('search-ms:query=x', None), ('vbscript:x', None),
+            ):
+                self.assertTrue(windows_shell_open_risk(url, cwd), url)
+
+            marker, script = os.path.join(tdir, 'ran'), os.path.join(tdir, 'x.bat')
+            with open(script, 'w') as f:
+                f.write(f'@echo ran> "{marker}"\n')
+            opened: list[str] = []
+            logged: list[str] = []
+            choices: list[tuple] = []
+            boss = SimpleNamespace(active_window=object(), choose=lambda msg, callback, *a, **kw: choices.append((callback, kw)))
+            with patch('kitty.utils.windows_shell_open', lambda url, cwd=None: opened.append(url)), patch('kitty.utils.log_error', logged.append):
+                # Without a window to ask in, dangerous links are not opened
+                with patch('kitty.utils.get_boss', lambda: None):
+                    open_url(['https://example.com', script, 'file:///' + script.replace('\\', '/')])
+                self.ae(opened, ['https://example.com'])
+                self.ae(len(logged), 2)
+                with patch('kitty.utils.get_boss', lambda: boss):
+                    open_url(script, cwd=tdir)
+                self.ae(len(choices), 1)
+                callback, kw = choices[0]
+                self.ae(kw['default'], 'n')
+                callback('n')
+                self.ae(opened, ['https://example.com'])
+                callback('o')
+                self.ae(opened, ['https://example.com', script])
+            self.assertFalse(os.path.exists(marker))
+            # ShellExecuteEx() on its worker thread
+            windows_shell_open(script, tdir)
+            for i in range(300):
+                if os.path.exists(marker):
+                    break
+                time.sleep(0.1)
+            self.assertTrue(os.path.exists(marker), 'windows_shell_open() did not run the batch file')
+            time.sleep(0.5)
+
     def _spawn_allocating_child(self, alloc_bytes: int) -> subprocess.Popen:
         p = subprocess.Popen(
             [
