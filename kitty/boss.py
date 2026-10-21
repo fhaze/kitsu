@@ -2665,7 +2665,7 @@ class Boss:
                 return
             editor_cmd[0] = exe
         path = os.path.abspath(os.path.expanduser(path))
-        if is_windows:
+        if sys.platform == 'win32':
             from .utils import is_windows_gui_executable
 
             try:

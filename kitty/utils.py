@@ -795,6 +795,8 @@ def get_editor_from_env_vars(opts: Options | None = None) -> list[str]:
 
 
 def is_windows_gui_executable(path: str) -> bool:
+    if sys.platform != 'win32':
+        return False
     import ctypes
     from ctypes import wintypes
 
