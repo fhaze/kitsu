@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -37,13 +39,40 @@ func OpenDir(path string) (*os.File, error) {
 	return f, nil
 }
 
-func FileIdentity(i os.FileInfo) (dev, inode uint64) {
-	if d, ok := i.Sys().(*syscall.Win32FileAttributeData); ok {
-		// Not a true identity, but Win32FileAttributeData carries no file
-		// index. Callers only use it to detect already copied entries.
-		return uint64(d.FileSizeHigh)<<32 | uint64(d.FileSizeLow), uint64(d.CreationTime.Nanoseconds())
+// Device and inode numbers that uniquely identify a file. The path must refer
+// to i; symlinks are followed only when i describes their target (os.Stat).
+func FileIdentity(i os.FileInfo, path string) (dev, inode uint64, err error) {
+	flags := uint32(windows.FILE_FLAG_BACKUP_SEMANTICS)
+	if i.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+		flags |= windows.FILE_FLAG_OPEN_REPARSE_POINT
 	}
-	return 0, 0
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, 0, &os.PathError{Op: "FileIdentity", Path: path, Err: err}
+	}
+	h, err := windows.CreateFile(p, windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, flags, 0)
+	if err != nil {
+		return 0, 0, &os.PathError{Op: "FileIdentity", Path: path, Err: err}
+	}
+	defer windows.CloseHandle(h)
+	// FileIdInfo supplies the full volume serial used by Python's os.stat.
+	var id struct {
+		volume, low, high uint64
+	}
+	err = windows.GetFileInformationByHandleEx(h, windows.FileIdInfo, (*byte)(unsafe.Pointer(&id)), uint32(unsafe.Sizeof(id)))
+	if err == nil {
+		// ReFS (including Dev Drives) uses 128-bit file IDs. Fold the high half in rather than
+		// failing, callers only need a stable identity to detect hard links and copies.
+		return id.volume, id.low ^ bits.RotateLeft64(id.high*0x9e3779b97f4a7c15, 32), nil
+	}
+	if !errors.Is(err, windows.ERROR_INVALID_PARAMETER) && !errors.Is(err, windows.ERROR_NOT_SUPPORTED) && !errors.Is(err, windows.ERROR_INVALID_FUNCTION) {
+		return 0, 0, &os.PathError{Op: "FileIdentity", Path: path, Err: err}
+	}
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
+		return 0, 0, &os.PathError{Op: "FileIdentity", Path: path, Err: err}
+	}
+	return uint64(info.VolumeSerialNumber), uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow), nil
 }
 
 // Windows has no POSIX ownership or mode bits, files in per-user locations

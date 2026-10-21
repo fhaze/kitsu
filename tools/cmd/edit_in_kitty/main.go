@@ -217,7 +217,10 @@ func edit_in_kitty(path string, opts *Options) (exit_code int, err error) {
 	for _, arg := range os.Args[2:] {
 		add_encoded("a", arg)
 	}
-	dev, ino := utils.FileIdentity(s)
+	dev, ino, err := utils.FileIdentity(s, path)
+	if err != nil {
+		return 1, err
+	}
 	add("file_inode", fmt.Sprintf("%d:%d:%d", dev, ino, s.ModTime().UnixNano()))
 	add_encoded("file_data", utils.UnsafeBytesToString(file_data))
 	fmt.Println("Waiting for editing to be completed, press Esc to abort...")

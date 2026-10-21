@@ -92,7 +92,10 @@ func get_file_data(callback func(h *tar.Header, data []byte) error, seen map[fil
 			}
 		}
 	case s.Mode().IsRegular():
-		dev, ino := utils.FileIdentity(s)
+		dev, ino, err := utils.FileIdentity(s, local_path)
+		if err != nil {
+			return err
+		}
 		fid := file_unique_id{dev: dev, inode: ino}
 		if prev, ok := seen[fid]; ok { // Hard link
 			return cb(&tar.Header{Typeflag: tar.TypeLink, Linkname: prev}, nil, arcname)

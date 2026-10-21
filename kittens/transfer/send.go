@@ -116,8 +116,11 @@ func get_remote_path(local_path string, remote_base string) string {
 	return remote_base
 }
 
-func NewFile(opts *Options, local_path, expanded_local_path string, file_id int, stat_result fs.FileInfo, remote_base string, file_type FileType) *File {
-	dev, ino := utils.FileIdentity(stat_result)
+func NewFile(opts *Options, local_path, expanded_local_path string, file_id int, stat_result fs.FileInfo, remote_base string, file_type FileType) (*File, error) {
+	dev, ino, err := utils.FileIdentity(stat_result, expanded_local_path)
+	if err != nil {
+		return nil, err
+	}
 	ans := File{
 		local_path: local_path, expanded_local_path: expanded_local_path, file_id: fmt.Sprintf("%x", file_id),
 		stat_result: stat_result, file_type: file_type, display_name: wcswidth.StripEscapeCodes(local_path),
@@ -128,7 +131,7 @@ func NewFile(opts *Options, local_path, expanded_local_path string, file_id int,
 		compression_capable: file_type == FileType_regular && stat_result.Size() > 4096 && should_be_compressed(expanded_local_path, opts.Compress),
 		remote_initial_size: -1,
 	}
-	return &ans
+	return &ans, nil
 }
 
 func process(opts *Options, paths []string, remote_base string, counter *int) (ans []*File, err error) {
@@ -140,7 +143,11 @@ func process(opts *Options, paths []string, remote_base string, counter *int) (a
 		}
 		if s.IsDir() {
 			*counter += 1
-			ans = append(ans, NewFile(opts, x, expanded, *counter, s, remote_base, FileType_directory))
+			f, err := NewFile(opts, x, expanded, *counter, s, remote_base, FileType_directory)
+			if err != nil {
+				return ans, err
+			}
+			ans = append(ans, f)
 			new_remote_base := remote_base
 			if new_remote_base != "" {
 				new_remote_base = strings.TrimRight(new_remote_base, "/") + "/" + filepath.Base(x) + "/"
@@ -162,10 +169,18 @@ func process(opts *Options, paths []string, remote_base string, counter *int) (a
 			ans = append(ans, new_ans...)
 		} else if s.Mode()&fs.ModeSymlink == fs.ModeSymlink {
 			*counter += 1
-			ans = append(ans, NewFile(opts, x, expanded, *counter, s, remote_base, FileType_symlink))
+			f, err := NewFile(opts, x, expanded, *counter, s, remote_base, FileType_symlink)
+			if err != nil {
+				return ans, err
+			}
+			ans = append(ans, f)
 		} else if s.Mode().IsRegular() {
 			*counter += 1
-			ans = append(ans, NewFile(opts, x, expanded, *counter, s, remote_base, FileType_regular))
+			f, err := NewFile(opts, x, expanded, *counter, s, remote_base, FileType_regular)
+			if err != nil {
+				return ans, err
+			}
+			ans = append(ans, f)
 		}
 	}
 	return
@@ -241,7 +256,10 @@ func files_for_send(opts *Options, args []string) (files []*File, err error) {
 			}
 			st, err := os.Stat(q)
 			if err == nil {
-				dev, ino := utils.FileIdentity(st)
+				dev, ino, err := utils.FileIdentity(st, q)
+				if err != nil {
+					return files, err
+				}
 				fh := FileHash{dev, ino}
 				gr, found := groups[fh]
 				if found {

@@ -32,20 +32,23 @@ func (s *file_state) equal(o *file_state) bool {
 	return o != nil && s.Size == o.Size && s.ModTime.Equal(o.ModTime) && s.Inode == o.Inode
 }
 
-func get_file_state(fi fs.FileInfo) *file_state {
-	_, inode := utils.FileIdentity(fi)
+func get_file_state(fi fs.FileInfo, path string) (*file_state, error) {
+	_, inode, err := utils.FileIdentity(fi, path)
+	if err != nil {
+		return nil, err
+	}
 	return &file_state{
 		Size:    fi.Size(),
 		ModTime: fi.ModTime(),
 		Inode:   inode,
-	}
+	}, nil
 }
 
 func get_file_state_from_path(path string) (*file_state, error) {
 	if s, err := os.Stat(path); err != nil {
 		return nil, err
 	} else {
-		return get_file_state(s), nil
+		return get_file_state(s, path)
 	}
 }
 
