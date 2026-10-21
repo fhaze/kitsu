@@ -2621,6 +2621,11 @@ _glfwPlatformSetClipboard(GLFWClipboardType t) {
 
 void
 _glfwPlatformGetClipboard(GLFWClipboardType clipboard_type, const char *mime_type, GLFWclipboardwritedatafun write_data, void *object) {
+    if (clipboard_type == GLFW_PRIMARY_SELECTION) {
+        // Windows has no system primary selection; use the process-local self offer, including its MIME types.
+        write_data(object, NULL, 0);
+        return;
+    }
     if (clipboard_type != GLFW_CLIPBOARD) return;
     if (!OpenClipboard(_glfw.win32.helperWindowHandle)) {
         _glfwInputErrorWin32(GLFW_PLATFORM_ERROR, "Win32: Failed to open clipboard");

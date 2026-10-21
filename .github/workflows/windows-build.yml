@@ -115,6 +115,9 @@ jobs:
           - name: Test that GLFW leaves the foreground lock timeout alone
             run: python windows/test_foreground_lock.py windows-package/kitsu
 
+          - name: Test the Win32 primary selection and clipboard isolation
+            run: python windows/test_primary_selection.py windows-package/kitsu
+
           - name: Smoke test the packaged executables
             shell: cmd
             run: |
