@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -60,10 +61,9 @@ func FileIdentity(i os.FileInfo, path string) (dev, inode uint64, err error) {
 	}
 	err = windows.GetFileInformationByHandleEx(h, windows.FileIdInfo, (*byte)(unsafe.Pointer(&id)), uint32(unsafe.Sizeof(id)))
 	if err == nil {
-		if id.high != 0 {
-			return 0, 0, &os.PathError{Op: "FileIdentity", Path: path, Err: fmt.Errorf("128-bit file ID: %w", errors.ErrUnsupported)}
-		}
-		return id.volume, id.low, nil
+		// ReFS (including Dev Drives) uses 128-bit file IDs. Fold the high half in rather than
+		// failing, callers only need a stable identity to detect hard links and copies.
+		return id.volume, id.low ^ bits.RotateLeft64(id.high*0x9e3779b97f4a7c15, 32), nil
 	}
 	if !errors.Is(err, windows.ERROR_INVALID_PARAMETER) && !errors.Is(err, windows.ERROR_NOT_SUPPORTED) && !errors.Is(err, windows.ERROR_INVALID_FUNCTION) {
 		return 0, 0, &os.PathError{Op: "FileIdentity", Path: path, Err: err}
