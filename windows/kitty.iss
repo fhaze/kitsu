@@ -85,6 +85,7 @@ Type: files; Name: "{autodesktop}\kitty.lnk"
 ; Remove the previous version before copying the new files, so that modules,
 ; DLLs and the bundled Python runtime that no longer exist do not linger
 Type: filesandordirs; Name: "{app}\bin"
+Type: filesandordirs; Name: "{app}\cmd"
 Type: filesandordirs; Name: "{app}\etc"
 Type: filesandordirs; Name: "{app}\lib"
 Type: filesandordirs; Name: "{app}\share"
@@ -224,15 +225,19 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    RemoveDirFromPath(ExpandConstant('{app}\bin'));
     if WizardIsTaskSelected('addtopath') then
-      AddDirToPath(ExpandConstant('{app}\bin'))
+      AddDirToPath(ExpandConstant('{app}\cmd'))
     else
-      RemoveDirFromPath(ExpandConstant('{app}\bin'));
+      RemoveDirFromPath(ExpandConstant('{app}\cmd'));
   end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usPostUninstall then
+  begin
     RemoveDirFromPath(ExpandConstant('{app}\bin'));
+    RemoveDirFromPath(ExpandConstant('{app}\cmd'));
+  end;
 end;

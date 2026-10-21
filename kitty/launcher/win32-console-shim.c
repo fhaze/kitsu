@@ -7,6 +7,7 @@
 
 // Built as kitty.com, a console subsystem executable that runs kitty.exe from
 // its own directory with the same command line and waits for it to exit.
+// The DLL-free PATH launchers instead run ..\bin\kitsu.exe.
 //
 // kitty.exe is a GUI subsystem executable so that starting it from Explorer,
 // the start menu or Win+R does not flash a console window. The flip side is
@@ -71,13 +72,22 @@ wmain(void) {
         report_error(L"Failed to get path to kitty.com: ");
         return 1;
     }
-    wchar_t *dot = wcsrchr(exe, L'.');
     wchar_t *sep = wcsrchr(exe, L'\\');
+#ifdef KITTY_PATH_LAUNCHER
+    const wchar_t target[] = L"..\\bin\\kitsu.exe";
+    if (!sep || (size_t)(sep + 1 - exe) + sizeof(target) / sizeof(target[0]) > sizeof(exe) / sizeof(exe[0])) {
+        report_error(L"Unexpected path for Kitsu PATH launcher: ");
+        return 1;
+    }
+    wcscpy(sep + 1, target);
+#else
+    wchar_t *dot = wcsrchr(exe, L'.');
     if (!dot || (sep && sep > dot) || n + 1 >= sizeof(exe) / sizeof(exe[0])) {
         report_error(L"Unexpected path for kitty.com: ");
         return 1;
     }
     wcscpy(dot, L".exe");
+#endif
 
     const wchar_t *rest = skip_program_name(GetCommandLineW());
     size_t exe_len = wcslen(exe), rest_len = wcslen(rest);

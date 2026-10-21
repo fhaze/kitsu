@@ -106,6 +106,9 @@ jobs:
           - name: Verify Kitsu branding and embedded executable icons
             run: python windows/test_branding.py windows-package/kitsu
 
+          - name: Test DLL-free PATH launchers
+            run: python windows/test_path_launchers.py windows-package/kitsu -v
+
           - name: Test Unicode and long path handling
             run: |
               gcc -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -Ikitty windows/test_win32_compat.c kitty/win32-compat.c -o build/test-win32-compat.exe -lws2_32 -lbcrypt -ladvapi32 -lwtsapi32 -lshell32
@@ -209,29 +212,47 @@ jobs:
               uninstall_key='HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\{7D0F3A2B-5C4E-4F19-9B6A-2E8D1C3F5A70}_is1'
 
               "$setup" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /TASKS=addtopath /DIR="$dir" /LOG="$tmp\\kitty-setup-1.log"
-              "$dir\\bin\\kitten.exe" --version
+              "$dir\\cmd\\kitten.exe" --version
+              "$dir\\cmd\\kitsu.com" --version
               test -e "$dir\\lib\\kitty\\windows\\wsl\\kitten-linux-amd64"
-              reg query 'HKCU\Environment' /v Path | grep -F "kitty-install\\bin"
+              reg query 'HKCU\Environment' /v Path | grep -F "kitty-install\\cmd"
+              reg query 'HKCU\Environment' /v Path | grep -F "kitty-install\\bin" && exit 1
 
-              # A newer installer must upgrade in place: same directory and tasks, stale files removed
+              # Simulate a legacy install: bin on PATH, including duplicate/case/trailing-slash variants.
+              python -c 'import sys, winreg; d=sys.argv[1]; k=winreg.OpenKey(winreg.HKEY_CURRENT_USER,"Environment",0,winreg.KEY_ALL_ACCESS); p,t=winreg.QueryValueEx(k,"Path"); p=p.replace(d+"\\cmd",d+"\\bin"); winreg.SetValueEx(k,"Path",0,t,p+";"+d.upper()+"\\BIN\\")' "$dir"
+
+              # A newer installer must upgrade in place: same directory and tasks, stale files removed.
               echo stale > "$dir\\lib\\stale.py"
+              echo stale > "$dir\\cmd\\stale.dll"
               iscc=$(cygpath -u "$(python -c 'import setup; print(setup.find_iscc())')")
               "$iscc" /Qp /DAppVersion=99.0.0 /DArch=x86_64 "/DSourceDir=$(cygpath -aw windows-package/kitsu)" "/DOutputDir=$tmp" "$(cygpath -aw windows/kitty.iss)"
               "$tmp\\kitsu-99.0.0-windows-x86_64-setup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /LOG="$tmp\\kitty-setup-2.log"
               test ! -e "$dir\\lib\\stale.py"
-              "$dir\\bin\\kitten.exe" --version
+              test ! -e "$dir\\cmd\\stale.dll"
+              "$dir\\cmd\\kitten.exe" --version
+              "$dir\\cmd\\kitsu.exe" --version
               reg query "$uninstall_key" /v DisplayVersion | grep -F 99.0.0
-              test "$(reg query 'HKCU\Environment' /v Path | grep -oF "kitty-install\\bin" | wc -l)" -eq 1
+              test "$(reg query 'HKCU\Environment' /v Path | grep -oF "kitty-install\\cmd" | wc -l)" -eq 1
+              reg query 'HKCU\Environment' /v Path | grep -iF 'kitty-install\bin' && exit 1
+
+              # Deselecting the task removes both old and new entries; selecting it again is idempotent.
+              "$tmp\\kitsu-99.0.0-windows-x86_64-setup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /TASKS=""
+              reg query 'HKCU\Environment' /v Path | grep -iF 'kitty-install\' && exit 1
+              for i in 1 2; do
+                "$tmp\\kitsu-99.0.0-windows-x86_64-setup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /TASKS=addtopath
+              done
+              test "$(reg query 'HKCU\Environment' /v Path | grep -oF "kitty-install\\cmd" | wc -l)" -eq 1
 
               "$dir\\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
               # the uninstaller hands over to a copy of itself in %TEMP% and returns before that finishes
               for i in $(seq 20); do
-                reg query 'HKCU\Environment' /v Path | grep -qF "kitty-install\\bin" || break
+                reg query 'HKCU\Environment' /v Path | grep -qiF 'kitty-install\' || break
                 sleep 3
               done
               test ! -e "$dir\\bin"
+              test ! -e "$dir\\cmd"
               reg query "$uninstall_key" && exit 1
-              reg query 'HKCU\Environment' /v Path | grep -F "kitty-install\\bin" && exit 1
+              reg query 'HKCU\Environment' /v Path | grep -iF 'kitty-install\' && exit 1
               echo installer OK
 
           - name: Upload package artifact
