@@ -1,0 +1,56 @@
+name: Signing check
+# Opens the Certum SimplySign session and signs a throwaway file, publishing nothing. Use it to
+# prove the release-signing secrets before a release depends on them, or to diagnose them when a
+# release fails. Manual only: every run is a login to the Certum account, and repeated failed
+# logins lock it.
+on:
+    workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+    sign:
+        name: Open the SimplySign session and sign
+        runs-on: windows-latest
+        environment:
+            name: release-signing
+            deployment: false
+        concurrency:
+            group: certum-simplysign
+            cancel-in-progress: false
+        steps:
+          - name: Checkout source code
+            uses: actions/checkout@v7.0.1
+            with:
+              persist-credentials: false
+
+          - name: Open the SimplySign session
+            shell: pwsh
+            env:
+              CERTUM_USERNAME: ${{ secrets.CERTUM_USERNAME }}
+              CERTUM_OTP_URI: ${{ secrets.CERTUM_OTP_URI }}
+              CERTUM_CERT_SHA1: ${{ vars.CERTUM_CERT_SHA1 }}
+            run: ./windows/Connect-SimplySign.ps1
+
+          - name: Sign and verify a throwaway file
+            shell: pwsh
+            env:
+              CERTUM_CERT_SHA1: ${{ vars.CERTUM_CERT_SHA1 }}
+            run: |
+              $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+                Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
+              $file = Join-Path $env:RUNNER_TEMP 'signing-check.ps1'
+              "Write-Host 'Kitsu signing check'" | Set-Content -Encoding ascii $file
+              & $signtool.FullName sign /fd sha256 /sha1 $env:CERTUM_CERT_SHA1 /tr http://time.certum.pl /td sha256 $file
+              if ($LASTEXITCODE -ne 0) { throw 'signtool sign failed' }
+              $s = Get-AuthenticodeSignature -LiteralPath $file
+              if ($s.Status -ne 'Valid' -or -not $s.TimeStamperCertificate) { throw "Signature: $($s.Status) $($s.StatusMessage)" }
+              "Signer: $($s.SignerCertificate.Subject)" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+              "Certificate valid until: $($s.SignerCertificate.NotAfter.ToString('u'))" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+              "Timestamp: $($s.TimeStamperCertificate.Subject)" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+
+          - name: Close the SimplySign session
+            if: always()
+            shell: pwsh
+            run: Get-Process -Name SimplySignDesktop -ErrorAction SilentlyContinue | Stop-Process -Force

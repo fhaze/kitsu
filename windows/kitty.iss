@@ -69,6 +69,12 @@ ChangesEnvironment=yes
 UsePreviousAppDir=yes
 UsePreviousTasks=yes
 UsePreviousPrivileges=yes
+#ifdef SignTool
+; Authenticode signs setup.exe and unins000.exe. setup.py passes /DSignTool=kitsusign
+; and the command as /Skitsusign=... when KITSU_SIGN_COMMAND is set, see windows/signing.py
+SignTool={#SignTool}
+SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

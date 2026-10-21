@@ -51,3 +51,40 @@ gcc -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -Ikitty windows/test
     -o build/test-win32-compat.exe -lws2_32 -lbcrypt -ladvapi32 -lwtsapi32 -lshell32 && ./build/test-win32-compat.exe
 python windows/test_unicode_paths.py windows-package/kitsu
 ```
+
+### Code signing
+
+`python setup.py windows-package` Authenticode signs Kitsu's own files (the `bin\` and
+`cmd\` launchers, `kitten.exe`, the `.pyd`/`.dll` files under `lib\kitty`, `health-check.ps1`)
+before zipping, and Inno Setup signs `setup.exe` and `unins000.exe`, whenever
+`KITSU_SIGN_COMMAND` is set. It is a command line in Inno Setup's SignTool syntax (`$f` = the
+quoted files, `$q` = `"`), so any signing provider works. Third-party files (MSYS2, Python,
+slangc, less, OpenConsole) stay as their vendors shipped them: the SBOM matches MSYS2 files by
+hash. The list and the checks live in `windows/signing.py`:
+
+```sh
+python windows/signing.py list windows-package/kitsu
+python windows/signing.py verify windows-package/kitsu windows-package/kitsu-*-setup.exe --thumbprint <sha1>
+```
+
+CI builds sign with a throwaway self-signed certificate trusted only on the runner, so every
+build exercises signing. Release builds (`v*` tags) sign with the Certum open source
+certificate. Its key is in Certum's cloud (SimplySign): `windows/Connect-SimplySign.ps1`
+installs SimplySign Desktop on the runner and logs in with a TOTP code computed from the seed,
+then `signtool` finds the certificate by thumbprint and timestamps with `http://time.certum.pl`.
+
+One-time setup, in the repository settings under Environments, create `release-signing` with:
+
+- **Protection:** required reviewer (yourself); deployment branches and tags: `v*` tags, plus
+  `master` for the manual `Signing check` workflow.
+- **Secret `CERTUM_USERNAME`:** the SimplySign account e-mail.
+- **Secret `CERTUM_OTP_URI`:** the `otpauth://totp/...?secret=...` URI in the QR code you scan
+  to pair the SimplySign mobile app. It is as sensitive as the private key: keep it only there
+  and in the phone. If it leaks, re-pair the app in Certum's portal to get a new one.
+- **Variable `CERTUM_CERT_SHA1`:** the certificate thumbprint. With SimplySign Desktop logged in
+  on a PC: `Get-ChildItem Cert:\CurrentUser\My | Format-List Subject, Thumbprint, NotAfter`.
+
+Then run the `Signing check` workflow once. Repeated failed logins can lock the Certum account
+(the script stops after three), so check the secrets before retrying. When the certificate is
+renewed, update `CERTUM_CERT_SHA1`. SmartScreen reputation is tied to the certificate, so expect
+warnings on the first releases after a new one.

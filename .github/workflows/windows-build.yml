@@ -1,6 +1,13 @@
 name: Windows build
 on:
     workflow_call:
+        inputs:
+            sign:
+                description: >-
+                    Sign with the Certum certificate (release builds). Otherwise the build signs
+                    with a throwaway self-signed certificate, so every build exercises signing.
+                type: boolean
+                default: false
 
 env:
     CI: 'true'
@@ -13,6 +20,17 @@ jobs:
     build:
         name: Build Kitsu (MSYS2 UCRT64)
         runs-on: windows-latest
+        # The Certum secrets live in the release-signing environment, which should require a
+        # reviewer and only allow v* tags (and master, for the signing check workflow).
+        # See "Code signing" in AGENTS.md.
+        environment:
+            name: ${{ inputs.sign && 'release-signing' || 'windows-build' }}
+            deployment: false
+        # TOTP codes are single use and SimplySign locks the account after repeated rejections,
+        # so never run two Certum logins at once
+        concurrency:
+            group: ${{ inputs.sign && 'certum-simplysign' || format('windows-build-{0}-{1}', github.run_id, github.run_attempt) }}
+            cancel-in-progress: false
         defaults:
             run:
                 shell: msys2 {0}
@@ -82,21 +100,78 @@ jobs:
               }
               (Get-Item "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe").VersionInfo.ProductVersion
 
-          - name: Test dependency inventory
+          - name: Test dependency inventory and signing helpers
             run: |
               python -m unittest discover -s .github/workflows -p 'test_windows_dependencies.py'
               python -m unittest discover -s windows -p 'test_python_runtime.py'
+              python -m unittest discover -s windows -p 'test_signing.py'
+              pwsh -NoProfile -File windows/Connect-SimplySign.ps1 -SelfTest
+
+          - name: Create a throwaway test signing certificate
+            if: ${{ !inputs.sign }}
+            id: testcert
+            shell: pwsh
+            run: |
+              # Trusted on this runner only, so the signatures verify as Valid here and nowhere else
+              $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Kitsu CI Test Signing' `
+                -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(2)
+              $cer = Join-Path $env:RUNNER_TEMP 'kitsu-test-signing.cer'
+              Export-Certificate -Cert $cert -FilePath $cer | Out-Null
+              Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+              "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
+
+          - name: Open the SimplySign session
+            if: ${{ inputs.sign }}
+            shell: pwsh
+            env:
+              CERTUM_USERNAME: ${{ secrets.CERTUM_USERNAME }}
+              CERTUM_OTP_URI: ${{ secrets.CERTUM_OTP_URI }}
+              CERTUM_CERT_SHA1: ${{ vars.CERTUM_CERT_SHA1 }}
+            run: ./windows/Connect-SimplySign.ps1
+
+          - name: Prepare the sign command
+            id: sign
+            shell: pwsh
+            env:
+              THUMBPRINT: ${{ inputs.sign && vars.CERTUM_CERT_SHA1 || steps.testcert.outputs.thumbprint }}
+              TIMESTAMP: ${{ inputs.sign && 'http://time.certum.pl' || '' }}
+            run: |
+              # The x64 signtool: the ARM64 one cannot use SimplySign's 64-bit minidriver
+              $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+                Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
+              if (-not $signtool) { throw 'signtool.exe not found' }
+              $thumbprint = ($env:THUMBPRINT -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+              if (-not $thumbprint) { throw 'No signing certificate thumbprint, set the CERTUM_CERT_SHA1 variable of the release-signing environment' }
+              # Inno Setup SignTool syntax, see windows/signing.py
+              $cmd = "`$q$($signtool.FullName)`$q sign /fd sha256 /sha1 $thumbprint /d Kitsu /du https://github.com/$env:GITHUB_REPOSITORY"
+              if ($env:TIMESTAMP) { $cmd += " /tr $env:TIMESTAMP /td sha256" }
+              "command=$cmd `$f" >> $env:GITHUB_OUTPUT
+              "thumbprint=$thumbprint" >> $env:GITHUB_OUTPUT
 
           - name: Build Windows package
             id: pkg
             env:
               KITTY_RELEASE_TAG: ${{ github.ref_name }}
+              KITSU_SIGN_COMMAND: ${{ steps.sign.outputs.command }}
+              MSYS2_ENV_CONV_EXCL: KITSU_SIGN_COMMAND
             run: |
               python setup.py windows-package
               zip=$(ls windows-package/kitsu-*-windows-*.zip)
               echo "zip=$zip" >> "$GITHUB_OUTPUT"
               setup=$(ls windows-package/kitsu-*-windows-*-setup.exe)
               echo "setup=$setup" >> "$GITHUB_OUTPUT"
+
+          - name: Close the SimplySign session
+            if: ${{ always() && inputs.sign }}
+            shell: pwsh
+            run: Get-Process -Name SimplySignDesktop -ErrorAction SilentlyContinue | Stop-Process -Force
+
+          - name: Verify Authenticode signatures
+            env:
+              THUMBPRINT: ${{ steps.sign.outputs.thumbprint }}
+            run: |
+              python windows/signing.py verify windows-package/kitsu "${{ steps.pkg.outputs.setup }}" \
+                --thumbprint "$THUMBPRINT" ${{ inputs.sign && '--require-timestamp' || '' }}
 
           - name: Test Windows console and TUI key handling
             run: |
@@ -230,6 +305,7 @@ jobs:
             env:
               # keep /VERYSILENT etc. from being turned into paths by the MSYS2 shell
               MSYS2_ARG_CONV_EXCL: '*'
+              THUMBPRINT: ${{ steps.sign.outputs.thumbprint }}
             run: |
               set -ex
               setup=$(ls windows-package/kitsu-*-windows-*-setup.exe)
@@ -240,6 +316,8 @@ jobs:
               "$setup" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /TASKS=addtopath /DIR="$dir" /LOG="$tmp\\kitty-setup-1.log"
               "$dir\\cmd\\kitten.exe" --version
               "$dir\\cmd\\kitsu.com" --version
+              # the installed files, and the uninstaller Inno Setup signed while compiling
+              python windows/signing.py verify "$dir" "$dir\\unins000.exe" --thumbprint "$THUMBPRINT"
               test -e "$dir\\lib\\kitty\\windows\\wsl\\kitten-linux-amd64"
               reg query 'HKCU\Environment' /v Path | grep -F "kitty-install\\cmd"
               reg query 'HKCU\Environment' /v Path | grep -F "kitty-install\\bin" && exit 1
