@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from ctypes import wintypes
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,56 @@ PACKAGE = Path(globals().get('PACKAGE', 'windows-package/kitsu')).resolve()
 def require(condition: Any, message: Any) -> None:
     if not condition:
         raise RuntimeError(str(message))
+
+
+def system_probe() -> None:
+    class PixelFormat(ctypes.Structure):
+        _fields_ = [('size', wintypes.WORD), ('version', wintypes.WORD), ('flags', wintypes.DWORD)] + [
+            (name, wintypes.BYTE) for name in (
+                'pixel_type', 'color', 'red', 'red_shift', 'green', 'green_shift', 'blue', 'blue_shift',
+                'alpha', 'alpha_shift', 'accum', 'accum_red', 'accum_green', 'accum_blue', 'accum_alpha',
+                'depth', 'stencil', 'aux', 'layer', 'reserved',
+            )
+        ] + [(name, wintypes.DWORD) for name in ('layer_mask', 'visible_mask', 'damage_mask')]
+
+    user = ctypes.WinDLL('user32')
+    gdi = ctypes.WinDLL('gdi32')
+    gl = ctypes.WinDLL(str(Path(os.environ['SYSTEMROOT']) / 'System32/opengl32.dll'))
+    user.CreateWindowExW.argtypes = [
+        wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, ctypes.c_void_p,
+    ]
+    user.CreateWindowExW.restype = wintypes.HWND
+    user.GetDC.argtypes, user.GetDC.restype = [wintypes.HWND], wintypes.HDC
+    user.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+    user.DestroyWindow.argtypes = [wintypes.HWND]
+    gdi.ChoosePixelFormat.argtypes = [wintypes.HDC, ctypes.POINTER(PixelFormat)]
+    gdi.SetPixelFormat.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.POINTER(PixelFormat)]
+    gl.wglCreateContext.argtypes, gl.wglCreateContext.restype = [wintypes.HDC], ctypes.c_void_p
+    gl.wglMakeCurrent.argtypes = [wintypes.HDC, ctypes.c_void_p]
+    gl.wglDeleteContext.argtypes = [ctypes.c_void_p]
+    gl.glGetString.argtypes, gl.glGetString.restype = [ctypes.c_uint], ctypes.c_char_p
+    window = user.CreateWindowExW(0, 'STATIC', 'System OpenGL probe', 0x06000000, 0, 0, 1, 1, None, None, None, None)
+    dc = user.GetDC(window) if window else None
+    context = None
+    result = {}
+    try:
+        pfd = PixelFormat(size=ctypes.sizeof(PixelFormat), version=1, flags=0x25, color=24)
+        pixel_format = gdi.ChoosePixelFormat(dc, ctypes.byref(pfd)) if dc else 0
+        if pixel_format and gdi.SetPixelFormat(dc, pixel_format, ctypes.byref(pfd)):
+            context = gl.wglCreateContext(dc)
+        if context and gl.wglMakeCurrent(dc, context):
+            result = {'version': gl.glGetString(0x1F02).decode(), 'renderer': gl.glGetString(0x1F01).decode()}
+    finally:
+        gl.wglMakeCurrent(None, None)
+        if context:
+            gl.wglDeleteContext(context)
+        if dc:
+            user.ReleaseDC(window, dc)
+        if window:
+            user.DestroyWindow(window)
+    print(json.dumps(result))
 
 
 def probe() -> None:
@@ -112,7 +163,7 @@ def probe() -> None:
 
 
 class OpenGLFallback(unittest.TestCase):
-    def run_probe(self, driver: str, version_override: str = '') -> dict[str, Any]:
+    def run_probe(self, driver: str, version_override: str = '', *, system: bool = False) -> dict[str, Any]:
         env = os.environ.copy()
         env['KITSU_OPENGL_DRIVER'] = driver
         env['GALLIUM_DRIVER'] = 'not-a-driver'  # The forced software path must override this.
@@ -120,7 +171,8 @@ class OpenGLFallback(unittest.TestCase):
         if version_override:
             env['MESA_GL_VERSION_OVERRIDE'] = version_override
         env['PATH'] = os.pathsep.join((env['SYSTEMROOT'], str(Path(env['SYSTEMROOT']) / 'System32')))
-        code = f'import runpy; runpy.run_path({str(Path(__file__).resolve())!r}, init_globals={{"PACKAGE": {str(PACKAGE)!r}}}, run_name="__opengl_probe__")'
+        mode = '__system_opengl_probe__' if system else '__opengl_probe__'
+        code = f'import runpy; runpy.run_path({str(Path(__file__).resolve())!r}, init_globals={{"PACKAGE": {str(PACKAGE)!r}}}, run_name={mode!r})'
         with tempfile.TemporaryDirectory(prefix='kitsu-gl-') as cwd:
             # Neither the current directory nor a development toolchain should supply GL.
             for name in ('opengl32.dll', 'libgallium_wgl.dll'):
@@ -130,6 +182,16 @@ class OpenGLFallback(unittest.TestCase):
         result = json.loads(completed.stdout)
         print(f'{driver}: {result}', flush=True)
         return result
+
+    def test_native_uses_available_system_opengl(self) -> None:
+        system = self.run_probe('native', system=True)
+        if not system or tuple(map(int, system['version'].split()[0].split('.')[:2])) < (3, 1):
+            self.skipTest('System OpenGL 3.1 is unavailable')
+        result = self.run_probe('native')
+        self.assertNotIn('error', result)
+        for context in result['contexts']:
+            self.assertEqual(context['renderer'], system['renderer'])
+            self.assertEqual(Path(context['library']), Path(os.environ['SYSTEMROOT']) / 'System32/opengl32.dll')
 
     def test_forced_llvmpipe_renders_with_shared_contexts(self) -> None:
         self.assertFalse((PACKAGE / 'bin/opengl32.dll').exists())
@@ -172,6 +234,8 @@ class OpenGLFallback(unittest.TestCase):
 
 if __name__ == '__opengl_probe__':
     probe()
+elif __name__ == '__system_opengl_probe__':
+    system_probe()
 elif __name__ == '__main__':
     if len(sys.argv) > 1:
         PACKAGE = Path(sys.argv.pop(1)).resolve()

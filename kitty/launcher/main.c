@@ -40,6 +40,18 @@ cleanup_free(void *p) {
 
 static bool being_tested = false;
 
+#ifdef _WIN32
+static bool python_ready = false, python_failed = false;
+
+static int
+record_python_failure(const char *event, PyObject *args, void *data) {
+    (void)args;
+    (void)data;
+    if (!strcmp(event, "sys.excepthook") || !strcmp(event, "kitsu.startup_error")) python_failed = true;
+    return 0;
+}
+#endif
+
 #if !defined(__FreeBSD__) && !defined(_WIN32)
 static bool
 safe_realpath(const char *src, char *buf, size_t buf_sz) {
@@ -132,6 +144,13 @@ set_kitty_run_data(RunData *run_data, bool from_source, wchar_t *extensions_dir)
         PyErr_Print();
         return false;
     }
+#ifdef _WIN32
+    if (PySys_AddAuditHook(record_python_failure, NULL) != 0) {
+        PyErr_Print();
+        return false;
+    }
+    python_ready = true;
+#endif
     return true;
 }
 
@@ -744,7 +763,9 @@ main(int argc_, char *argv_[], char *envp[]) {
 int
 main(int argc, char *argv[], char *envp[]) {
     int ret = kitty_main(argc, argv, envp);
-    if (ret) win32_report_fatal_error();
+    // SystemExit is also used for ordinary command results. Only interpreter
+    // setup failures and actual Python exceptions need the fatal GUI dialog.
+    if (ret && (!python_ready || python_failed)) win32_report_fatal_error();
     return ret;
 }
 #endif
