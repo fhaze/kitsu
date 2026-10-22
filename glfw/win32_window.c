@@ -1789,7 +1789,7 @@ _glfwPlatformCreateWindow(
 
     if (ctxconfig->client != GLFW_NO_API) {
         if (ctxconfig->source == GLFW_NATIVE_CONTEXT_API) {
-            if (!_glfwInitWGL()) return false;
+            if (!_glfwInitWGL(ctxconfig, fbconfig)) return false;
             if (!_glfwCreateContextWGL(window, ctxconfig, fbconfig)) return false;
         } else if (ctxconfig->source == GLFW_EGL_CONTEXT_API) {
             if (!_glfwInitEGL()) return false;
