@@ -1499,8 +1499,8 @@ set_os_window_size(OSWindow *os_window, int x, int y) {
     float xs, ys;
     double xd, yd;
     get_window_content_scale(os_window->handle, &xs, &ys, &xd, &yd);
-    x = (int)round(x * xs);
-    y = (int)round(y * ys);
+    x = (int)round((double)x * xs);
+    y = (int)round((double)y * ys);
 #endif
     glfwSetWindowSize(os_window->handle, x, y);
 }
