@@ -362,6 +362,8 @@ func (self *Term) append_mouse_event(m *mouse_event_record) {
 	buttons &^= self.phantom_buttons
 	changed := buttons ^ self.mouse_buttons
 	self.mouse_buttons = buttons
+	// ConPTY drops SGR back/forward buttons (128/129) in key-event mode.
+	// Keep their mappings for native console records that do include them.
 	button_codes := [...]int{0, 2, 1, 128, 129}
 	for i, code := range button_codes {
 		mask := uint32(1 << i)
@@ -388,9 +390,10 @@ func (self *Term) append_mouse_event(m *mouse_event_record) {
 		}
 		if delta < 0 {
 			button++
-			delta = -delta
 		}
-		for ; delta > 0; delta -= 120 {
+		// Each ConPTY record represents one SGR wheel event, with delta +/-128,
+		// not the Win32 WHEEL_DELTA of 120. Only its direction matters.
+		if delta != 0 {
 			append_event(button, false)
 		}
 	}
