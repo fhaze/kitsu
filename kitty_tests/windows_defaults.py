@@ -10,13 +10,21 @@ from unittest.mock import Mock, patch
 from kitty.boss import Boss
 from kitty.constants import is_windows, kitty_exe
 from kitty.options.types import defaults
-from kitty.utils import get_editor_from_env_vars, is_windows_gui_executable
+from kitty.utils import get_editor_from_env_vars, is_windows_gui_executable, reload_conf_in_all_kitties
 
 from .base import BaseTest
 
 
 @unittest.skipUnless(is_windows, 'Native Windows defaults')
 class WindowsDefaultsTest(BaseTest):
+    def test_windows_reload_all(self):
+        with patch('kitty.utils.kitten_exe', return_value='kitten.exe'), patch('subprocess.run') as run:
+            reload_conf_in_all_kitties()
+            run.assert_called_once_with(['kitten.exe', '__reload_config__'], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            run.side_effect = subprocess.CalledProcessError(1, 'kitten.exe')
+            with self.assertRaises(subprocess.CalledProcessError):
+                reload_conf_in_all_kitties()
+
     def test_windows_editor_fallback(self):
         with patch('kitty.child.default_env', return_value={}), patch('kitty.utils.read_shell_environment', return_value={}):
             with patch('kitty.utils.which', side_effect=lambda exe, **kw: exe if exe == 'notepad.exe' else None):

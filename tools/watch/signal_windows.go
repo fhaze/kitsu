@@ -4,8 +4,8 @@
 
 package watch
 
-import "errors"
+import "github.com/kovidgoyal/kitty/tools/config"
 
 func signal_kitty_to_reload_config(kitty_pid int) error {
-	return errors.ErrUnsupported
+	return config.SignalKittyToReloadConfig(kitty_pid)
 }

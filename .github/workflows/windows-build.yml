@@ -103,6 +103,11 @@ jobs:
               go test ./tools/tty ./tools/tui/loop ./tools/tui/readline ./kittens/choose_files
               go vet ./tools/tty ./tools/tui/loop ./tools/tui/readline ./kittens/choose_files
 
+          - name: Test Windows config reload IPC and kitten error reporting
+            run: |
+              go test ./tools/config ./tools/watch ./tools/themes ./kittens/choose_fonts
+              go vet ./tools/config ./tools/watch ./tools/themes ./kittens/choose_fonts
+
           - name: Verify Kitsu branding and embedded executable icons
             run: python windows/test_branding.py windows-package/kitsu
 

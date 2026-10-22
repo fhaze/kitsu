@@ -1432,6 +1432,40 @@ sigprocmask(int how UNUSED, const sigset_t *set UNUSED, sigset_t *oldset) {
 
 static struct sigaction console_signal_actions[32];
 static bool console_ctrl_handler_installed = false;
+static HANDLE reload_config_event = NULL, reload_config_wait = NULL;
+
+static void CALLBACK
+reload_config_callback(void *context UNUSED, BOOLEAN timed_out UNUSED) {
+    kitty_win32_deliver_signal(SIGUSR1, (pid_t)GetCurrentProcessId(), 0);
+}
+
+bool
+kitty_win32_start_reload_listener(void) {
+    if (reload_config_event) return true;
+    wchar_t name[64];
+    swprintf(name, 64, L"Local\\kitsu-reload-config-%lu", GetCurrentProcessId());
+    reload_config_event = CreateEventW(NULL, FALSE, FALSE, name);
+    if (!reload_config_event) {
+        set_errno_from_last_error();
+        return false;
+    }
+    if (!RegisterWaitForSingleObject(&reload_config_wait, reload_config_event, reload_config_callback, NULL, INFINITE, WT_EXECUTEDEFAULT)) {
+        set_errno_from_last_error();
+        CloseHandle(reload_config_event);
+        reload_config_event = NULL;
+        return false;
+    }
+    return true;
+}
+
+void
+kitty_win32_stop_reload_listener(void) {
+    // Drain callbacks before the signal pipe is closed.
+    if (reload_config_wait) UnregisterWaitEx(reload_config_wait, INVALID_HANDLE_VALUE);
+    reload_config_wait = NULL;
+    if (reload_config_event) CloseHandle(reload_config_event);
+    reload_config_event = NULL;
+}
 
 void
 kitty_win32_deliver_signal(int sig, pid_t pid, int status) {

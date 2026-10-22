@@ -188,6 +188,14 @@ new_childmonitor_object(PyTypeObject *type, PyObject *args, PyObject UNUSED *kwd
     }
     self = (ChildMonitor *)type->tp_alloc(type, 0);
     if (!init_loop_data(&self->io_loop_data, KITTY_HANDLED_SIGNALS)) return PyErr_SetFromErrno(PyExc_OSError);
+#ifdef _WIN32
+    if (!kitty_win32_start_reload_listener()) {
+        PyErr_SetFromErrno(PyExc_OSError);
+        free_loop_data(&self->io_loop_data);
+        Py_TYPE(self)->tp_free((PyObject *)self);
+        return NULL;
+    }
+#endif
     self->talk_fd = talk_fd;
     self->listen_fd = listen_fd;
     // Only processes running as the same user as us are allowed to talk to us
@@ -237,6 +245,9 @@ dealloc(ChildMonitor *self) {
         add_queue_count--;
         FREE_CHILD(add_queue[add_queue_count]);
     }
+#ifdef _WIN32
+    kitty_win32_stop_reload_listener();
+#endif
     free_loop_data(&self->io_loop_data);
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
@@ -510,6 +521,9 @@ needs_write(ChildMonitor UNUSED *self, PyObject *args) {
 static PyObject *
 shutdown_monitor(ChildMonitor *self, PyObject *a UNUSED) {
 #define shutdown_monitor_doc "shutdown_monitor() -> Shutdown the monitor loop."
+#ifdef _WIN32
+    kitty_win32_stop_reload_listener();
+#endif
     self->shutting_down = true;
     wakeup_talk_loop(false);
     wakeup_io_loop(self, false);
