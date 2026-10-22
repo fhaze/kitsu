@@ -1951,6 +1951,95 @@ kill(pid_t pid, int sig) {
     return ret;
 }
 
+typedef struct MonitoredProcess {
+    pid_t pid;
+    HANDLE process, wait;
+    struct MonitoredProcess *next;
+} MonitoredProcess;
+
+static MonitoredProcess *monitored_processes = NULL;
+static SRWLOCK monitored_processes_lock = SRWLOCK_INIT;
+
+static void CALLBACK
+monitored_process_exited(void *context, BOOLEAN timed_out UNUSED) {
+    MonitoredProcess *p = context;
+    DWORD exit_code = 0;
+    GetExitCodeProcess(p->process, &exit_code);
+    kitty_win32_deliver_signal(SIGCHLD, p->pid, (int)((exit_code & 0xff) << 8));
+}
+
+static void
+free_monitored_process(MonitoredProcess *p) {
+    // The callback uses both p and its process handle. Drain it before freeing either.
+    UnregisterWaitEx(p->wait, INVALID_HANDLE_VALUE);
+    CloseHandle(p->process);
+    free(p);
+}
+
+bool
+kitty_win32_monitor_pid(pid_t pid) {
+    bool ok = false;
+    AcquireSRWLockExclusive(&monitored_processes_lock);
+    for (MonitoredProcess *p = monitored_processes; p; p = p->next) {
+        if (p->pid == pid) {
+            ok = true;
+            goto end;
+        }
+    }
+    MonitoredProcess *p = calloc(1, sizeof(*p));
+    if (!p) {
+        errno = ENOMEM;
+        goto end;
+    }
+    p->pid = pid;
+    p->process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    if (!p->process) {
+        set_errno_from_last_error();
+        free(p);
+        goto end;
+    }
+    if (!RegisterWaitForSingleObject(&p->wait, p->process, monitored_process_exited, p, INFINITE, WT_EXECUTEONLYONCE)) {
+        set_errno_from_last_error();
+        CloseHandle(p->process);
+        free(p);
+        goto end;
+    }
+    p->next = monitored_processes;
+    monitored_processes = p;
+    ok = true;
+end:
+    ReleaseSRWLockExclusive(&monitored_processes_lock);
+    return ok;
+}
+
+static void
+forget_monitored_pid(pid_t pid) {
+    MonitoredProcess *p = NULL;
+    AcquireSRWLockExclusive(&monitored_processes_lock);
+    for (MonitoredProcess **entry = &monitored_processes; *entry; entry = &(*entry)->next) {
+        if ((*entry)->pid == pid) {
+            p = *entry;
+            *entry = p->next;
+            break;
+        }
+    }
+    ReleaseSRWLockExclusive(&monitored_processes_lock);
+    if (p) free_monitored_process(p);
+}
+
+void
+kitty_win32_clear_monitored_pids(void) {
+    AcquireSRWLockExclusive(&monitored_processes_lock);
+    MonitoredProcess *p = monitored_processes;
+    monitored_processes = NULL;
+    ReleaseSRWLockExclusive(&monitored_processes_lock);
+    while (p) {
+        MonitoredProcess *next = p->next;
+        free_monitored_process(p);
+        p = next;
+    }
+}
+
 pid_t
 waitpid(pid_t pid, int *status, int options) {
     if (pid <= 0) {
@@ -1959,7 +2048,19 @@ waitpid(pid_t pid, int *status, int options) {
         errno = ECHILD;
         return -1;
     }
-    HANDLE h = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    HANDLE h = NULL;
+    bool monitored = false;
+    AcquireSRWLockShared(&monitored_processes_lock);
+    for (MonitoredProcess *p = monitored_processes; p; p = p->next) {
+        if (p->pid == pid) {
+            monitored = true;
+            if (!DuplicateHandle(GetCurrentProcess(), p->process, GetCurrentProcess(), &h, 0, FALSE, DUPLICATE_SAME_ACCESS)) set_errno_from_last_error();
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&monitored_processes_lock);
+    if (monitored && !h) return -1;
+    if (!monitored) h = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
     if (!h) {
         errno = ECHILD;
         return -1;
@@ -1970,8 +2071,13 @@ waitpid(pid_t pid, int *status, int options) {
         return 0;
     }
     DWORD exit_code = 0;
-    GetExitCodeProcess(h, &exit_code);
+    if (wait != WAIT_OBJECT_0 || !GetExitCodeProcess(h, &exit_code)) {
+        set_errno_from_last_error();
+        CloseHandle(h);
+        return -1;
+    }
     CloseHandle(h);
+    if (monitored) forget_monitored_pid(pid);
     if (status) *status = (int)((exit_code & 0xff) << 8);
     return pid;
 }

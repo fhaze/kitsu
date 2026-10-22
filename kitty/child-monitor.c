@@ -247,6 +247,7 @@ dealloc(ChildMonitor *self) {
     }
 #ifdef _WIN32
     kitty_win32_stop_reload_listener();
+    kitty_win32_clear_monitored_pids();
 #endif
     free_loop_data(&self->io_loop_data);
     Py_TYPE(self)->tp_free((PyObject *)self);
@@ -534,6 +535,9 @@ shutdown_monitor(ChildMonitor *self, PyObject *a UNUSED) {
         if (ret != 0) return PyErr_Format(PyExc_OSError, "Failed to join() talk thread with error: %s", strerror(ret));
     }
     talk_thread_started = false;
+#ifdef _WIN32
+    kitty_win32_clear_monitored_pids();
+#endif
     Py_RETURN_NONE;
 }
 
@@ -1268,6 +1272,11 @@ monitor_pid(PyObject *self UNUSED, PyObject *args) {
     if (monitored_pids_count >= arraysz(monitored_pids)) {
         PyErr_SetString(PyExc_RuntimeError, "Too many monitored pids");
         ok = false;
+#ifdef _WIN32
+    } else if (!kitty_win32_monitor_pid(pid)) {
+        PyErr_SetFromErrno(PyExc_OSError);
+        ok = false;
+#endif
     } else {
         monitored_pids[monitored_pids_count++] = pid;
     }

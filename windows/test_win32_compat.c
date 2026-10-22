@@ -575,6 +575,98 @@ remove_tree(const char *path) {
 
 static HANDLE reload_received;
 
+static HANDLE child_exit_received;
+static siginfo_t last_child_exit;
+static LONG child_exit_count;
+
+static void
+on_child_exit(int sig, siginfo_t *info, void *context) {
+    (void)context;
+    if (sig != SIGCHLD) return;
+    last_child_exit = *info;
+    InterlockedIncrement(&child_exit_count);
+    SetEvent(child_exit_received);
+}
+
+static PROCESS_INFORMATION
+start_monitored_child(unsigned int code) {
+    wchar_t self[32768], cmdline[32768 + 64];
+    DWORD n = GetModuleFileNameW(NULL, self, 32768);
+    CHECK(n && n < 32768);
+    swprintf(cmdline, sizeof(cmdline) / sizeof(cmdline[0]), L"\"%ls\" --monitored-child %u", self, code);
+    STARTUPINFOW si = {.cb = sizeof(si)};
+    PROCESS_INFORMATION pi = {0};
+    CHECK(CreateProcessW(self, cmdline, NULL, NULL, FALSE, CREATE_SUSPENDED | CREATE_NO_WINDOW, NULL, NULL, &si, &pi));
+    return pi;
+}
+
+static void
+test_monitored_processes(void) {
+    child_exit_received = CreateEventW(NULL, FALSE, FALSE, NULL);
+    CHECK(child_exit_received != NULL);
+    struct sigaction act = {.sa_sigaction = on_child_exit, .sa_flags = SA_SIGINFO};
+    CHECK(sigaction(SIGCHLD, &act, NULL) == 0);
+    CHECK(!kitty_win32_monitor_pid(0));
+
+    unsigned int codes[] = {0, 37, 255, 259};
+    for (size_t i = 0; i < sizeof(codes) / sizeof(codes[0]); i++) {
+        PROCESS_INFORMATION pi = start_monitored_child(codes[i]);
+        if (!pi.hProcess) continue;
+        pid_t pid = (pid_t)pi.dwProcessId;
+        CHECK(kitty_win32_monitor_pid(pid));
+        CHECK(kitty_win32_monitor_pid(pid));
+        int status = -1;
+        CHECK(waitpid(pid, &status, WNOHANG) == 0 && status == -1);
+        CHECK(ResumeThread(pi.hThread) != (DWORD)-1);
+        // As in Boss.run_background_process(), drop the creator's handles before exit.
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        CHECK(WaitForSingleObject(child_exit_received, 5000) == WAIT_OBJECT_0);
+        CHECK(last_child_exit.si_pid == pid && last_child_exit.si_code == CLD_EXITED);
+        CHECK(WIFEXITED(last_child_exit.si_status) && WEXITSTATUS(last_child_exit.si_status) == (int)(codes[i] & 0xff));
+        CHECK(waitpid(pid, &status, WNOHANG) == pid);
+        CHECK(WIFEXITED(status) && WEXITSTATUS(status) == (int)(codes[i] & 0xff));
+        CHECK(WaitForSingleObject(child_exit_received, 20) == WAIT_TIMEOUT);
+        CHECK(waitpid(pid, &status, WNOHANG) == -1 && errno == ECHILD);
+    }
+    CHECK(child_exit_count == 4);
+
+    // Registration must also work after exit, while the creator still owns a handle.
+    PROCESS_INFORMATION pi = start_monitored_child(42);
+    if (pi.hProcess) {
+        CHECK(ResumeThread(pi.hThread) != (DWORD)-1);
+        CHECK(WaitForSingleObject(pi.hProcess, 5000) == WAIT_OBJECT_0);
+        CHECK(kitty_win32_monitor_pid((pid_t)pi.dwProcessId));
+        CHECK(WaitForSingleObject(child_exit_received, 5000) == WAIT_OBJECT_0);
+        int status = -1;
+        CHECK(waitpid((pid_t)pi.dwProcessId, &status, 0) == (pid_t)pi.dwProcessId);
+        CHECK(WEXITSTATUS(status) == 42);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+
+    // Cancel both pending waits and callbacks potentially in flight, without killing children.
+    for (int i = 0; i < 16; i++) {
+        pi = start_monitored_child(13);
+        if (!pi.hProcess) continue;
+        CHECK(kitty_win32_monitor_pid((pid_t)pi.dwProcessId));
+        if (i % 2) CHECK(ResumeThread(pi.hThread) != (DWORD)-1);
+        kitty_win32_clear_monitored_pids();
+        kitty_win32_clear_monitored_pids();
+        LONG count = InterlockedCompareExchange(&child_exit_count, 0, 0);
+        ResetEvent(child_exit_received);
+        if (!(i % 2)) CHECK(ResumeThread(pi.hThread) != (DWORD)-1);
+        CHECK(WaitForSingleObject(pi.hProcess, 5000) == WAIT_OBJECT_0);
+        CHECK(WaitForSingleObject(child_exit_received, 20) == WAIT_TIMEOUT);
+        CHECK(InterlockedCompareExchange(&child_exit_count, 0, 0) == count);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    act.sa_sigaction = NULL;
+    CHECK(sigaction(SIGCHLD, &act, NULL) == 0);
+    CloseHandle(child_exit_received);
+}
+
 static void
 on_reload(int sig, siginfo_t *info, void *context) {
     (void)context;
@@ -616,6 +708,7 @@ test_reload_event(void) {
 
 int
 main(int argc, char **argv) {
+    if (argc > 2 && strcmp(argv[1], "--monitored-child") == 0) return (int)strtoul(argv[2], NULL, 10);
     if (argc > 1 && strcmp(argv[1], "--child") == 0) return run_child(argc, argv);
     if (argc > 1 && strcmp(argv[1], "--crt-rules") == 0) return run_crt_rules_child();
     SetConsoleOutputCP(CP_UTF8);
@@ -644,6 +737,7 @@ main(int argc, char **argv) {
     test_spawn(dir);
     test_socketpair();
     test_reload_event();
+    test_monitored_processes();
 
     // A directory whose path is longer than MAX_PATH, both in UTF-16 units and
     // bytes of UTF-8. Each component is within the 255 unit limit.
