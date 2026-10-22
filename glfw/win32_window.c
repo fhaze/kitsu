@@ -2501,6 +2501,8 @@ _glfwPlatformSetCursor(_GLFWwindow *window, _GLFWcursor *cursor UNUSED) {
 
 // Clipboard {{{
 
+#define CLIPBOARD_LENGTH_PREFIX "KitsuClipboardLengthV1:"
+
 static bool
 get_clipboard_data(const _GLFWClipboardData *cd, const char *mime, char **out, size_t *out_sz) {
     size_t cap = 8192, len = 0;
@@ -2598,10 +2600,39 @@ mime_for_clipboard_format(UINT fmt, char *buf, size_t sz) {
     if (n <= 0) return false;
     char *u = _glfwCreateUTF8FromWideStringWin32(name);
     if (!u) return false;
-    bool ans = strchr(u, '/') != NULL;
+    bool ans = strncmp(u, CLIPBOARD_LENGTH_PREFIX, sizeof(CLIPBOARD_LENGTH_PREFIX) - 1) != 0 && strchr(u, '/') != NULL;
     if (ans) snprintf(buf, sz, "%s", u);
     free(u);
     return ans;
+}
+
+static UINT
+clipboard_length_format(const char *mime) {
+    size_t sz = sizeof(CLIPBOARD_LENGTH_PREFIX) + strlen(mime);
+    char *name = malloc(sz);
+    if (!name) return 0;
+    snprintf(name, sz, CLIPBOARD_LENGTH_PREFIX "%s", mime);
+    WCHAR *wide = _glfwCreateWideStringFromUTF8Win32(name);
+    free(name);
+    if (!wide) return 0;
+    UINT fmt = RegisterClipboardFormatW(wide);
+    free(wide);
+    return fmt;
+}
+
+static HANDLE
+create_binary_clipboard_data(const void *data, size_t sz) {
+    HANDLE object = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, sz ? sz : 1);
+    if (object) {
+        void *buffer = GlobalLock(object);
+        if (!buffer) {
+            GlobalFree(object);
+            return NULL;
+        }
+        memcpy(buffer, data, sz);
+        GlobalUnlock(object);
+    }
+    return object;
 }
 
 void
@@ -2635,19 +2666,18 @@ _glfwPlatformSetClipboard(GLFWClipboardType t) {
                 }
             }
         } else {
-            object = GlobalAlloc(GMEM_MOVEABLE, sz + 1);
-            if (object) {
-                char *buffer = GlobalLock(object);
-                if (buffer) {
-                    memcpy(buffer, data, sz);
-                    buffer[sz] = 0;
-                    GlobalUnlock(object);
-                }
-            }
+            object = create_binary_clipboard_data(data, sz);
         }
         free(data);
         if (object) {
             if (!SetClipboardData(fmt, object)) GlobalFree(object);
+            else if (fmt != CF_UNICODETEXT) {
+                // GlobalSize can include allocation padding, so publish the exact byte count separately.
+                const UINT length_fmt = clipboard_length_format(mime);
+                const uint64_t length = sz;
+                HANDLE length_object = length_fmt ? create_binary_clipboard_data(&length, sizeof(length)) : NULL;
+                if (length_object && !SetClipboardData(length_fmt, length_object)) GlobalFree(length_object);
+            }
         }
     }
     CloseClipboard();
@@ -2710,6 +2740,17 @@ _glfwPlatformGetClipboard(GLFWClipboardType clipboard_type, const char *mime_typ
             const char *buffer = GlobalLock(h);
             if (buffer) {
                 SIZE_T sz = GlobalSize(h);
+                const UINT length_fmt = clipboard_length_format(mime_type);
+                HANDLE length_object = length_fmt ? GetClipboardData(length_fmt) : NULL;
+                if (length_object && GlobalSize(length_object) >= sizeof(uint64_t)) {
+                    const void *length_buffer = GlobalLock(length_object);
+                    if (length_buffer) {
+                        uint64_t length;
+                        memcpy(&length, length_buffer, sizeof(length));
+                        GlobalUnlock(length_object);
+                        if (length <= sz) sz = (SIZE_T)length;
+                    }
+                }
                 write_data(object, buffer, sz);
                 GlobalUnlock(h);
             }
