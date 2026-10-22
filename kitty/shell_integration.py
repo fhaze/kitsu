@@ -9,7 +9,7 @@ import subprocess
 from collections.abc import Callable, Iterable
 from contextlib import suppress
 
-from .constants import shell_integration_dir
+from .constants import is_windows, shell_integration_dir
 from .fast_data_types import get_options
 from .options.types import Options, defaults
 from .types import run_once
@@ -303,6 +303,23 @@ def get_effective_ksi_env_var(opts: Options | None = None) -> str:
 
 
 def modify_shell_environ(opts: Options, env: dict[str, str], argv: list[str]) -> None:
+    if is_windows and ntpath.basename(argv[0]).lower() in ('cmd', 'cmd.exe'):
+        if not get_effective_ksi_env_var(opts) or not shell_integration_allows_rc_modification(opts):
+            return
+        if any(arg.lower().startswith(('/c', '/?')) for arg in argv[1:]):
+            return
+        if any(key.upper() == 'PROMPT' for key in env):
+            return
+        prompt = ''
+        if 'no-prompt-mark' not in opts.shell_integration:
+            prompt += '$E]133;D$E\\$E]133;A$E\\'
+        if 'no-cwd' not in opts.shell_integration:
+            prompt += '$E]7;file://localhost/$P$E\\'
+        prompt += '$P$G'
+        if 'no-prompt-mark' not in opts.shell_integration:
+            prompt += '$E]133;B$E\\'
+        env['PROMPT'] = prompt
+        return
     shell = get_supported_shell_name(argv[0])
     ksi = get_effective_ksi_env_var(opts)
     if shell is None or not ksi:

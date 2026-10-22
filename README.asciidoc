@@ -34,6 +34,19 @@ kitsu +health-check --mode=quick
 kitsu +update
 ----
 
+With the default `shell .`, Windows uses `SHELL` when explicitly set, otherwise
+PowerShell 7 (`pwsh.exe`) from PATH, then Windows PowerShell (PATH or its standard
+SystemRoot location), and finally `COMSPEC`/`cmd.exe`. Set `shell cmd.exe` or
+`shell wsl.exe` in `kitty.conf` to choose another shell explicitly.
+
+PowerShell integration supplies prompt/command marks, cwd reporting and a beam
+cursor at the prompt (`shell_integration no-cursor` disables cursor changes).
+For cmd, Kitsu supplies prompt marks and cwd reporting only when `PROMPT` is
+unset; custom prompts are preserved. Cmd has no pre-execution hook, so command
+output boundaries, exit-status notifications and cursor changes still require
+a supported shell such as PowerShell. `shell_integration disabled` or `no-rc`
+disables this injection; `no-prompt-mark` and `no-cwd` are also respected.
+
 `+update` works for installer-managed installations, not portable ZIPs.
 For WSL, use the bundled Linux `kitten` inside the distribution, not the Windows
 `kitten.exe`; run `kitsu +wsl-setup` to install it.

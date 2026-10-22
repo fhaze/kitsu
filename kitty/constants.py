@@ -185,8 +185,25 @@ beam_cursor_data_file = os.path.join(kitty_base_dir, 'logo', 'beam-cursor.png')
 shell_integration_dir = os.path.join(kitty_base_dir, 'shell-integration')
 fonts_dir = os.path.join(kitty_base_dir, 'fonts')
 shaders_dir = os.path.join(kitty_base_dir, 'shaders')
+
+
+def windows_default_shell() -> str:
+    import shutil
+
+    if shell := os.environ.get('SHELL'):
+        return shell
+    for name in ('pwsh.exe', 'powershell.exe'):
+        if shell := shutil.which(name):
+            return shell
+    if root := os.environ.get('SystemRoot'):
+        shell = os.path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+        if os.path.isfile(shell):
+            return shell
+    return os.environ.get('COMSPEC') or 'cmd.exe'
+
+
 if is_windows:
-    shell_path = os.environ.get('SHELL') or os.environ.get('COMSPEC') or 'cmd.exe'
+    shell_path = windows_default_shell()
 else:
     import pwd
 
