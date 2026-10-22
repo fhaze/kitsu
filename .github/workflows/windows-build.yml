@@ -136,6 +136,9 @@ jobs:
           - name: Test raw Windows wheel deltas
             run: python windows/test_scroll.py windows-package/kitsu
 
+          - name: Test private Mesa OpenGL fallback
+            run: python windows/test_opengl.py windows-package/kitsu -v
+
           - name: Test the Win32 primary selection and clipboard isolation
             run: python windows/test_primary_selection.py windows-package/kitsu
 

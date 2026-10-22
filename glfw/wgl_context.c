@@ -34,6 +34,8 @@
 #include <assert.h>
 #include <limits.h>
 
+#define GL_RENDERER 0x1f01
+
 
 // Chooses the framebuffer config that best matches the desired one
 //
@@ -126,7 +128,7 @@ choosePixelFormat(_GLFWwindow *window, const _GLFWctxconfig *ctxconfig, const _G
     int attribs[40];
     int values[sizeof(attribs) / sizeof(attribs[0])];
 
-    nativeCount = DescribePixelFormat(window->context.wgl.dc, 1, sizeof(PIXELFORMATDESCRIPTOR), NULL);
+    nativeCount = _glfw.wgl.DescribePixelFormat(window->context.wgl.dc, 1, sizeof(PIXELFORMATDESCRIPTOR), NULL);
 
     if (_glfw.wgl.ARB_pixel_format) {
         // NOTE: In a Parallels VM WGL_ARB_pixel_format returns fewer pixel formats than
@@ -195,7 +197,7 @@ choosePixelFormat(_GLFWwindow *window, const _GLFWctxconfig *ctxconfig, const _G
 
             if (findAttribValue(WGL_PIXEL_TYPE_ARB) != WGL_TYPE_RGBA_ARB) continue;
 
-            if (findAttribValue(WGL_ACCELERATION_ARB) == WGL_NO_ACCELERATION_ARB) continue;
+            if (!_glfw.wgl.mesa && findAttribValue(WGL_ACCELERATION_ARB) == WGL_NO_ACCELERATION_ARB) continue;
 
             if (findAttribValue(WGL_DOUBLE_BUFFER_ARB) != fbconfig->doublebuffer) continue;
 
@@ -233,7 +235,7 @@ choosePixelFormat(_GLFWwindow *window, const _GLFWctxconfig *ctxconfig, const _G
 
             PIXELFORMATDESCRIPTOR pfd;
 
-            if (!DescribePixelFormat(window->context.wgl.dc, pixelFormat, sizeof(PIXELFORMATDESCRIPTOR), &pfd)) {
+            if (!_glfw.wgl.DescribePixelFormat(window->context.wgl.dc, pixelFormat, sizeof(PIXELFORMATDESCRIPTOR), &pfd)) {
                 _glfwInputErrorWin32(GLFW_PLATFORM_ERROR, "WGL: Failed to describe pixel format");
 
                 free(usableConfigs);
@@ -242,7 +244,7 @@ choosePixelFormat(_GLFWwindow *window, const _GLFWctxconfig *ctxconfig, const _G
 
             if (!(pfd.dwFlags & PFD_DRAW_TO_WINDOW) || !(pfd.dwFlags & PFD_SUPPORT_OPENGL)) { continue; }
 
-            if (!(pfd.dwFlags & PFD_GENERIC_ACCELERATED) && (pfd.dwFlags & PFD_GENERIC_FORMAT)) { continue; }
+            if (!_glfw.wgl.mesa && !(pfd.dwFlags & PFD_GENERIC_ACCELERATED) && (pfd.dwFlags & PFD_GENERIC_FORMAT)) { continue; }
 
             if (pfd.iPixelType != PFD_TYPE_RGBA) continue;
 
@@ -324,7 +326,7 @@ swapBuffersWGL(_GLFWwindow *window) {
         }
     }
 
-    SwapBuffers(window->context.wgl.dc);
+    _glfw.wgl.SwapBuffers(window->context.wgl.dc);
 }
 
 static void
@@ -381,21 +383,18 @@ destroyContextWGL(_GLFWwindow *window) {
 //////                       GLFW internal API                      //////
 //////////////////////////////////////////////////////////////////////////
 
-// Initialize WGL
-//
-bool
-_glfwInitWGL(void) {
+static HWND
+createProbeWindowWGL(void) {
+    return CreateWindowExW(0, _GLFW_WNDCLASSNAME, L"Kitsu OpenGL probe", WS_CLIPSIBLINGS | WS_CLIPCHILDREN, 0, 0, 1, 1, NULL, NULL, _glfw.win32.instance, NULL);
+}
+
+static bool
+initWGL(void) {
     PIXELFORMATDESCRIPTOR pfd;
-    HGLRC prc, rc;
+    HGLRC prc, rc = NULL;
     HDC pdc, dc;
-
-    if (_glfw.wgl.instance) return true;
-
-    _glfw.wgl.instance = LoadLibraryA("opengl32.dll");
-    if (!_glfw.wgl.instance) {
-        _glfwInputErrorWin32(GLFW_PLATFORM_ERROR, "WGL: Failed to load opengl32.dll");
-        return false;
-    }
+    HWND helper;
+    bool ok = false;
 
     glfw_dlsym(_glfw.wgl.CreateContext, _glfw.wgl.instance, "wglCreateContext");
     glfw_dlsym(_glfw.wgl.DeleteContext, _glfw.wgl.instance, "wglDeleteContext");
@@ -404,13 +403,25 @@ _glfwInitWGL(void) {
     glfw_dlsym(_glfw.wgl.GetCurrentContext, _glfw.wgl.instance, "wglGetCurrentContext");
     glfw_dlsym(_glfw.wgl.MakeCurrent, _glfw.wgl.instance, "wglMakeCurrent");
     glfw_dlsym(_glfw.wgl.ShareLists, _glfw.wgl.instance, "wglShareLists");
+    glfw_dlsym(_glfw.wgl.ChoosePixelFormat, _glfw.wgl.instance, "wglChoosePixelFormat");
+    glfw_dlsym(_glfw.wgl.DescribePixelFormat, _glfw.wgl.instance, "wglDescribePixelFormat");
+    glfw_dlsym(_glfw.wgl.SetPixelFormat, _glfw.wgl.instance, "wglSetPixelFormat");
+    glfw_dlsym(_glfw.wgl.SwapBuffers, _glfw.wgl.instance, "wglSwapBuffers");
+    if (!_glfw.wgl.CreateContext || !_glfw.wgl.DeleteContext || !_glfw.wgl.GetProcAddress || !_glfw.wgl.GetCurrentDC || !_glfw.wgl.GetCurrentContext ||
+        !_glfw.wgl.MakeCurrent || !_glfw.wgl.ShareLists || !_glfw.wgl.ChoosePixelFormat || !_glfw.wgl.DescribePixelFormat || !_glfw.wgl.SetPixelFormat ||
+        !_glfw.wgl.SwapBuffers)
+        return false;
 
     // NOTE: A dummy context has to be created for opengl32.dll to load the
     //       OpenGL ICD, from which we can then query WGL extensions
     // NOTE: This code will accept the Microsoft GDI ICD; accelerated context
     //       creation failure occurs during manual pixel format enumeration
 
-    dc = GetDC(_glfw.win32.helperWindowHandle);
+    helper = createProbeWindowWGL();
+    if (!helper) return false;
+    dc = GetDC(helper);
+    pdc = wglGetCurrentDC();
+    prc = wglGetCurrentContext();
 
     ZeroMemory(&pfd, sizeof(pfd));
     pfd.nSize = sizeof(pfd);
@@ -419,25 +430,20 @@ _glfwInitWGL(void) {
     pfd.iPixelType = PFD_TYPE_RGBA;
     pfd.cColorBits = 24;
 
-    if (!SetPixelFormat(dc, ChoosePixelFormat(dc, &pfd), &pfd)) {
+    if (!_glfw.wgl.SetPixelFormat(dc, _glfw.wgl.ChoosePixelFormat(dc, &pfd), &pfd)) {
         _glfwInputErrorWin32(GLFW_PLATFORM_ERROR, "WGL: Failed to set pixel format for dummy context");
-        return false;
+        goto cleanup;
     }
 
     rc = wglCreateContext(dc);
     if (!rc) {
         _glfwInputErrorWin32(GLFW_PLATFORM_ERROR, "WGL: Failed to create dummy context");
-        return false;
+        goto cleanup;
     }
-
-    pdc = wglGetCurrentDC();
-    prc = wglGetCurrentContext();
 
     if (!wglMakeCurrent(dc, rc)) {
         _glfwInputErrorWin32(GLFW_PLATFORM_ERROR, "WGL: Failed to make dummy context current");
-        wglMakeCurrent(pdc, prc);
-        wglDeleteContext(rc);
-        return false;
+        goto cleanup;
     }
 
     // NOTE: Functions must be loaded first as they're needed to retrieve the
@@ -463,9 +469,89 @@ _glfwInitWGL(void) {
     _glfw.wgl.ARB_pixel_format = extensionSupportedWGL("WGL_ARB_pixel_format");
     _glfw.wgl.ARB_context_flush_control = extensionSupportedWGL("WGL_ARB_context_flush_control");
 
+    ok = true;
+cleanup:
     wglMakeCurrent(pdc, prc);
-    wglDeleteContext(rc);
-    return true;
+    if (rc) wglDeleteContext(rc);
+    ReleaseDC(helper, dc);
+    DestroyWindow(helper);
+    return ok;
+}
+
+static bool
+probeWGL(const _GLFWctxconfig *ctxconfig, const _GLFWfbconfig *fbconfig) {
+    _GLFWwindow probe = {0};
+    PFNGLGETSTRINGPROC getString;
+    const char *version, *renderer;
+    int major = 0, minor = 0;
+    bool ok = false;
+
+    // SetPixelFormat is permanent for an HWND. Never probe on the real window.
+    probe.win32.handle = createProbeWindowWGL();
+    if (!probe.win32.handle) return false;
+    if (_glfwCreateContextWGL(&probe, ctxconfig, fbconfig) && wglMakeCurrent(probe.context.wgl.dc, probe.context.wgl.handle)) {
+        *(void **)&getString = _glfw_dlsym(_glfw.wgl.instance, "glGetString");
+        if (getString) {
+            version = (const char *)getString(GL_VERSION);
+            renderer = (const char *)getString(GL_RENDERER);
+            if (version) sscanf(version, "%d.%d", &major, &minor);
+            ok = renderer && strcmp(renderer, "GDI Generic") != 0 && (major > ctxconfig->major || (major == ctxconfig->major && minor >= ctxconfig->minor));
+        }
+    }
+    wglMakeCurrent(NULL, NULL);
+    destroyContextWGL(&probe);
+    if (probe.context.wgl.dc) ReleaseDC(probe.win32.handle, probe.context.wgl.dc);
+    DestroyWindow(probe.win32.handle);
+    return ok;
+}
+
+bool
+_glfwInitWGL(const _GLFWctxconfig *ctxconfig, const _GLFWfbconfig *fbconfig) {
+    WCHAR driver[32] = {0}, path[32768], *name;
+    DWORD length;
+    bool software, available;
+    GLFWerrorfun callback;
+
+    if (_glfw.wgl.instance) return true;
+    length = GetEnvironmentVariableW(L"KITSU_OPENGL_DRIVER", driver, sizeof(driver) / sizeof(driver[0]));
+    if (length >= sizeof(driver) / sizeof(driver[0]) || (length && wcscmp(driver, L"auto") && wcscmp(driver, L"native") && wcscmp(driver, L"llvmpipe"))) {
+        _glfwInputError(GLFW_INVALID_VALUE, "KITSU_OPENGL_DRIVER must be auto, native or llvmpipe");
+        return false;
+    }
+    software = wcscmp(driver, L"llvmpipe") == 0;
+    if (!software) {
+        callback = glfwSetErrorCallback(NULL);
+        _glfw.wgl.instance = LoadLibraryExW(L"opengl32.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        available = _glfw.wgl.instance && initWGL() && probeWGL(ctxconfig, fbconfig);
+        glfwSetErrorCallback(callback);
+        if (available) return true;
+        _glfwTerminateWGL();
+        if (wcscmp(driver, L"native") == 0) goto unavailable;
+    }
+
+    length = GetModuleFileNameW(NULL, path, sizeof(path) / sizeof(path[0]));
+    if (!length || length >= sizeof(path) / sizeof(path[0])) goto unavailable;
+    name = wcsrchr(path, L'\\');
+    if (!name || (size_t)(name - path) + wcslen(L"\\mesa\\opengl32.dll") >= sizeof(path) / sizeof(path[0])) goto unavailable;
+    wcscpy(name, L"\\mesa\\opengl32.dll");
+    // Mesa's software path does not require D3D12, DXIL or a GPU driver.
+    SetEnvironmentVariableW(L"GALLIUM_DRIVER", L"llvmpipe");
+    _putenv("GALLIUM_DRIVER=llvmpipe");
+    _glfw.wgl.mesa = true;
+    _glfw.wgl.instance = LoadLibraryExW(path, NULL, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    if (_glfw.wgl.instance && initWGL() && probeWGL(ctxconfig, fbconfig)) {
+        glfwGetError(NULL);
+        return true;
+    }
+    _glfwTerminateWGL();
+unavailable:
+    _glfwInputError(
+        GLFW_API_UNAVAILABLE,
+        "WGL: OpenGL %d.%d is unavailable. Restore bin\\mesa from the Kitsu package, update the graphics driver, "
+        "or install Microsoft's OpenCL, OpenGL and Vulkan Compatibility Pack. KITSU_OPENGL_DRIVER=llvmpipe forces software rendering.",
+        ctxconfig->major,
+        ctxconfig->minor);
+    return false;
 }
 
 // Terminate WGL
@@ -473,6 +559,7 @@ _glfwInitWGL(void) {
 void
 _glfwTerminateWGL(void) {
     if (_glfw.wgl.instance) FreeLibrary(_glfw.wgl.instance);
+    memset(&_glfw.wgl, 0, sizeof(_glfw.wgl));
 }
 
 #define setAttrib(a, v)                                                     \
@@ -502,12 +589,12 @@ _glfwCreateContextWGL(_GLFWwindow *window, const _GLFWctxconfig *ctxconfig, cons
     pixelFormat = choosePixelFormat(window, ctxconfig, fbconfig);
     if (!pixelFormat) return false;
 
-    if (!DescribePixelFormat(window->context.wgl.dc, pixelFormat, sizeof(pfd), &pfd)) {
+    if (!_glfw.wgl.DescribePixelFormat(window->context.wgl.dc, pixelFormat, sizeof(pfd), &pfd)) {
         _glfwInputErrorWin32(GLFW_PLATFORM_ERROR, "WGL: Failed to retrieve PFD for selected pixel format");
         return false;
     }
 
-    if (!SetPixelFormat(window->context.wgl.dc, pixelFormat, &pfd)) {
+    if (!_glfw.wgl.SetPixelFormat(window->context.wgl.dc, pixelFormat, &pfd)) {
         _glfwInputErrorWin32(GLFW_PLATFORM_ERROR, "WGL: Failed to set selected pixel format");
         return false;
     }
