@@ -2094,7 +2094,7 @@ class Boss:
             return
         if metrics['is_layer_shell']:
             raise TypeError(f'The OS Window {os_window_id} is a panel and cannot be resized')
-        has_window_scaling = is_macos or is_wayland()
+        has_window_scaling = is_windows or is_macos or is_wayland()
         w, h = get_new_os_window_size(metrics, width, height, unit, incremental, has_window_scaling)
         set_os_window_size(os_window_id, w, h)
 
@@ -2513,7 +2513,7 @@ class Boss:
             if opts.remember_window_position and not is_wayland() and not self.os_window_map:
                 self.cached_values['window-pos'] = x, y
                 self.cached_values['monitor-workarea'] = glfw_get_monitor_workarea()
-            self.cached_values['window-size'] = viewport_width, viewport_height
+            self.cached_values['window-size-dips' if is_windows else 'window-size'] = viewport_width, viewport_height
             self.cached_values['window-state'] = 'maximized' if was_maximized else 'normal'
         if tm is not None:
             tm.destroy()

@@ -4,7 +4,7 @@
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
-from .constants import is_macos, is_wayland
+from .constants import is_macos, is_wayland, is_windows
 from .fast_data_types import get_options
 from .options.types import Options
 from .types import FloatEdges
@@ -51,8 +51,9 @@ def edge_spacing(which: EdgeLiteral, opts: WindowSizeData | Options | None = Non
 
 def initial_window_size_func(opts: WindowSizeData, cached_values: dict[str, Any]) -> Callable[[int, int, float, float, float, float], tuple[int, int]]:
 
-    if 'window-size' in cached_values and opts.remember_window_size:
-        ws = cached_values['window-size']
+    size_key = 'window-size-dips' if is_windows else 'window-size'
+    if size_key in cached_values and opts.remember_window_size:
+        ws = cached_values[size_key]
         try:
             w, h = map(sanitize_window_size, ws)
 
@@ -67,7 +68,7 @@ def initial_window_size_func(opts: WindowSizeData, cached_values: dict[str, Any]
     h, h_unit = opts.initial_window_sizes.height
 
     def get_window_size(cell_width: int, cell_height: int, dpi_x: float, dpi_y: float, xscale: float, yscale: float) -> tuple[int, int]:
-        if not is_macos and not is_wayland():
+        if not is_windows and not is_macos and not is_wayland():
             # Not sure what the deal with scaling on X11 is
             xscale = yscale = 1
 
@@ -86,13 +87,13 @@ def initial_window_size_func(opts: WindowSizeData, cached_values: dict[str, Any]
         if w_unit == 'cells':
             spacing = effective_margin('left') + effective_margin('right')
             spacing += effective_padding('left') + effective_padding('right')
-            width = cell_width * w / xscale + (dpi_x / 72) * spacing + 1
+            width = cell_width * w / xscale + (dpi_x / 72) * spacing / (xscale if is_windows else 1) + 1
         else:
             width = w
         if h_unit == 'cells':
             spacing = effective_margin('top') + effective_margin('bottom')
             spacing += effective_padding('top') + effective_padding('bottom')
-            height = cell_height * h / yscale + (dpi_y / 72) * spacing + 1
+            height = cell_height * h / yscale + (dpi_y / 72) * spacing / (yscale if is_windows else 1) + 1
         else:
             height = h
         return int(width), int(height)

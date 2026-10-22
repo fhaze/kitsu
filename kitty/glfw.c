@@ -1481,11 +1481,27 @@ make_os_window_context_current(OSWindow *w) {
 void
 get_os_window_size(OSWindow *os_window, int *w, int *h, int *fw, int *fh) {
     if (w && h) glfwGetWindowSize(os_window->handle, w, h);
+#ifdef _WIN32
+    if (w && h) {
+        float xs, ys;
+        double xd, yd;
+        get_window_content_scale(os_window->handle, &xs, &ys, &xd, &yd);
+        *w = (int)round(*w / xs);
+        *h = (int)round(*h / ys);
+    }
+#endif
     if (fw && fh) glfwGetFramebufferSize(os_window->handle, fw, fh);
 }
 
 void
 set_os_window_size(OSWindow *os_window, int x, int y) {
+#ifdef _WIN32
+    float xs, ys;
+    double xd, yd;
+    get_window_content_scale(os_window->handle, &xs, &ys, &xd, &yd);
+    x = (int)round((double)x * xs);
+    y = (int)round((double)y * ys);
+#endif
     glfwSetWindowSize(os_window->handle, x, y);
 }
 
@@ -2081,6 +2097,9 @@ create_os_window(PyObject UNUSED *self, PyObject *args, PyObject *kw) {
         // We don't use depth and stencil buffers
         glfwWindowHint(GLFW_DEPTH_BITS, 0);
         glfwWindowHint(GLFW_STENCIL_BITS, 0);
+#ifdef _WIN32
+        glfwWindowHint(GLFW_SCALE_TO_MONITOR, true);
+#endif
         glfwSetApplicationCloseCallback(application_close_requested_callback);
         glfwSetCurrentSelectionCallback(get_current_selection);
         glfwSetHasCurrentSelectionCallback(has_current_selection);
@@ -2228,6 +2247,11 @@ create_os_window(PyObject UNUSED *self, PyObject *args, PyObject *kw) {
     if (pret == NULL) return NULL;
     Py_DECREF(pret);
     if (x != INT_MIN && y != INT_MIN) glfwSetWindowPos(glfw_window, x, y);
+#ifdef _WIN32
+    double actual_xdpi, actual_ydpi;
+    get_window_dpi(glfw_window, &actual_xdpi, &actual_ydpi);
+    if (actual_xdpi != xdpi || actual_ydpi != ydpi) fonts_data = load_fonts_data(OPT(font_size), actual_xdpi, actual_ydpi);
+#endif
     if (!global_state.is_apple && !global_state.is_wayland && window_state != WINDOW_HIDDEN) glfwShowWindow(glfw_window, false);
     if (global_state.is_wayland || global_state.is_apple) {
         float n_xscale, n_yscale;
