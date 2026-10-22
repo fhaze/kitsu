@@ -261,6 +261,8 @@ typedef struct _GLFWwindowWin32 {
     bool mousePassthrough;
     bool keymenu;
     bool live_resize_in_progress;
+    bool size_move_in_progress;
+    unsigned int modal_loop_depth;
     int blur_radius;
     int blur_mode;
 
@@ -343,6 +345,10 @@ typedef struct _GLFWlibraryWin32 {
         unsigned long long next_id;
     } timers;
     bool keep_going, wakeup_pending;
+    bool dispatching;
+    unsigned int modal_loop_depth;
+    GLFWtickcallback tick_callback;
+    void *tick_callback_data;
     // Whether timeBeginPeriod(1) succeeded and must be undone at exit
     bool timer_period_raised;
     // Delivers mouse moves that arrived too soon after the previous one
