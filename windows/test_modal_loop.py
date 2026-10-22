@@ -132,11 +132,11 @@ class ModalLoop(unittest.TestCase):
         self.send(WM_EXITMENULOOP)
         self.assertEqual(self.resizes, [])
         rect = wintypes.RECT(0, 0, 200, 200)
-        for _ in range(2):
+        for attempt in range(2):
             self.send(WM_ENTERSIZEMOVE)
             self.send(WM_SIZING, 2, ctypes.addressof(rect))
             self.send(WM_SIZING, 2, ctypes.addressof(rect))
-            self.assertTrue(self.resizes[-1])
+            self.assertEqual(self.resizes, [True, False] * attempt + [True])
             self.send(WM_ENTERMENULOOP)
             self.send(WM_EXITMENULOOP)
             self.assertTrue(self.resizes[-1])
@@ -188,6 +188,21 @@ class ModalLoop(unittest.TestCase):
 
     def test_destroy_in_modal_loop_cleans_up_dispatch(self) -> None:
         self.check_dispatch(WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, destroy=True)
+
+    def test_stopping_main_loop_suppresses_modal_callbacks(self) -> None:
+        def body() -> None:
+            self.send(WM_ENTERMENULOOP)
+            self.glfw.glfwPostEmptyEvent()
+            self.pump()
+            self.assertGreater(self.ticks, 0)
+            self.glfw.glfwStopMainLoop()
+            before = self.ticks
+            self.glfw.glfwPostEmptyEvent()
+            self.pump()
+            self.assertEqual(self.ticks, before)
+            self.send(WM_EXITMENULOOP)
+
+        self.run_in_window_proc(body)
 
     def test_callbacks_do_not_reenter(self) -> None:
         depth = 0
