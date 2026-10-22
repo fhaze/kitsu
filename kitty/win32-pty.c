@@ -655,7 +655,8 @@ win32_pty_spawn(int master_fd, const char *exe, const char *cwd, char *const arg
         set_errno_from_last_error();
         goto end;
     }
-    if (!initialize_console_utf8(attrs)) goto end;
+    // Best effort: a missing or failing helper must not prevent the shell from starting.
+    if (!initialize_console_utf8(attrs)) log_error("Failed to set UTF-8 code pages for the ConPTY child, it keeps the default OEM code page: %s", strerror(errno));
     // Restrict inheritance to only the stdin pipe
     if (child_stdin != INVALID_HANDLE_VALUE &&
         !UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &child_stdin, sizeof(child_stdin), NULL, NULL)) {
