@@ -51,6 +51,31 @@ disables this injection; `no-prompt-mark` and `no-cwd` are also respected.
 For WSL, use the bundled Linux `kitten` inside the distribution, not the Windows
 `kitten.exe`; run `kitsu +wsl-setup` to install it.
 
+=== OpenGL in VMs and remote sessions
+
+Windows packages include Mesa llvmpipe in `bin/mesa`, including its LLVM
+dependencies. Kitsu tries the system OpenGL driver first and uses this private
+CPU renderer if the requested OpenGL context is unavailable (for example, the
+Microsoft Basic Display Adapter or an RDP session offering only GDI Generic).
+The fallback is slower than GPU rendering but needs no D3D12 driver or DXIL DLL.
+Keep the entire `bin/mesa` directory when moving a portable installation.
+
+Set `KITSU_OPENGL_DRIVER` before launching Kitsu to select `auto` (the default),
+`native` (disable fallback), or `llvmpipe` (force software rendering). The software
+path sets `GALLIUM_DRIVER=llvmpipe` for the process. For example, in PowerShell:
+
+[source,powershell]
+----
+$env:KITSU_OPENGL_DRIVER = 'llvmpipe'
+kitsu --debug-rendering cmd.exe
+----
+
+`kitsu +health-check --mode=native` reports the renderer and flags llvmpipe as
+software rendering. Hardware display behavior is not verified by that result.
+If the fallback files are missing or damaged, reinstall Kitsu. Updating your GPU
+driver or installing Microsoft's https://apps.microsoft.com/detail/9nqpsl29bfff[OpenCL, OpenGL and Vulkan Compatibility Pack]
+may also make native OpenGL available.
+
 == Existing Kitty-for-Windows users
 
 The installer keeps the same application ID, install directory, and selected

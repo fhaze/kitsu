@@ -1910,6 +1910,8 @@ def bundle_windows_runtime(ddir: str, launcher_dir: str) -> None:
     shutil.copy2(os.path.join(mingw_bin, pydll), launcher_dir)
     pending = [os.path.join(launcher_dir, pydll), os.path.join(launcher_dir, 'kitty' + exe_ext)]
     for root, dirs, files in os.walk(ddir):
+        if os.path.abspath(root) == os.path.abspath(launcher_dir):
+            dirs[:] = [d for d in dirs if d != 'mesa']
         for f in files:
             if f.endswith(('.pyd', '.dll')):
                 p = os.path.join(root, f)
@@ -1932,6 +1934,24 @@ def bundle_windows_runtime(ddir: str, launcher_dir: str) -> None:
             if not os.path.exists(dest):
                 shutil.copy2(src, dest)
             pending.append(dest)
+
+
+def bundle_windows_mesa(launcher_dir: str) -> None:
+    mingw_bin = Path(sys.executable).resolve().parent
+    destination = Path(launcher_dir) / 'mesa'
+    shutil.rmtree(destination, ignore_errors=True)
+    destination.mkdir()
+    pending = ['opengl32.dll', 'libgallium_wgl.dll']
+    seen: Set[str] = set()
+    while pending:
+        dll = pending.pop()
+        if dll.lower() in seen:
+            continue
+        seen.add(dll.lower())
+        source = mingw_bin / dll
+        shutil.copy2(source, destination / dll)
+        pending.extend(dep for dep in windows_dll_imports(str(source)) if (mingw_bin / dep).is_file())
+    shutil.copytree(mingw_bin.parent / 'share/licenses', destination / 'licenses')
 
 
 # The in-box conhost.exe drops escape sequences it does not understand, which
@@ -2660,6 +2680,7 @@ def package(args: Options, bundle_type: str, do_build_all: bool = True) -> None:
         # must happen before building the shaders, which runs the packaged kitty.exe
         shutil.copy2(os.path.join('windows', 'health-check.ps1'), launcher_dir)
         bundle_windows_runtime(ddir, launcher_dir)
+        bundle_windows_mesa(launcher_dir)
         bundle_conpty(launcher_dir)
         bundle_slangc(launcher_dir)
         bundle_windows_less(launcher_dir)

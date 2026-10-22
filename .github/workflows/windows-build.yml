@@ -144,6 +144,9 @@ jobs:
           - name: Test Win32 modal loop dispatch and live resize
             run: python windows/test_modal_loop.py windows-package/kitsu
 
+          - name: Test private Mesa OpenGL fallback
+            run: python windows/test_opengl.py windows-package/kitsu -v
+
           - name: Test the Win32 primary selection and clipboard isolation
             run: python windows/test_primary_selection.py windows-package/kitsu
 

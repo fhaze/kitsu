@@ -96,6 +96,10 @@ typedef HDC(WINAPI *PFN_wglGetCurrentDC)(void);
 typedef HGLRC(WINAPI *PFN_wglGetCurrentContext)(void);
 typedef BOOL(WINAPI *PFN_wglMakeCurrent)(HDC, HGLRC);
 typedef BOOL(WINAPI *PFN_wglShareLists)(HGLRC, HGLRC);
+typedef int(WINAPI *PFN_wglChoosePixelFormat)(HDC, const PIXELFORMATDESCRIPTOR *);
+typedef int(WINAPI *PFN_wglDescribePixelFormat)(HDC, int, UINT, PIXELFORMATDESCRIPTOR *);
+typedef BOOL(WINAPI *PFN_wglSetPixelFormat)(HDC, int, const PIXELFORMATDESCRIPTOR *);
+typedef BOOL(WINAPI *PFN_wglSwapBuffers)(HDC);
 #define wglCreateContext _glfw.wgl.CreateContext
 #define wglDeleteContext _glfw.wgl.DeleteContext
 #define wglGetProcAddress _glfw.wgl.GetProcAddress
@@ -120,6 +124,7 @@ typedef struct _GLFWcontextWGL {
 //
 typedef struct _GLFWlibraryWGL {
     HINSTANCE instance;
+    bool mesa;
     PFN_wglCreateContext CreateContext;
     PFN_wglDeleteContext DeleteContext;
     PFN_wglGetProcAddress GetProcAddress;
@@ -127,6 +132,10 @@ typedef struct _GLFWlibraryWGL {
     PFN_wglGetCurrentContext GetCurrentContext;
     PFN_wglMakeCurrent MakeCurrent;
     PFN_wglShareLists ShareLists;
+    PFN_wglChoosePixelFormat ChoosePixelFormat;
+    PFN_wglDescribePixelFormat DescribePixelFormat;
+    PFN_wglSetPixelFormat SetPixelFormat;
+    PFN_wglSwapBuffers SwapBuffers;
 
     PFNWGLSWAPINTERVALEXTPROC SwapIntervalEXT;
     PFNWGLGETPIXELFORMATATTRIBIVARBPROC GetPixelFormatAttribivARB;
@@ -148,6 +157,6 @@ typedef struct _GLFWlibraryWGL {
 } _GLFWlibraryWGL;
 
 
-bool _glfwInitWGL(void);
+bool _glfwInitWGL(const _GLFWctxconfig *ctxconfig, const _GLFWfbconfig *fbconfig);
 void _glfwTerminateWGL(void);
 bool _glfwCreateContextWGL(_GLFWwindow *window, const _GLFWctxconfig *ctxconfig, const _GLFWfbconfig *fbconfig);
