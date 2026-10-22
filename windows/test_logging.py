@@ -37,12 +37,18 @@ class TestLogging(unittest.TestCase):
                     raise
                 time.sleep(0.02)
 
-    def launch(self, *args: str, stderr: int | BinaryIO = subprocess.DEVNULL, missing_stdio: bool = False) -> subprocess.Popen[bytes]:
+    def launch(
+        self, *args: str, stderr: int | BinaryIO = subprocess.DEVNULL, missing_stdio: bool = False, console: bool = False
+    ) -> subprocess.Popen[bytes]:
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = subprocess.SW_HIDE
         process = subprocess.Popen(
             [str(PACKAGE / 'bin/kitsu.exe'), *args], env=self.env,
             stdin=None if missing_stdio else subprocess.DEVNULL,
             stdout=None if missing_stdio else subprocess.DEVNULL, stderr=None if missing_stdio else stderr,
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            creationflags=(subprocess.CREATE_NEW_CONSOLE if console else subprocess.DETACHED_PROCESS) | subprocess.CREATE_NEW_PROCESS_GROUP,
+            startupinfo=startup if console else None,
         )
 
         def cleanup() -> None:
@@ -120,6 +126,17 @@ class TestLogging(unittest.TestCase):
         self.assertEqual(process.returncode, 1)
         self.assertIn(str(self.log).replace('/', '\\'), text.replace('/', '\\'))
         self.assertIn('RuntimeError: startup marker', self.log.read_text(encoding='utf-8'))
+
+    def test_console_exit_status_does_not_show_gui_error(self) -> None:
+        for console in (False, True):
+            for status in (1, 17):
+                with self.subTest(console=console, status=status):
+                    code = f'import sys; sys.exit({status})'
+                    if console:
+                        code = 'import ctypes; assert ctypes.windll.kernel32.GetConsoleCP(); ' + code
+                    process = self.launch('+runpy', code, console=console)
+                    self.finish(process)
+                    self.assertEqual(process.returncode, status)
 
     def test_uncaught_python_error_is_logged_and_reported(self) -> None:
         process = self.launch('+runpy', 'raise RuntimeError("uncaught marker")')

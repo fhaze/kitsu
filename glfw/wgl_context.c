@@ -403,10 +403,19 @@ initWGL(void) {
     glfw_dlsym(_glfw.wgl.GetCurrentContext, _glfw.wgl.instance, "wglGetCurrentContext");
     glfw_dlsym(_glfw.wgl.MakeCurrent, _glfw.wgl.instance, "wglMakeCurrent");
     glfw_dlsym(_glfw.wgl.ShareLists, _glfw.wgl.instance, "wglShareLists");
-    glfw_dlsym(_glfw.wgl.ChoosePixelFormat, _glfw.wgl.instance, "wglChoosePixelFormat");
-    glfw_dlsym(_glfw.wgl.DescribePixelFormat, _glfw.wgl.instance, "wglDescribePixelFormat");
-    glfw_dlsym(_glfw.wgl.SetPixelFormat, _glfw.wgl.instance, "wglSetPixelFormat");
-    glfw_dlsym(_glfw.wgl.SwapBuffers, _glfw.wgl.instance, "wglSwapBuffers");
+    if (_glfw.wgl.mesa) {
+        glfw_dlsym(_glfw.wgl.ChoosePixelFormat, _glfw.wgl.instance, "wglChoosePixelFormat");
+        glfw_dlsym(_glfw.wgl.DescribePixelFormat, _glfw.wgl.instance, "wglDescribePixelFormat");
+        glfw_dlsym(_glfw.wgl.SetPixelFormat, _glfw.wgl.instance, "wglSetPixelFormat");
+        glfw_dlsym(_glfw.wgl.SwapBuffers, _glfw.wgl.instance, "wglSwapBuffers");
+    } else {
+        // GDI must associate the pixel format with the native driver. Calling
+        // opengl32's wglSetPixelFormat directly can leave the DC unusable by it.
+        _glfw.wgl.ChoosePixelFormat = ChoosePixelFormat;
+        _glfw.wgl.DescribePixelFormat = DescribePixelFormat;
+        _glfw.wgl.SetPixelFormat = SetPixelFormat;
+        _glfw.wgl.SwapBuffers = SwapBuffers;
+    }
     if (!_glfw.wgl.CreateContext || !_glfw.wgl.DeleteContext || !_glfw.wgl.GetProcAddress || !_glfw.wgl.GetCurrentDC || !_glfw.wgl.GetCurrentContext ||
         !_glfw.wgl.MakeCurrent || !_glfw.wgl.ShareLists || !_glfw.wgl.ChoosePixelFormat || !_glfw.wgl.DescribePixelFormat || !_glfw.wgl.SetPixelFormat ||
         !_glfw.wgl.SwapBuffers)

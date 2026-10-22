@@ -677,6 +677,8 @@ def main(called_from_panel: bool = False) -> None:
 
         tb = traceback.format_exc()
         log_error(tb)
+        if is_windows:
+            sys.audit('kitsu.startup_error')
         raise SystemExit(1)
     finally:
         # we cant rely on this running during module unloading of fast_data_types as Python fails
