@@ -493,8 +493,6 @@ win32_send_notification(PyObject *self, PyObject *args, PyObject *kwargs) {
     HRESULT hr = ensure_notifier();
     bool check_after_show = false;
     if (SUCCEEDED(hr)) hr = check_notification_setting(&check_after_show);
-    QUERY_USER_NOTIFICATION_STATE state;
-    if (SUCCEEDED(hr) && SUCCEEDED(SHQueryUserNotificationState(&state)) && state != QUNS_ACCEPTS_NOTIFICATIONS && state != QUNS_APP) hr = E_ACCESSDENIED;
     LiveToast *t = NULL;
     if (SUCCEEDED(hr)) {
         t = calloc(1, sizeof(*t));
