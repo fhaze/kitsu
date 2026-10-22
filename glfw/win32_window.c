@@ -47,6 +47,41 @@ static GLFWColorScheme query_system_color_theme(void);
 #define WM_KITTY_DROP_DATA (WM_APP + 2)
 #define WM_KITTY_WAKEUP (WM_APP + 3)
 #define WM_KITTY_RESTORE_FOCUS (WM_APP + 4)
+#define KITTY_MODAL_TIMER 1
+
+static void
+dispatchPendingTick(void) {
+    if (!_glfw.win32.keep_going || !_glfw.win32.tick_callback || _glfw.win32.dispatching || !_glfw.win32.wakeup_pending) return;
+    _glfw.win32.wakeup_pending = false;
+    _glfw.win32.dispatching = true;
+    _glfw.win32.tick_callback(_glfw.win32.tick_callback_data);
+    _glfw.win32.dispatching = false;
+}
+
+static void
+dispatchModalEvents(void) {
+    if (!_glfw.win32.modal_loop_depth || !_glfw.win32.keep_going || _glfw.win32.dispatching) return;
+    _glfwDispatchTimersWin32();
+    dispatchPendingTick();
+}
+
+static void
+enterModalLoop(_GLFWwindow *window) {
+    window->win32.modal_loop_depth++;
+    if (_glfw.win32.modal_loop_depth++ == 0) {
+        // DefWindowProc owns the message pump until the move, resize or menu ends.
+        if (!SetTimer(_glfw.win32.helperWindowHandle, KITTY_MODAL_TIMER, USER_TIMER_MINIMUM, NULL))
+            _glfwInputErrorWin32(GLFW_PLATFORM_ERROR, "Win32: Failed to create modal loop timer");
+    }
+}
+
+static void
+leaveModalLoop(_GLFWwindow *window) {
+    if (window->win32.modal_loop_depth) {
+        window->win32.modal_loop_depth--;
+        if (--_glfw.win32.modal_loop_depth == 0) KillTimer(_glfw.win32.helperWindowHandle, KITTY_MODAL_TIMER);
+    }
+}
 
 static const char *drop_mimes[] = {"text/uri-list", "text/plain"};
 
@@ -1046,11 +1081,24 @@ windowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 _glfwVSyncDisplayChangedWin32();
                 break;
 
-            case _GLFW_WM_VBLANK: _glfwDispatchVSyncWin32(wParam); return 0;
+            case _GLFW_WM_VBLANK:
+                _glfwDispatchVSyncWin32(wParam);
+                dispatchModalEvents();
+                return 0;
+
+            case WM_TIMER:
+                if (wParam == KITTY_MODAL_TIMER) {
+                    dispatchModalEvents();
+                    return 0;
+                }
+                break;
 
             case WM_KITTY_TIMER_CHECK:
             case WM_KITTY_WAKEUP:
-            case WM_NULL: _glfw.win32.wakeup_pending = true; break;
+            case WM_NULL:
+                _glfw.win32.wakeup_pending = true;
+                dispatchModalEvents();
+                break;
 
             case WM_SETTINGCHANGE:
                 if (lParam && wcscmp((const WCHAR *)lParam, L"ImmersiveColorSet") == 0) _glfwInputColorScheme(glfwGetCurrentSystemColorTheme(true), false);
@@ -1329,6 +1377,8 @@ windowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
         case WM_ENTERSIZEMOVE:
         case WM_ENTERMENULOOP: {
+            enterModalLoop(window);
+            if (uMsg == WM_ENTERSIZEMOVE) window->win32.size_move_in_progress = true;
             if (window->win32.frameAction) break;
 
             // HACK: Enable the cursor while the user is moving or
@@ -1340,6 +1390,14 @@ windowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
         case WM_EXITSIZEMOVE:
         case WM_EXITMENULOOP: {
+            leaveModalLoop(window);
+            if (uMsg == WM_EXITSIZEMOVE) {
+                window->win32.size_move_in_progress = false;
+                if (window->win32.live_resize_in_progress) {
+                    window->win32.live_resize_in_progress = false;
+                    _glfwInputLiveResize(window, false);
+                }
+            }
             if (window->win32.frameAction) break;
 
             // HACK: Disable the cursor once the user is done moving or
@@ -1379,6 +1437,7 @@ windowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
             window->win32.iconified = iconified;
             window->win32.maximized = maximized;
+            dispatchModalEvents();
             return 0;
         }
 
@@ -1392,6 +1451,10 @@ windowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_SIZING: {
+            if (window->win32.size_move_in_progress && !window->win32.live_resize_in_progress) {
+                window->win32.live_resize_in_progress = true;
+                _glfwInputLiveResize(window, true);
+            }
             if (window->numer == GLFW_DONT_CARE || window->denom == GLFW_DONT_CARE) { break; }
 
             applyAspectRatio(window, (int)wParam, (RECT *)lParam);
@@ -1439,7 +1502,9 @@ windowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
         case WM_PAINT: {
             _glfwInputWindowDamage(window);
-            break;
+            const LRESULT result = DefWindowProcW(hWnd, uMsg, wParam, lParam);
+            dispatchModalEvents();
+            return result;
         }
 
         case WM_ERASEBKGND: {
@@ -1744,6 +1809,7 @@ _glfwPlatformCreateWindow(
 
 void
 _glfwPlatformDestroyWindow(_GLFWwindow *window) {
+    while (window->win32.modal_loop_depth) leaveModalLoop(window);
     free_drop_data(window);
     if (window->monitor) releaseMonitor(window);
 
@@ -3064,6 +3130,8 @@ _glfwTimerWaitTimeoutWin32(void) {
 
 void
 _glfwDispatchTimersWin32(void) {
+    if (_glfw.win32.dispatching) return;
+    _glfw.win32.dispatching = true;
     monotonic_t now = monotonic();
     bool need_compact = false;
     // callbacks may add timers, so iterate by index over the current count
@@ -3087,6 +3155,7 @@ _glfwDispatchTimersWin32(void) {
     for (size_t i = 0; i < _glfw.win32.timers.count; i++)
         if (!_glfw.win32.timers.items[i].id) need_compact = true;
     if (need_compact) timer_compact();
+    _glfw.win32.dispatching = false;
 }
 
 void
@@ -3110,14 +3179,15 @@ _glfwPlatformStopMainLoop(void) {
 
 void
 _glfwPlatformRunMainLoop(GLFWtickcallback tick_callback, void *data) {
+    _glfw.win32.tick_callback = tick_callback;
+    _glfw.win32.tick_callback_data = data;
     _glfw.win32.keep_going = true;
     while (_glfw.win32.keep_going) {
         _glfwPlatformWaitEvents();
-        if (_glfw.win32.wakeup_pending) {
-            _glfw.win32.wakeup_pending = false;
-            tick_callback(data);
-        }
+        dispatchPendingTick();
     }
+    _glfw.win32.tick_callback = NULL;
+    _glfw.win32.tick_callback_data = NULL;
 }
 // }}}
 
