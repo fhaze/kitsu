@@ -199,28 +199,15 @@ increment_and_return(PyObject *x) {
     return x;
 }
 
-// fontconfig passes file names to the narrow C runtime functions, so on
-// Windows they are in the ANSI code page. That is UTF-8 only when the
-// activeCodePage manifest setting is in effect (Windows 10 1903 and newer).
+// The bundled Windows fontconfig uses UTF-8 independently of the process ACP.
 static PyObject *
 decode_fc_path(const FcChar8 *path) {
-#ifdef _WIN32
-    return PyUnicode_DecodeMBCS((const char *)path, strlen((const char *)path), "replace");
-#else
     return PyUnicode_Decode((const char *)path, strlen((const char *)path), "UTF-8", "replace");
-#endif
 }
 
 // The path as bytes for fontconfig, see decode_fc_path()
 static PyObject *
 encode_fc_path(PyObject *path) {
-#ifdef _WIN32
-    PyObject *ans = PyUnicode_AsMBCSString(path);
-    if (ans) return ans;
-    // Not representable in the ANSI code page, so not something fontconfig
-    // could have indexed or can open either
-    PyErr_Clear();
-#endif
     return PyUnicode_AsUTF8String(path);
 }
 

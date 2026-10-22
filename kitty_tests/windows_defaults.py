@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 from kitty.boss import Boss
 from kitty.constants import is_windows, kitty_exe
 from kitty.options.types import defaults
-from kitty.utils import get_editor_from_env_vars, is_windows_gui_executable, reload_conf_in_all_kitties
+from kitty.utils import cmdline_for_hold, cmdline_split, get_editor, get_editor_from_env_vars, is_windows_gui_executable, reload_conf_in_all_kitties, resolved_shell
 
 from .base import BaseTest
 
@@ -24,6 +24,49 @@ class WindowsDefaultsTest(BaseTest):
             run.side_effect = subprocess.CalledProcessError(1, 'kitten.exe')
             with self.assertRaises(subprocess.CalledProcessError):
                 reload_conf_in_all_kitties()
+
+    def test_windows_config_command_lines(self):
+        from kitty.config import load_config
+        from kitty.launch import LaunchSpec
+        from kitty.options.utils import parse_key_action
+        from kitty.session import parse_session
+
+        command = r'"C:\Program Files\tools\app.exe" C:\Users\x\a.txt "\\server\share\two words"'
+        expected = [r'C:\Program Files\tools\app.exe', r'C:\Users\x\a.txt', r'\\server\share\two words']
+        bad_lines = []
+        opts = load_config(
+            overrides=(
+                f'{key} {command}'
+                for key in (
+                    'shell',
+                    'editor',
+                    'command_on_bell',
+                    'scrollback_pager',
+                    'open_url_with',
+                )
+            ),
+            accumulate_bad_lines=bad_lines,
+        )
+        self.ae(bad_lines, [])
+        self.ae(resolved_shell(opts), expected)
+        self.ae(get_editor(opts), expected)
+        for key in ('command_on_bell', 'scrollback_pager', 'open_url_with'):
+            self.ae(list(getattr(opts, key)), expected)
+        for key in ('VISUAL', 'EDITOR'):
+            with patch('kitty.child.default_env', return_value={key: command}), patch('kitty.utils.which', return_value=expected[0]):
+                self.ae(get_editor_from_env_vars(), expected)
+        for prefix in ('', r'--cwd=C:\Users\x ', r'--cwd="\\server\share\two words" '):
+            action = parse_key_action('launch ' + prefix + command)
+            sessions = tuple(parse_session('launch ' + prefix + command, opts))
+            spec = sessions[0].tabs[0].windows[0].launch_spec
+            assert isinstance(spec, LaunchSpec)
+            self.ae(spec.args, expected)
+            if prefix:
+                self.ae(spec.opts.cwd, r'C:\Users\x' if 'Users' in prefix else r'\\server\share\two words')
+            self.ae(list(action.args), ([prefix.strip().replace('"', '')] if prefix else []) + expected)
+        # The hold wrapper is consumed by Go's run-shell; keep its POSIX single-quote round trip working too.
+        shell_arg = next(x for x in cmdline_for_hold(opts=opts) if x.startswith('--shell='))
+        self.ae(list(cmdline_split(shell_arg.partition('=')[2])), expected)
 
     def test_windows_editor_fallback(self):
         with patch('kitty.child.default_env', return_value={}), patch('kitty.utils.read_shell_environment', return_value={}):

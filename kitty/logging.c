@@ -64,6 +64,9 @@ log_error(const char *fmt, ...) {
     if (use_os_log) os_log_error(OS_LOG_DEFAULT, "%{public}s", sanbuf);
 #endif
     if (!use_os_log) fprintf(stderr, "%s\n", sanbuf);
+#ifdef _WIN32
+    win32_debug_log((const char *)sanbuf);
+#endif
 #undef bufprint
 }
 
@@ -81,7 +84,19 @@ set_use_os_log(PyObject *self UNUSED, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+#ifdef _WIN32
+static PyObject *
+windows_log_path(PyObject *self UNUSED, PyObject *args UNUSED) {
+    RAII_ALLOC(char, path, win32_default_log_path());
+    if (!path) return PyErr_SetFromErrno(PyExc_OSError);
+    return PyUnicode_FromString(path);
+}
+#endif
+
 static PyMethodDef module_methods[] = {
+#ifdef _WIN32
+    METHODB(windows_log_path, METH_NOARGS),
+#endif
     METHODB(log_error_string, METH_VARARGS), METHODB(set_use_os_log, METH_O), {NULL, NULL, 0, NULL} /* Sentinel */
 };
 

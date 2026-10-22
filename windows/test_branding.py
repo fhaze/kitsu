@@ -58,8 +58,9 @@ class TestBranding(unittest.TestCase):
         ico = ICON.read_bytes()
         _, kind, count = struct.unpack_from('<HHH', ico)
         self.assertEqual(kind, 1)
-        binaries = [(PACKAGE / 'bin' / name, 'GLFW_ICON') for name in ('kitsu.exe', 'kitsu.com', 'kitty.exe', 'kitty.com')]
+        binaries = [(PACKAGE / 'bin' / name, 'GLFW_ICON') for name in ('kitsu.exe', 'kitsu.com', 'kitty.exe', 'kitty.com', 'kitten.exe')]
         binaries.extend((path, 'MAINICON') for path in PACKAGE.parent.glob('kitsu-*-windows-*-setup.exe'))
+        expected_version = None
         for path, icon_name in binaries:
             with self.subTest(binary=path.name):
                 module = kernel.LoadLibraryExW(str(path), None, 0x22)
@@ -75,6 +76,12 @@ class TestBranding(unittest.TestCase):
                         return ctypes.string_at(ptr, size)
 
                     group = resource(icon_name, 14)
+                    if icon_name == 'GLFW_ICON':
+                        version = resource(ctypes.cast(1, wintypes.LPCWSTR), 16)
+                        self.assertIn('Kitsu'.encode('utf-16-le'), version)
+                        if expected_version is None:
+                            expected_version = version
+                        self.assertEqual(version, expected_version)
                     self.assertEqual(struct.unpack_from('<HHH', group), (0, 1, count))
                     for i in range(count):
                         expected = struct.unpack_from('<BBBBHHII', ico, 6 + 16 * i)

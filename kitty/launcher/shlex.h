@@ -15,7 +15,7 @@ typedef enum { NORMAL, WORD, STRING_WITHOUT_ESCAPES, STRING_WITH_ESCAPES, ANSI_C
 
 typedef struct {
     const char *src;
-    bool support_ansi_c_quoting, allow_empty;
+    bool support_ansi_c_quoting, allow_empty, windows_quoting;
     char *buf;
     size_t src_sz, src_pos, word_start, buf_pos;
     ShlexEnum state;
@@ -108,6 +108,24 @@ read_ch(ShlexState *self) {
 
 static bool
 write_escape_ch(ShlexState *self) {
+    if (self->windows_quoting) {
+        size_t count = 1;
+        while (self->src_pos < self->src_sz && self->src[self->src_pos] == '\\') {
+            self->src_pos++;
+            count++;
+        }
+        // Only backslashes immediately before a double quote are escapes on Windows.
+        if (self->src_pos < self->src_sz && self->src[self->src_pos] == '"') {
+            for (size_t i = 0; i < count / 2; i++) write_ch(self, '\\');
+            if (count % 2) {
+                self->src_pos++;
+                write_ch(self, '"');
+            }
+        } else {
+            for (size_t i = 0; i < count; i++) write_ch(self, '\\');
+        }
+        return true;
+    }
     if (self->src_pos < self->src_sz) {
         char nch = read_ch(self);
         write_ch(self, nch);

@@ -68,7 +68,7 @@ func get_shell_from_kitty_conf() (shell string) {
 	if shell == "." {
 		s, e := utils.LoginShellForCurrentUser()
 		if e != nil {
-			shell = "/bin/sh"
+			shell = shlex.Quote(fallback_shell())
 		} else {
 			shell = s
 		}
@@ -97,6 +97,16 @@ func find_shell_parent_process() string {
 	}
 }
 
+func fallback_shell() string {
+	if runtime.GOOS == "windows" {
+		if shell := os.Getenv("ComSpec"); shell != "" {
+			return shell
+		}
+		return "cmd.exe"
+	}
+	return "/bin/sh"
+}
+
 func ResolveShell(shell string) []string {
 	switch shell {
 	case "":
@@ -106,13 +116,16 @@ func ResolveShell(shell string) []string {
 			shell = get_shell_from_kitty_conf()
 		}
 	}
-	shell_cmd, err := shlex.Split(shell)
+	shell_cmd, err := shlex.SplitCommandLine(shell, runtime.GOOS == "windows")
 	if err != nil {
 		shell_cmd = []string{shell}
 	}
+	if len(shell_cmd) == 0 || shell_cmd[0] == "" {
+		return []string{fallback_shell()}
+	}
 	exe := utils.FindExe(shell_cmd[0])
 	if utils.Access(exe, utils.X_OK) != nil {
-		shell_cmd = []string{"/bin/sh"}
+		shell_cmd = []string{fallback_shell()}
 	}
 	return shell_cmd
 }

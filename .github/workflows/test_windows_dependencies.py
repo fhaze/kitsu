@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -38,6 +39,17 @@ class WindowsDependenciesTest(unittest.TestCase):
             self.assertEqual(by_name['openssl']['version'], '3.6.0')
             self.assertEqual(by_name['python']['purl'], 'pkg:generic/python@3.14.8')
             self.assertIn({'name': 'kitty:packaged-file', 'value': 'bin/libpython3.14.dll'}, by_name['python']['properties'])
+
+            dll = package / 'bin/libfontconfig-1.dll'
+            dll.write_bytes(b'source-built fontconfig')
+            info = {'version': '2.18.3', 'source_sha256': 'source hash', 'dll_sha256': hashlib.sha256(dll.read_bytes()).hexdigest()}
+            (package / 'bin/fontconfig-build.json').write_text(json.dumps(info), encoding='utf-8')
+            fontconfig = next(c for c in runtime_components(package, root, 'mingw-w64-ucrt-x86_64') if c['name'] == 'fontconfig')
+            self.assertEqual(fontconfig['version'], '2.18.3')
+            self.assertEqual(fontconfig['purl'], 'pkg:generic/fontconfig@2.18.3')
+            dll.write_bytes(b'replaced')
+            with self.assertRaisesRegex(ValueError, 'fontconfig DLL does not match'):
+                runtime_components(package, root, 'mingw-w64-ucrt-x86_64')
 
     def test_empty_package_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

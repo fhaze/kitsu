@@ -19,7 +19,7 @@ from ..fast_data_types import Color
 from ..rgb import to_color as as_color
 from ..types import ConvertibleToNumbers, ParsedShortcut, run_once
 from ..typing_compat import Protocol
-from ..utils import expandvars, log_error, shlex_split
+from ..utils import cmdline_split, expandvars, log_error
 
 key_pat = re.compile(r'([a-zA-Z][a-zA-Z0-9_-]*)\s+(.+)$')
 number_unit_pat = re.compile(r'\s*([-+]?\d+\.?\d*)\s*([^\d\s]*)?')
@@ -108,11 +108,11 @@ class ToCmdline:
             ans = list(
                 map(
                     lambda y: expandvars(os.path.expanduser(y), os.environ if self.override_env is None else self.override_env, fallback_to_os_env=False),
-                    shlex_split(x),
+                    cmdline_split(x),
                 )
             )
         else:
-            ans = list(shlex_split(x))
+            ans = list(cmdline_split(x))
         return ans
 
 

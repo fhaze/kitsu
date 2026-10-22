@@ -46,6 +46,7 @@ type Lexer struct {
 	src_sz, src_pos, word_start int
 	buf                         strings.Builder
 	allow_empty                 bool
+	windows_quoting             bool
 }
 
 // NewLexer creates a new lexer from an input string.
@@ -68,6 +69,23 @@ func (self *Lexer) write_ch(ch byte) {
 }
 
 func (self *Lexer) write_escaped_ch() bool {
+	if self.windows_quoting {
+		count := 1
+		for self.src_pos < self.src_sz && self.src[self.src_pos] == '\\' {
+			self.src_pos++
+			count++
+		}
+		if self.src_pos < self.src_sz && self.src[self.src_pos] == '"' {
+			self.buf.WriteString(strings.Repeat(`\`, count/2))
+			if count%2 != 0 {
+				self.src_pos++
+				self.write_ch('"')
+			}
+		} else {
+			self.buf.WriteString(strings.Repeat(`\`, count))
+		}
+		return true
+	}
 	ch, count := utf8.DecodeRuneInString(self.src[self.src_pos:])
 	if count > 0 {
 		self.src_pos += count
@@ -175,6 +193,17 @@ func (self *Lexer) Next() (ans Word) {
 // Split partitions a string into a slice of strings.
 func Split(s string) (ans []string, err error) {
 	l := NewLexer(s)
+	return l.split()
+}
+
+// SplitCommandLine keeps Windows path separators literal, while retaining single-quote support for config files.
+func SplitCommandLine(s string, windows_quoting bool) ([]string, error) {
+	l := NewLexer(s)
+	l.windows_quoting = windows_quoting
+	return l.split()
+}
+
+func (l *Lexer) split() (ans []string, err error) {
 	var word Word
 	for {
 		word = l.Next()
