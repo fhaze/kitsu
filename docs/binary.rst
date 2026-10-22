@@ -79,6 +79,31 @@ shell runs it. This is what makes ``kitty @ ls``, ``kitty +kitten ssh`` or
 when you do not want the shell to wait.
 
 
+Command paths on Windows
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+On native Windows, command lines in :file:`kitty.conf` and session ``launch``
+lines keep backslashes in drive-letter and UNC paths. This applies to ``shell``,
+``editor`` (including :envvar:`VISUAL` and :envvar:`EDITOR`), ``command_on_bell``,
+``scrollback_pager``, ``open_url_with`` and mapped ``launch`` actions. Quote each
+path or argument containing spaces; an unquoted space still separates arguments::
+
+    shell "C:\Program Files\PowerShell\7\pwsh.exe" -NoLogo
+    editor "C:\Program Files\Neovim\bin\nvim.exe"
+    map f1 launch --cwd="C:\Users\me\My Project" C:\tools\app.exe
+
+Single quotes also group arguments and keep all enclosed backslashes literal.
+Outside single quotes, backslashes are literal except immediately before a double
+quote: each pair produces one backslash, and an odd remaining backslash escapes
+the quote. For example, write a quoted directory ending in a backslash as
+``"C:\My Project\\"`` or ``'C:\My Project\'``. UNC prefixes such as
+``\\server\share`` are preserved. Forward slashes remain usable. These are
+configuration quoting rules, not PowerShell or cmd.exe syntax; POSIX/WSL builds
+retain their existing shell-style quoting. Native ``kitten run-shell --shell``
+uses the same rules for its shell value (which must first pass through your
+invoking shell's quoting).
+
+
 SSH from Windows
 ^^^^^^^^^^^^^^^^^^^
 

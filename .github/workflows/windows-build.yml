@@ -103,6 +103,11 @@ jobs:
               go test ./tools/tty ./tools/tui/loop ./tools/tui/readline ./kittens/choose_files
               go vet ./tools/tty ./tools/tui/loop ./tools/tui/readline ./kittens/choose_files
 
+          - name: Test Windows command-line splitting and shell resolution
+            run: |
+              go test ./tools/utils/shlex ./tools/tui
+              go vet ./tools/utils/shlex ./tools/tui
+
           - name: Verify Kitsu branding and embedded executable icons
             run: python windows/test_branding.py windows-package/kitsu
 
