@@ -20,7 +20,7 @@ from .options.types import Options
 from .options.utils import resize_window, to_layout_names, window_size
 from .os_window_size import WindowSize, WindowSizeData, WindowSizes
 from .typing_compat import BossType, SpecialWindowInstance, WindowType
-from .utils import expandvars, log_error, resolve_custom_file, resolved_shell, shlex_split
+from .utils import cmdline_split, expandvars, log_error, resolve_custom_file, resolved_shell
 
 if TYPE_CHECKING:
     from .launch import LaunchSpec
@@ -123,7 +123,7 @@ class Session:
         needs_expandvars = False
         if isinstance(cmd, str):
             needs_expandvars = True
-            cmd = list(shlex_split(cmd)) if cmd else []
+            cmd = list(cmdline_split(cmd)) if cmd else []
         serialize_data: dict[str, Any] = {'id': 0, 'cmd_at_shell_startup': ()}
         if cmd and cmd[0].startswith(unserialize_launch_flag):
             serialize_data = json.loads(cmd[0][len(unserialize_launch_flag) :])

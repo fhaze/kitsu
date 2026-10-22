@@ -26,9 +26,10 @@ new_shlex_object(PyTypeObject *type, PyObject *args, PyObject UNUSED *kwds) {
     if (self) {
         const char *src;
         Py_ssize_t sz;
-        int support_ansi_c_quoting;
-        if (!PyArg_ParseTuple(args, "s#|p", &src, &sz, &support_ansi_c_quoting)) return NULL;
+        int support_ansi_c_quoting = 0, windows_quoting = 0;
+        if (!PyArg_ParseTuple(args, "s#|pp", &src, &sz, &support_ansi_c_quoting, &windows_quoting)) return NULL;
         if (!alloc_shlex_state(&self->state, src, sz, support_ansi_c_quoting != 0)) return PyErr_NoMemory();
+        self->state.windows_quoting = windows_quoting != 0;
         self->src = PyTuple_GetItem(args, 0);
         self->data = PyUnicode_DATA(self->src);
         self->kind = PyUnicode_KIND(self->src);
