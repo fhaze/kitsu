@@ -110,6 +110,9 @@ jobs:
               go test ./tools/utils/shlex ./tools/tui
               go vet ./tools/utils/shlex ./tools/tui
 
+          - name: Test ConPTY child UTF-8 code pages and escape payloads
+            run: python windows/test_console_utf8.py windows-package/kitsu
+
           - name: Test Windows config reload IPC and kitten error reporting
             run: |
               go test ./tools/config ./tools/watch ./tools/themes ./kittens/choose_fonts
