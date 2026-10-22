@@ -547,6 +547,8 @@ test_socketpair(void) {
     char buf[8] = {0};
     CHECK(write(fds[1], "pipe", 4) == 4);
     CHECK(read(fds[0], buf, sizeof(buf)) == 4 && memcmp(buf, "pipe", 4) == 0);
+    // Keep the transport fully open: Windows times out half-closed TCP pipes.
+    CHECK(socket_roundtrip((SOCKET)_get_osfhandle(fds[0]), (SOCKET)_get_osfhandle(fds[1])));
     close(fds[0]);
     close(fds[1]);
 }

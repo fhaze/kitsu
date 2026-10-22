@@ -781,9 +781,8 @@ int
 pipe2(int fds[2], int flags) {
     SOCKET s[2];
     if (kitty_win32_socketpair((uintptr_t *)s) != 0) return -1;
-    // pipes are unidirectional
-    shutdown(s[0], SD_SEND);
-    shutdown(s[1], SD_RECEIVE);
+    // Keep both TCP directions open: Windows expires FIN_WAIT_2 connections,
+    // breaking long-lived signal and wakeup pipes even though their fds are open.
     for (int i = 0; i < 2; i++) {
         if (flags & O_NONBLOCK) {
             u_long arg = 1;
