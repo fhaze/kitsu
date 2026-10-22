@@ -65,7 +65,12 @@ report_error(const wchar_t *msg) {
 }
 
 int
-wmain(void) {
+wmain(int argc, wchar_t *argv[]) {
+    if (argc == 2 && wcscmp(argv[1], L"--initialize-console-utf8") == 0) {
+        if (SetConsoleCP(CP_UTF8) && SetConsoleOutputCP(CP_UTF8)) return 0;
+        report_error(L"Failed to initialize console code pages: ");
+        return 1;
+    }
     wchar_t exe[32768];
     DWORD n = GetModuleFileNameW(NULL, exe, sizeof(exe) / sizeof(exe[0]));
     if (n == 0 || n >= sizeof(exe) / sizeof(exe[0])) {

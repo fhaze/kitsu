@@ -572,6 +572,39 @@ is_existing_directory(const wchar_t *path) {
     return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY);
 }
 
+static bool
+initialize_console_utf8(LPPROC_THREAD_ATTRIBUTE_LIST attrs) {
+    // Code pages belong to the pseudoconsole, not the terminal process. Use
+    // the DLL-free console shim to set them without wrapping the real child.
+    wchar_t exe[32768];
+    DWORD n = GetModuleFileNameW(NULL, exe, sizeof(exe) / sizeof(exe[0]));
+    if (!n || n >= sizeof(exe) / sizeof(exe[0])) {
+        errno = ENAMETOOLONG;
+        return false;
+    }
+    wchar_t *sep = wcsrchr(exe, L'\\');
+    const wchar_t name[] = L"kitsu.com";
+    if (!sep || (size_t)(sep + 1 - exe) + sizeof(name) / sizeof(name[0]) > sizeof(exe) / sizeof(exe[0])) {
+        errno = ENAMETOOLONG;
+        return false;
+    }
+    wcscpy(sep + 1, name);
+    wchar_t cmdline[] = L"kitsu.com --initialize-console-utf8";
+    STARTUPINFOEXW si = {.StartupInfo.cb = sizeof(si), .StartupInfo.dwFlags = STARTF_USESTDHANDLES, .lpAttributeList = attrs};
+    PROCESS_INFORMATION pi = {0};
+    if (!CreateProcessW(exe, cmdline, NULL, NULL, FALSE, EXTENDED_STARTUPINFO_PRESENT, NULL, NULL, &si.StartupInfo, &pi)) {
+        set_errno_from_last_error();
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    DWORD code = 1;
+    bool ok = WaitForSingleObject(pi.hProcess, 10000) == WAIT_OBJECT_0 && GetExitCodeProcess(pi.hProcess, &code) && code == 0;
+    if (!ok) TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess);
+    if (!ok) errno = EIO;
+    return ok;
+}
+
 pid_t
 win32_pty_spawn(int master_fd, const char *exe, const char *cwd, char *const argv[], char *const env[], int ready_read_fd, int stdin_read_fd) {
     Win32Pty *pty = pty_for_master_fd(master_fd);
@@ -622,6 +655,7 @@ win32_pty_spawn(int master_fd, const char *exe, const char *cwd, char *const arg
         set_errno_from_last_error();
         goto end;
     }
+    if (!initialize_console_utf8(attrs)) goto end;
     // Restrict inheritance to only the stdin pipe
     if (child_stdin != INVALID_HANDLE_VALUE &&
         !UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &child_stdin, sizeof(child_stdin), NULL, NULL)) {
