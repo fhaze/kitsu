@@ -410,6 +410,8 @@ int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact)
 void kitty_win32_deliver_signal(int sig, pid_t pid, int status);
 bool kitty_win32_start_reload_listener(void);
 void kitty_win32_stop_reload_listener(void);
+bool kitty_win32_monitor_pid(pid_t pid);
+void kitty_win32_clear_monitored_pids(void);
 int kill(pid_t pid, int sig);
 pid_t waitpid(pid_t pid, int *status, int options);
 #define WNOHANG 1
