@@ -22,6 +22,7 @@ PACMAN_PACKAGES="make git ncurses unzip
   mingw-w64-ucrt-x86_64-lcms2 mingw-w64-ucrt-x86_64-xxhash
   mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-zlib
   mingw-w64-ucrt-x86_64-cairo mingw-w64-ucrt-x86_64-fontconfig
+  mingw-w64-ucrt-x86_64-meson mingw-w64-ucrt-x86_64-gperf
   mingw-w64-ucrt-x86_64-mesa mingw-w64-ucrt-x86_64-libsystre"
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }

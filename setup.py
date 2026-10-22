@@ -1562,7 +1562,8 @@ def build_kitten_manifest_resource(args: Options, go: list[str]) -> None:
     else:
         goarch = subprocess.check_output(go + ['env', 'GOARCH']).decode().strip()
     dest = os.path.join('tools', 'cmd', f'kitten_windows_{goarch}.syso')
-    if not newer(dest, *WINDOWS_MANIFEST_SOURCES):
+    resource_src = 'kitty/launcher/windows-icon.rc'
+    if not newer(dest, resource_src, 'logo/kitsu.ico', 'kitty/constants.py', *WINDOWS_MANIFEST_SOURCES, __file__):
         return
     windres = shutil.which('windres')
     if windres is None:
@@ -1570,7 +1571,15 @@ def build_kitten_manifest_resource(args: Options, go: list[str]) -> None:
     cmd = [windres, '--input-format=rc', '--output-format=coff', '--include-dir=.']
     if goarch == 'amd64':
         cmd.append('--target=pe-x86-64')
-    subprocess.check_call(cmd + [WINDOWS_MANIFEST_SOURCES[0], dest])
+    subprocess.check_call(
+        cmd
+        + [
+            f'-DKITTY_FILE_VERSION={",".join(map(str, (*version, 0)))}',
+            f'-DKITTY_VERSION={".".join(map(str, version))}',
+            resource_src,
+            dest,
+        ]
+    )
 
 
 def build_static_kittens(
@@ -1889,6 +1898,10 @@ def bundle_windows_runtime(ddir: str, launcher_dir: str) -> None:
     # Prefer the monospace fonts that ship with Windows over Courier New
     for x in glob.glob(os.path.join(src_base, 'windows', 'fonts', '*.conf')):
         shutil.copy2(x, os.path.join(fonts_conf_dest, 'conf.d'))
+
+    from windows.fontconfig import build as build_fontconfig
+
+    build_fontconfig(Path(launcher_dir))
 
     pydll = f'libpython{sysconfig.get_python_version()}.dll'
     shutil.copy2(os.path.join(mingw_bin, pydll), launcher_dir)
