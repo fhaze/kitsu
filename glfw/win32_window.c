@@ -1622,6 +1622,18 @@ createNativeWindow(_GLFWwindow *window, const _GLFWwndconfig *wndconfig, const _
         frameY = CW_USEDEFAULT;
         frameWidth = rect.right - rect.left;
         frameHeight = rect.bottom - rect.top;
+        if (wndconfig->scaleToMonitor) {
+            const HWND active = GetActiveWindow();
+            POINT cursor;
+            HMONITOR monitor = NULL;
+            if (active) monitor = MonitorFromWindow(active, MONITOR_DEFAULTTONEAREST);
+            else if (GetCursorPos(&cursor)) monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO mi = {sizeof(mi)};
+            if (monitor && GetMonitorInfoW(monitor, &mi)) {
+                frameX = mi.rcWork.left;
+                frameY = mi.rcWork.top;
+            }
+        }
     }
 
     wideTitle = _glfwCreateWideStringFromUTF8Win32(wndconfig->title);
@@ -1670,7 +1682,7 @@ createNativeWindow(_GLFWwindow *window, const _GLFWwndconfig *wndconfig, const _
 
         if (wndconfig->scaleToMonitor) {
             float xscale, yscale;
-            _glfwGetMonitorContentScaleWin32(mh, &xscale, &yscale);
+            _glfwPlatformGetWindowContentScale(window, &xscale, &yscale);
 
             if (xscale > 0.f && yscale > 0.f) {
                 rect.right = (int)(rect.right * xscale);
@@ -1973,6 +1985,13 @@ _glfwPlatformGetWindowFrameSize(_GLFWwindow *window, int *left, int *top, int *r
 
 void
 _glfwPlatformGetWindowContentScale(_GLFWwindow *window, float *xscale, float *yscale) {
+    if (_glfwIsWindows10AnniversaryUpdateOrGreaterWin32()) {
+        const UINT dpi = GetDpiForWindow(window->win32.handle);
+        if (dpi) {
+            *xscale = *yscale = dpi / (float)USER_DEFAULT_SCREEN_DPI;
+            return;
+        }
+    }
     const HANDLE handle = MonitorFromWindow(window->win32.handle, MONITOR_DEFAULTTONEAREST);
     _glfwGetMonitorContentScaleWin32(handle, xscale, yscale);
 }
