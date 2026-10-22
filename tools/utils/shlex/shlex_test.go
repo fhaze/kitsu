@@ -94,6 +94,35 @@ func TestSplit(t *testing.T) {
 
 }
 
+func TestSplitCommandLine(t *testing.T) {
+	for text, expected := range map[string][]string{
+		`C:\tools\app.exe C:\Users\x\a.txt`:                 {`C:\tools\app.exe`, `C:\Users\x\a.txt`},
+		`"C:\Program Files\PowerShell\7\pwsh.exe" -NoLogo`:  {`C:\Program Files\PowerShell\7\pwsh.exe`, "-NoLogo"},
+		`\\server\share\app.exe "\\server\share\two words"`: {`\\server\share\app.exe`, `\\server\share\two words`},
+		`\\?\C:\tools\app.exe C:\`:                          {`\\?\C:\tools\app.exe`, `C:\`},
+		`a "" '' 'C:\with space\' "C:\with space\\"`:        {"a", "", "", `C:\with space\`, `C:\with space\`},
+		`"a\"b" a\\\"b "a\\\\"b`:                            {`a"b`, `a\"b`, `a\\b`},
+		`"C:\日本語\😀.exe"`:                                    {`C:\日本語\😀.exe`},
+	} {
+		got, err := SplitCommandLine(text, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(expected, got); diff != "" {
+			t.Fatalf("SplitCommandLine(%q): %s", text, diff)
+		}
+	}
+	for _, text := range []string{`"unterminated`, `'unterminated`, `"a\"`} {
+		if _, err := SplitCommandLine(text, true); err == nil {
+			t.Fatalf("Expected error for %q", text)
+		}
+	}
+	got, err := SplitCommandLine(`a\ b "c\d"`, false)
+	if diff := cmp.Diff([]string{"a b", "cd"}, got); err != nil || diff != "" {
+		t.Fatalf("POSIX splitting changed: %v %s", err, diff)
+	}
+}
+
 func TestSplitForCompletion(t *testing.T) {
 	test := func(cmdline string, last_arg_pos int, expected ...string) {
 		actual, actual_pos := SplitForCompletion(cmdline)

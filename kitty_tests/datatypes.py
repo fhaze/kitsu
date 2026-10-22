@@ -14,6 +14,7 @@ from kitty.fast_data_types import (
     Color,
     HistoryBuf,
     LineBuf,
+    Shlex,
     abspath,
     char_props_for,
     expand_ansi_c_escapes,
@@ -1063,6 +1064,31 @@ class TestDataTypes(BaseTest):
         }.items():
             actual = expand_ansi_c_escapes(src)
             self.ae(expected, actual)
+
+    def test_windows_command_line_split(self):
+        import shlex
+
+        from kitty.utils import cmdline_split
+
+        for text, expected in (
+            (r'C:\tools\app.exe C:\Users\x\a.txt', [r'C:\tools\app.exe', r'C:\Users\x\a.txt']),
+            (r'"C:\Program Files\PowerShell\7\pwsh.exe" -NoLogo', [r'C:\Program Files\PowerShell\7\pwsh.exe', '-NoLogo']),
+            (r'\\server\share\app.exe "\\server\share\two words"', [r'\\server\share\app.exe', r'\\server\share\two words']),
+            (r'\\?\C:\tools\app.exe' + ' C:\\', [r'\\?\C:\tools\app.exe', 'C:\\']),
+            (r'''a "" '' 'C:\with space\' "C:\with space\\"''', ['a', '', '', 'C:\\with space\\', 'C:\\with space\\']),
+            (r""""a\"b" a\\\"b "a\\\\"b""", ['a"b', 'a\\"b', 'a\\\\b']),
+            ('"C:\\日本語\\😀.exe"', ['C:\\日本語\\😀.exe']),
+        ):
+            with self.subTest(text=text):
+                self.ae(list(Shlex(text, False, True)), expected)
+                with patch('kitty.utils.is_windows', True):
+                    self.ae(list(cmdline_split(text)), expected)
+                    self.ae(list(cmdline_split(shlex.join(expected))), expected)
+        for bad in ('"unterminated', "'unterminated", r'"a\"'):
+            with self.assertRaises(ValueError):
+                list(Shlex(bad, False, True))
+        with patch('kitty.utils.is_windows', False):
+            self.ae(list(cmdline_split(r'a\ b "c\d"')), ['a b', 'cd'])
 
     def test_shlex_split(self):
         for bad in (

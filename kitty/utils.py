@@ -741,7 +741,7 @@ def get_hostname(fallback: str = '') -> str:
 def resolve_editor_cmd(editor: str, shell_env: Mapping[str, str]) -> str | None:
     import shlex
 
-    editor_cmd = list(shlex_split(editor))
+    editor_cmd = list(cmdline_split(editor))
     editor_exe = (editor_cmd or ('',))[0]
     if editor_exe and os.path.isabs(editor_exe):
         return editor
@@ -787,11 +787,11 @@ def get_editor_from_env_vars(opts: Options | None = None) -> list[str]:
     if is_windows:
         candidates = ('edit.exe', 'nvim', 'vim', 'code --wait', 'notepad.exe')
     for ans in (editor, *candidates):
-        if ans and which(next(shlex_split(ans)), only_system=True):
+        if ans and which(next(cmdline_split(ans)), only_system=True):
             break
     else:
         ans = 'notepad.exe' if is_windows else 'vim'
-    return list(shlex_split(ans))
+    return list(cmdline_split(ans))
 
 
 def is_windows_gui_executable(path: str) -> bool:
@@ -818,7 +818,7 @@ def get_editor(opts: Options | None = None, path_to_edit: str = '', line_number:
     if opts.editor == '.':
         ans = get_editor_from_env_vars()
     else:
-        ans = list(shlex_split(opts.editor))
+        ans = list(cmdline_split(opts.editor))
     ans[0] = os.path.expanduser(ans[0])
     if path_to_edit:
         if line_number:
@@ -1016,7 +1016,7 @@ def resolved_shell(opts: Options | None = None) -> list[str]:
         def expand(x: str) -> str:
             return expandvars(x, env)
 
-        ans = list(map(expand, shlex_split(q)))
+        ans = list(map(expand, cmdline_split(q)))
     return ans
 
 
@@ -1579,6 +1579,10 @@ def key_val_matcher(items: Iterable[tuple[str, str]], key_pat: 're.Pattern[str]'
         if key_pat.search(key) is not None and (val_pat is None or val_pat.search(val) is not None):
             return True
     return False
+
+
+def cmdline_split(text: str) -> Iterator[str]:
+    yield from Shlex(text, False, is_windows)
 
 
 def shlex_split(text: str, allow_ansi_quoted_strings: bool = False) -> Iterator[str]:
