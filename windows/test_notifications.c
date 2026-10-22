@@ -1,5 +1,19 @@
 /* Native, non-interactive regression tests. No toasts are displayed. */
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <shellapi.h>
+
+static QUERY_USER_NOTIFICATION_STATE user_state;
+static HRESULT query_result = S_OK;
+HRESULT WINAPI
+test_query_user_notification_state(QUERY_USER_NOTIFICATION_STATE *state) {
+    *state = user_state;
+    return query_result;
+}
+#define SHQueryUserNotificationState test_query_user_notification_state
 #include "../kitty/win32-notifications.c"
+#undef SHQueryUserNotificationState
 #include <assert.h>
 
 void wakeup_main_loop(void) {}
@@ -40,6 +54,71 @@ test_first_notification_settings(void) {
 static void
 python(const char *code) { assert(PyRun_SimpleString(code) == 0); }
 
+static unsigned show_count;
+static HRESULT show_result = S_OK;
+static HRESULT STDMETHODCALLTYPE
+test_show(IToastNotifier *self, IToastNotification *toast) {
+    (void)self;
+    assert(toast);
+    show_count++;
+    return show_result;
+}
+
+static void
+test_notification_delivery(void) {
+    IToastNotifierVtbl vtable = {.Show = test_show, .get_Setting = test_setting};
+    IToastNotifier fake = {&vtable};
+    notifier = &fake;
+    setting_result = S_OK;
+    setting_value = NotificationSetting_Enabled;
+    PyObject *args = Py_BuildValue("(sss)", "73", "Build finished", "Ready");
+    assert(args);
+    const QUERY_USER_NOTIFICATION_STATE states[] = {
+        QUNS_NOT_PRESENT, QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN,
+        QUNS_PRESENTATION_MODE, QUNS_QUIET_TIME, QUNS_ACCEPTS_NOTIFICATIONS, QUNS_APP,
+    };
+    for (unsigned i = 0; i <= sizeof(states) / sizeof(states[0]); i++) {
+        if (i < sizeof(states) / sizeof(states[0])) user_state = states[i];
+        else query_result = E_FAIL;
+        unsigned before = show_count;
+        PyObject *result = win32_send_notification(NULL, args, NULL);
+        assert(result && !PyErr_Occurred());
+        Py_DECREF(result);
+        assert(show_count == before + 1);
+        drain_win32_notification_events();
+        python("assert seen == [('created', '73', '')], seen\nseen.clear()");
+        LiveToast *t = take_toast(L"73");
+        assert(t);
+        release_toast(t);
+    }
+    query_result = S_OK;
+    user_state = QUNS_NOT_PRESENT;
+    for (int i = NotificationSetting_DisabledForApplication; i <= NotificationSetting_DisabledByManifest; i++) {
+        setting_value = (NotificationSetting)i;
+        unsigned before = show_count;
+        PyObject *result = win32_send_notification(NULL, args, NULL);
+        assert(result && !PyErr_Occurred());
+        Py_DECREF(result);
+        assert(show_count == before);
+        drain_win32_notification_events();
+        python("assert seen == [('creation_failed', '73', '')], seen\nseen.clear()");
+        assert(!live_toasts);
+    }
+    setting_value = NotificationSetting_Enabled;
+    show_result = E_FAIL;
+    unsigned before = show_count;
+    PyObject *result = win32_send_notification(NULL, args, NULL);
+    assert(result && !PyErr_Occurred());
+    Py_DECREF(result);
+    assert(show_count == before + 1);
+    drain_win32_notification_events();
+    python("assert seen == [('creation_failed', '73', '')], seen\nseen.clear()");
+    assert(!live_toasts);
+    show_result = S_OK;
+    Py_DECREF(args);
+    notifier = NULL;
+}
+
 static void
 remember_toast(const wchar_t *ident, IToastNotification *toast) {
     LiveToast *t = calloc(1, sizeof(*t));
@@ -67,6 +146,7 @@ main(void) {
     ro_initialized = true;
     python("import threading\nseen = []\ndef cb(*args):\n assert threading.current_thread() is threading.main_thread()\n seen.append(args)\n");
     callback = Py_NewRef(PyDict_GetItemString(PyModule_GetDict(PyImport_AddModule("__main__")), "cb"));
+    test_notification_delivery();
     PyObject *buttons = Py_BuildValue("(ss)", "&Yes", "<No>");
     assert(buttons);
     wchar_t *xml = build_xml(L"42", L"<&\"' title\x01", L"body > end", L"", L"C:\\a b\\icon.png", buttons, true);
@@ -135,6 +215,6 @@ main(void) {
     IToastNotification_Release(toast);
     cleanup_notifications();
     Py_Finalize();
-    puts("Native notification XML, main-thread dispatch, failure ordering, activation routing and close tests passed");
+    puts("Native notification delivery, XML, main-thread dispatch, failure ordering, activation routing and close tests passed");
     return 0;
 }
