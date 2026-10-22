@@ -2,6 +2,7 @@
 # License: GPLv3 Copyright: 2021, Kovid Goyal <kovid at kovidgoyal.net>
 
 import os
+import platform
 import re
 import socket
 import sys
@@ -171,7 +172,7 @@ def compare_opts(opts: KittyOpts, global_shortcuts: dict[str, SingleKey] | None,
 
 class IssueData:
     def __init__(self) -> None:
-        self.uname = os.uname()
+        self.uname = platform.uname()[:5] if is_windows else os.uname()
         self.s, self.n, self.r, self.v, self.m = self.uname
         try:
             self.hostname = self.o = socket.gethostname()
@@ -256,6 +257,8 @@ def format_tty_name(raw: str) -> str:
 
 
 def compositor_name() -> str:
+    if is_windows:
+        return 'Win32'
     ans = 'X11'
     if is_wayland():
         ans = 'Wayland'
@@ -289,6 +292,34 @@ def issue_data() -> str:
     return ''
 
 
+def windows_debug_info(p: Print) -> None:
+    if sys.platform != 'win32':
+        return
+    import winreg
+
+    from .fast_data_types import get_boss, get_os_window_size, glfw_get_monitor_names, glfw_get_monitor_workarea, win32_conpty_provider
+
+    p('Windows version:', ' '.join(platform.win32_ver()))
+    version = sys.getwindowsversion()
+    build = str(version.build)
+    with suppress(OSError), winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft\Windows NT\CurrentVersion') as key:
+        build += f'.{winreg.QueryValueEx(key, "UBR")[0]}'
+    p(f'Windows build: {version.major}.{version.minor}.{build}')
+    p('ConPTY:', win32_conpty_provider())
+    if boss := get_boss():
+        p('Monitors:')
+        for (name, description), workarea in zip(glfw_get_monitor_names(), glfw_get_monitor_workarea()):
+            p(f'  {name} ({description}): work area {workarea}')
+        for os_window_id in boss.os_window_map:
+            if metrics := get_os_window_size(os_window_id):
+                p(
+                    f'Window {os_window_id}: {metrics["width"]}x{metrics["height"]}, '
+                    f'DPI {metrics["xdpi"]}x{metrics["ydpi"]}, scale {metrics["xscale"]}x{metrics["yscale"]}'
+                )
+    else:
+        p('Monitor and DPI information: unavailable (GLFW not initialized)')
+
+
 def debug_config(opts: KittyOpts | None = None, global_shortcuts: dict[str, SingleKey] | None = None) -> str:
     if opts is None:
         from kitty.cli import create_default_opts
@@ -299,7 +330,9 @@ def debug_config(opts: KittyOpts | None = None, global_shortcuts: dict[str, Sing
     out = StringIO()
     p = partial(print, file=out)
     p(version(add_rev=True))
-    p(' '.join(os.uname()))
+    p(' '.join(platform.uname() if is_windows else os.uname()))
+    if is_windows:
+        windows_debug_info(p)
     if is_macos:
         import subprocess
 
@@ -351,6 +384,10 @@ def debug_config(opts: KittyOpts | None = None, global_shortcuts: dict[str, Sing
         ' GLFW_IM_MODULE KITTY_WAYLAND_DETECT_MODIFIERS DISPLAY WAYLAND_DISPLAY USER XCURSOR_SIZE'
     ).split():
         penv(k)
+    if is_windows:
+        for k in ('COMSPEC', 'PATHEXT', 'WSLENV'):
+            penv(k)
+        p('\tKITTY_DCS_CHANNEL'.ljust(36), 'set' if 'KITTY_DCS_CHANNEL' in os.environ else 'not set')
     for k in os.environ:
         if k.startswith('LC_') or k.startswith('XDG_'):
             penv(k)
