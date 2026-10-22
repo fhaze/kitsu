@@ -197,6 +197,9 @@ jobs:
             shell: cmd
             run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','--module','keys']; main()"
 
+          - name: Test Windows Unicode packets without hardware key identities
+            run: python windows/test_unicode_packets.py windows-package/kitsu
+
           - name: Test Windows graphics replies
             shell: cmd
             run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','--module','graphics']; main()"

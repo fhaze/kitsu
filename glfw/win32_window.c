@@ -373,6 +373,18 @@ win32_control_key_state(bool extended) {
 static void
 handle_key_message(_GLFWwindow *window, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     const bool is_release = (HIWORD(lParam) & KF_UP) != 0;
+    if (wParam == VK_PACKET) {
+        // Unicode packets contain text, not hardware scancodes or key identities.
+        if (is_release) return;
+        char text[64];
+        bool is_dead_key;
+        collect_key_text(window, text, sizeof(text), &is_dead_key);
+        if (text[0]) {
+            GLFWkeyevent ev = {.action = GLFW_PRESS, .text = text, .win32_vk = VK_PACKET};
+            _glfwInputKeyboard(window, &ev);
+        }
+        return;
+    }
     const bool extended = (HIWORD(lParam) & KF_EXTENDED) != 0;
     int mods = getKeyMods();
     UINT vk = (UINT)wParam;
@@ -425,7 +437,6 @@ handle_key_message(_GLFWwindow *window, UINT uMsg, WPARAM wParam, LPARAM lParam)
     if (GetKeyboardState(key_state)) {
         int n = ToUnicode(vk, (UINT)scancode, key_state, chars, sizeof(chars) / sizeof(WCHAR), 0x4);
         if (n > 0) ev.win32_char = first_codepoint(chars, n);
-        // VK_PACKET can deliver half a surrogate pair; collect_key_text assembles the full character.
         if (ev.win32_char >= 0xd800 && ev.win32_char <= 0xdfff) ev.win32_char = 0;
     }
     // Keypad keys report a different vk depending on numlock, use the scancode table for them
@@ -468,9 +479,6 @@ handle_key_message(_GLFWwindow *window, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
         ev.text = text;
     }
-
-    // Wait for complete packet text (including surrogate pairs), but keep releases for repeat tracking.
-    if (vk == VK_PACKET && !is_release && !text[0]) return;
 
     if (is_release && (vk == VK_LSHIFT || vk == VK_RSHIFT)) {
         // HACK: Release both Shift keys on Shift up event, as when both
