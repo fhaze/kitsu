@@ -622,9 +622,9 @@ func (self *Theme) SaveInConf(config_dir, reload_in, config_file_name string) (e
 	}
 	switch reload_in {
 	case "parent":
-		config.ReloadConfigInKitty(true)
+		err = config.ReloadConfigInKitty(true)
 	case "all":
-		config.ReloadConfigInKitty(false)
+		err = config.ReloadConfigInKitty(false)
 	}
 	return
 }

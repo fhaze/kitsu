@@ -91,9 +91,12 @@ func (self *final_pane) on_key_event(event *loop.KeyEvent) (err error) {
 		if updated {
 			switch self.handler.opts.Reload_in {
 			case "parent":
-				config.ReloadConfigInKitty(true)
+				err = config.ReloadConfigInKitty(true)
 			case "all":
-				config.ReloadConfigInKitty(false)
+				err = config.ReloadConfigInKitty(false)
+			}
+			if err != nil {
+				return err
 			}
 		}
 		self.lp.Quit(0)

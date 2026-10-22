@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -226,6 +227,15 @@ func watch_for_kitty_config_changes(action func() error, debounce_time time.Dura
 }
 
 func EntryPoint(root *cli.Command) {
+	if runtime.GOOS == "windows" {
+		root.AddSubCommand(&cli.Command{
+			Name:   "__reload_config__",
+			Hidden: true,
+			Run: func(cmd *cli.Command, args []string) (int, error) {
+				return 0, config.ReloadConfigInKitty(false)
+			},
+		})
+	}
 	root.AddSubCommand(&cli.Command{
 		Name:            "__watch_conf__",
 		Hidden:          true,

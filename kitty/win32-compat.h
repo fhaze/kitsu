@@ -371,10 +371,8 @@ int tcgetattr(int fd, struct termios *t);
 int tcsetattr(int fd, int optional_actions, const struct termios *t);
 int kitty_win32_console_raw_mode(int fd, const struct termios *saved, bool read_with_timeout);
 
-// <sys/wait.h> / <signal.h>: signals do not exist on Windows in any
-// meaningful way, these are here only so that the signal handling plumbing
-// compiles. The Windows child monitor never reports any of them and kill()
-// only knows how to terminate processes.
+// <sys/wait.h> / <signal.h>: emulate signal delivery to the child monitor.
+// kill() only knows how to terminate processes.
 union sigval {
     int sival_int;
     void *sival_ptr;
@@ -405,12 +403,13 @@ struct sigaction {
 int sigemptyset(sigset_t *set);
 int sigaddset(sigset_t *set, int signum);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
-// Only SIGINT, SIGTERM and SIGHUP are ever delivered, via the console control
-// handler (Ctrl+C, Ctrl+Break, console close/logoff/shutdown).
+// Console control events deliver SIGINT, SIGTERM and SIGHUP.
 int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 // Invokes the handler installed via sigaction() for sig, used to synthesize
-// SIGCHLD from process wait callbacks
+// SIGCHLD from process wait callbacks and SIGUSR1 from the reload event.
 void kitty_win32_deliver_signal(int sig, pid_t pid, int status);
+bool kitty_win32_start_reload_listener(void);
+void kitty_win32_stop_reload_listener(void);
 int kill(pid_t pid, int sig);
 pid_t waitpid(pid_t pid, int *status, int options);
 #define WNOHANG 1

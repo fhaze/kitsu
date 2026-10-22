@@ -782,9 +782,8 @@ int
 pipe2(int fds[2], int flags) {
     SOCKET s[2];
     if (kitty_win32_socketpair((uintptr_t *)s) != 0) return -1;
-    // pipes are unidirectional
-    shutdown(s[0], SD_SEND);
-    shutdown(s[1], SD_RECEIVE);
+    // Keep both TCP directions open: Windows expires FIN_WAIT_2 connections,
+    // breaking long-lived signal and wakeup pipes even though their fds are open.
     for (int i = 0; i < 2; i++) {
         if (flags & O_NONBLOCK) {
             u_long arg = 1;
@@ -1433,6 +1432,40 @@ sigprocmask(int how UNUSED, const sigset_t *set UNUSED, sigset_t *oldset) {
 
 static struct sigaction console_signal_actions[32];
 static bool console_ctrl_handler_installed = false;
+static HANDLE reload_config_event = NULL, reload_config_wait = NULL;
+
+static void CALLBACK
+reload_config_callback(void *context UNUSED, BOOLEAN timed_out UNUSED) {
+    kitty_win32_deliver_signal(SIGUSR1, (pid_t)GetCurrentProcessId(), 0);
+}
+
+bool
+kitty_win32_start_reload_listener(void) {
+    if (reload_config_event) return true;
+    wchar_t name[64];
+    swprintf(name, 64, L"Local\\kitsu-reload-config-%lu", GetCurrentProcessId());
+    reload_config_event = CreateEventW(NULL, FALSE, FALSE, name);
+    if (!reload_config_event) {
+        set_errno_from_last_error();
+        return false;
+    }
+    if (!RegisterWaitForSingleObject(&reload_config_wait, reload_config_event, reload_config_callback, NULL, INFINITE, WT_EXECUTEDEFAULT)) {
+        set_errno_from_last_error();
+        CloseHandle(reload_config_event);
+        reload_config_event = NULL;
+        return false;
+    }
+    return true;
+}
+
+void
+kitty_win32_stop_reload_listener(void) {
+    // Drain callbacks before the signal pipe is closed.
+    if (reload_config_wait) UnregisterWaitEx(reload_config_wait, INVALID_HANDLE_VALUE);
+    reload_config_wait = NULL;
+    if (reload_config_event) CloseHandle(reload_config_event);
+    reload_config_event = NULL;
+}
 
 void
 kitty_win32_deliver_signal(int sig, pid_t pid, int status) {

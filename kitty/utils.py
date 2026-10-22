@@ -1334,6 +1334,11 @@ def is_kitty_gui_cmdline(*cmd: str) -> bool:
 
 
 def reload_conf_in_all_kitties() -> None:
+    if is_windows:
+        import subprocess
+
+        subprocess.run([kitten_exe(), '__reload_config__'], check=True, **helper_process_popen_kwargs())
+        return
     import signal
 
     from kitty.child import cmdline_of_pid

@@ -547,6 +547,8 @@ test_socketpair(void) {
     char buf[8] = {0};
     CHECK(write(fds[1], "pipe", 4) == 4);
     CHECK(read(fds[0], buf, sizeof(buf)) == 4 && memcmp(buf, "pipe", 4) == 0);
+    // Keep the transport fully open: Windows times out half-closed TCP pipes.
+    CHECK(socket_roundtrip((SOCKET)_get_osfhandle(fds[0]), (SOCKET)_get_osfhandle(fds[1])));
     close(fds[0]);
     close(fds[1]);
 }
@@ -569,6 +571,47 @@ remove_tree(const char *path) {
     wchar_t *w = kitty_win32_wide_path(path);
     if (w) RemoveDirectoryW(w);
     free(w);
+}
+
+static HANDLE reload_received;
+
+static void
+on_reload(int sig, siginfo_t *info, void *context) {
+    (void)context;
+    if (sig == SIGUSR1 && info->si_pid == (pid_t)GetCurrentProcessId()) SetEvent(reload_received);
+}
+
+static void
+test_reload_event(void) {
+    wchar_t name[64];
+    swprintf(name, 64, L"Local\\kitsu-reload-config-%lu", GetCurrentProcessId());
+    reload_received = CreateEventW(NULL, FALSE, FALSE, NULL);
+    CHECK(reload_received != NULL);
+    struct sigaction act = {.sa_sigaction = on_reload, .sa_flags = SA_SIGINFO};
+    CHECK(sigaction(SIGUSR1, &act, NULL) == 0);
+    for (int cycle = 0; cycle < 3; cycle++) {
+        CHECK(kitty_win32_start_reload_listener());
+        CHECK(kitty_win32_start_reload_listener());
+        HANDLE event = OpenEventW(EVENT_MODIFY_STATE, FALSE, name);
+        CHECK(event != NULL);
+        if (event) {
+            for (int i = 0; i < 3; i++) {
+                CHECK(SetEvent(event));
+                CHECK(WaitForSingleObject(reload_received, 5000) == WAIT_OBJECT_0);
+                CHECK(WaitForSingleObject(reload_received, 20) == WAIT_TIMEOUT);
+            }
+            // Stop with a callback potentially in flight, then recreate the listener.
+            CHECK(SetEvent(event));
+            CloseHandle(event);
+        }
+        kitty_win32_stop_reload_listener();
+        kitty_win32_stop_reload_listener();
+        CHECK(OpenEventW(EVENT_MODIFY_STATE, FALSE, name) == NULL && GetLastError() == ERROR_FILE_NOT_FOUND);
+        ResetEvent(reload_received);
+    }
+    act.sa_sigaction = NULL;
+    CHECK(sigaction(SIGUSR1, &act, NULL) == 0);
+    CloseHandle(reload_received);
 }
 
 int
@@ -600,6 +643,7 @@ main(int argc, char **argv) {
     test_crt_argv_rules();
     test_spawn(dir);
     test_socketpair();
+    test_reload_event();
 
     // A directory whose path is longer than MAX_PATH, both in UTF-16 units and
     // bytes of UTF-8. Each component is within the 255 unit limit.
