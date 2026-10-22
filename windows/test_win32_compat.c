@@ -3,7 +3,7 @@
  * built on its own:
  *
  *   gcc -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -Ikitty windows/test_win32_compat.c kitty/win32-compat.c \
- *       -o build/test-win32-compat.exe -lws2_32 -lbcrypt -ladvapi32 -lwtsapi32 -lshell32
+ *       -o build/test-win32-compat.exe -lws2_32 -liphlpapi -lbcrypt -ladvapi32 -lwtsapi32 -lshell32
  *
  * The executable has no application manifest, so the ANSI code page is that
  * of the system and anything still going through the narrow APIs fails for

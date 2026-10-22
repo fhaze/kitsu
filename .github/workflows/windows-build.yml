@@ -126,9 +126,14 @@ jobs:
 
           - name: Test Unicode and long path handling
             run: |
-              gcc -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -Ikitty windows/test_win32_compat.c kitty/win32-compat.c -o build/test-win32-compat.exe -lws2_32 -lbcrypt -ladvapi32 -lwtsapi32 -lshell32
+              gcc -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -Ikitty windows/test_win32_compat.c kitty/win32-compat.c -o build/test-win32-compat.exe -lws2_32 -liphlpapi -lbcrypt -ladvapi32 -lwtsapi32 -lshell32
               ./build/test-win32-compat.exe
               python windows/test_unicode_paths.py windows-package/kitsu
+
+          - name: Test Windows IPC peer ownership
+            run: |
+              gcc -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -Ikitty windows/test_ipc_peers.c -o build/test-ipc-peers.exe -lws2_32 -liphlpapi -lbcrypt -ladvapi32 -lwtsapi32 -lshell32
+              ./build/test-ipc-peers.exe
 
           - name: Test that GLFW leaves the foreground lock timeout alone
             run: python windows/test_foreground_lock.py windows-package/kitsu
