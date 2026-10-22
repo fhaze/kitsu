@@ -1423,6 +1423,15 @@ close_os_window(ChildMonitor *self, OSWindow *os_window) {
         w = os_window->before_fullscreen.w;
         h = os_window->before_fullscreen.h;
     }
+#ifdef _WIN32
+    if (os_window->handle) {
+        double xd, yd;
+        float xs, ys;
+        get_os_window_content_scale(os_window, &xd, &yd, &xs, &ys);
+        w = (int)round(w / xs);
+        h = (int)round(h / ys);
+    }
+#endif
     int x = 0, y = 0;
     if (os_window->handle && !global_state.is_wayland) glfwGetWindowPos(os_window->handle, &x, &y);
     bool is_layer_shell = os_window->is_layer_shell;

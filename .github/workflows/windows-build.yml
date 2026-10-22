@@ -178,6 +178,10 @@ jobs:
             shell: cmd
             run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','win32_input_mode','reset_conpty_modes']; main()"
 
+          - name: Test Windows DIP window sizes
+            shell: cmd
+            run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','--module','glfw']; main()"
+
           - name: Test Windows synthetic key input
             shell: cmd
             run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import os,sys; sys.path.insert(0,os.getcwd()); from kitty_tests.main import main; sys.argv=['test.py','--module','keys']; main()"
