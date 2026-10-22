@@ -13,6 +13,7 @@
 // winsock2.h has its own struct pollfd with a SOCKET fd member
 #define pollfd wsa_pollfd
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #undef pollfd
 #include <windows.h>
 #include <shellapi.h>
@@ -20,6 +21,7 @@
 #include <winioctl.h>
 #include <aclapi.h>
 #include <wtsapi32.h>
+#include <iphlpapi.h>
 #include <bcrypt.h>
 #include <corecrt_startup.h>
 #include <direct.h>
@@ -30,6 +32,7 @@
 #define UNUSED __attribute__((unused))
 
 static void set_errno_from_wsa_error(void);
+static bool token_sid_matches(HANDLE token, TOKEN_INFORMATION_CLASS cls, PSID sid, bool *matches);
 void (*kitty_win32_on_fd_close)(int fd) = NULL;
 
 void
@@ -713,9 +716,103 @@ kitty_win32_peer_credentials_are_available(int fd) {
         // fail closed
         return true;
     }
-    // Windows local sockets have no peer credentials; report AF_UNIX as
-    // verifiable so that the caller denies the peer rather than trusting it
-    return addr.ss_family == AF_UNIX;
+    // No Windows listener may bypass the same-user check.
+    return true;
+}
+
+static DWORD
+tcp_peer_pid(const struct sockaddr_storage *local, const struct sockaddr_storage *peer) {
+    void *table = NULL;
+    DWORD size = 0, result = ERROR_INSUFFICIENT_BUFFER, pid = 0;
+    // The table can grow between calls. Bound retries so churn fails closed.
+    for (unsigned i = 0; i < 4 && result == ERROR_INSUFFICIENT_BUFFER; i++) {
+        result = GetExtendedTcpTable(table, &size, false, peer->ss_family, TCP_TABLE_OWNER_PID_CONNECTIONS, 0);
+        if (result == ERROR_INSUFFICIENT_BUFFER) {
+            free(table);
+            table = malloc(size);
+            if (!table) { errno = ENOMEM; return 0; }
+        }
+    }
+    if (result == NO_ERROR && peer->ss_family == AF_INET) {
+        const struct sockaddr_in *l = (const struct sockaddr_in *)local, *p = (const struct sockaddr_in *)peer;
+        MIB_TCPTABLE_OWNER_PID *t = table;
+        for (DWORD i = 0; i < t->dwNumEntries; i++) {
+            MIB_TCPROW_OWNER_PID *r = t->table + i;
+            if (r->dwLocalAddr == p->sin_addr.s_addr && r->dwLocalPort == p->sin_port &&
+                r->dwRemoteAddr == l->sin_addr.s_addr && r->dwRemotePort == l->sin_port) {
+                pid = r->dwOwningPid;
+                break;
+            }
+        }
+    } else if (result == NO_ERROR && peer->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *l = (const struct sockaddr_in6 *)local, *p = (const struct sockaddr_in6 *)peer;
+        MIB_TCP6TABLE_OWNER_PID *t = table;
+        for (DWORD i = 0; i < t->dwNumEntries; i++) {
+            MIB_TCP6ROW_OWNER_PID *r = t->table + i;
+            if (!memcmp(r->ucLocalAddr, &p->sin6_addr, 16) && r->dwLocalPort == p->sin6_port &&
+                r->dwLocalScopeId == htonl(p->sin6_scope_id) &&
+                !memcmp(r->ucRemoteAddr, &l->sin6_addr, 16) && r->dwRemotePort == l->sin6_port &&
+                r->dwRemoteScopeId == htonl(l->sin6_scope_id)) {
+                pid = r->dwOwningPid;
+                break;
+            }
+        }
+    }
+    free(table);
+    if (!pid) errno = EACCES;
+    return pid;
+}
+
+static void
+normalize_mapped_ipv4(struct sockaddr_storage *addr) {
+    struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)addr;
+    if (addr->ss_family == AF_INET6 && IN6_IS_ADDR_V4MAPPED(&v6->sin6_addr)) {
+        struct sockaddr_in v4 = {.sin_family = AF_INET, .sin_port = v6->sin6_port};
+        memcpy(&v4.sin_addr, &v6->sin6_addr.s6_addr[12], sizeof(v4.sin_addr));
+        memset(addr, 0, sizeof(*addr));
+        memcpy(addr, &v4, sizeof(v4));
+    }
+}
+
+bool
+kitty_win32_peer_is_same_user(int fd) {
+    SOCKET s = (SOCKET)_get_osfhandle(fd);
+    struct sockaddr_storage local = {0}, peer = {0};
+    int llen = sizeof(local), plen = sizeof(peer);
+    if (s == INVALID_SOCKET || getsockname(s, (struct sockaddr *)&local, &llen) == SOCKET_ERROR ||
+        getpeername(s, (struct sockaddr *)&peer, &plen) == SOCKET_ERROR) {
+        errno = ENOTSOCK;
+        return false;
+    }
+    normalize_mapped_ipv4(&local);
+    normalize_mapped_ipv4(&peer);
+    if (local.ss_family != peer.ss_family ||
+        (peer.ss_family == AF_INET && (ntohl(((struct sockaddr_in *)&peer)->sin_addr.s_addr) >> 24) != 127) ||
+        (peer.ss_family == AF_INET6 && !IN6_IS_ADDR_LOOPBACK(&((struct sockaddr_in6 *)&peer)->sin6_addr)) ||
+        (peer.ss_family != AF_INET && peer.ss_family != AF_INET6)) {
+        errno = EACCES;
+        return false;
+    }
+    DWORD pid = tcp_peer_pid(&local, &peer);
+    if (!pid) return false;
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+    if (!process) { set_errno_from_last_error(); return false; }
+    HANDLE ours = NULL, theirs = NULL;
+    bool matches = false;
+    struct { TOKEN_USER user; BYTE sid[SECURITY_MAX_SID_SIZE]; } info;
+    DWORD size = 0;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &ours) || !OpenProcessToken(process, TOKEN_QUERY, &theirs) ||
+        !GetTokenInformation(ours, TokenUser, &info, sizeof(info), &size)) {
+        set_errno_from_last_error();
+    } else if (token_sid_matches(theirs, TokenUser, info.user.User.Sid, &matches) && matches) {
+        // Pin the process and recheck the tuple to rule out PID reuse before OpenProcess().
+        matches = tcp_peer_pid(&local, &peer) == pid;
+    }
+    if (ours) CloseHandle(ours);
+    if (theirs) CloseHandle(theirs);
+    CloseHandle(process);
+    if (!matches) errno = EACCES;
+    return matches;
 }
 
 void (*kitty_win32_socketpair_listening_hook)(unsigned short port) = NULL;
