@@ -194,6 +194,11 @@ bool win32_exe_path(char *buf, size_t buf_sz);
 // Re-runs the current executable with the specified argv as a detached process
 // (no console, own process group), returns false on failure.
 bool win32_spawn_detached(char *const argv[]);
+char *win32_default_log_path(void);
+void win32_setup_gui_logging(void);
+bool win32_redirect_log(const char *path, bool stdout_too);
+void win32_debug_log(const char *message);
+void win32_report_fatal_error(void);
 // Runs exe with argv[1:] as a child sharing this process' console and std
 // handles, waits for it and returns its exit code, or -1 with errno set.
 int win32_spawn_and_wait(const char *exe, char *const argv[]);
