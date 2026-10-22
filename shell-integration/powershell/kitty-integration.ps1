@@ -13,6 +13,7 @@ $Global:__KittyShellIntegration = @{
     Mark = $options -notcontains 'no-prompt-mark'
     ReportCwd = $options -notcontains 'no-cwd'
     SetTitle = $options -notcontains 'no-title'
+    ChangeCursor = ([Environment]::OSVersion.Platform -eq 'Win32NT') -and ($options -notcontains 'no-cursor')
 }
 
 function Global:__Kitty-Sanitize-Title([string]$value) {
@@ -57,6 +58,9 @@ function Global:Prompt {
     if ($Global:__KittyShellIntegration.Mark) {
         $result += "$escape]133;B`a"
     }
+    if ($Global:__KittyShellIntegration.ChangeCursor) {
+        $result += "$escape[5 q"
+    }
     $Global:__KittyShellIntegration.LastHistoryId = $history.Id
     return $result
 }
@@ -68,6 +72,9 @@ if (Get-Module -Name PSReadLine) {
         $Global:__KittyShellIntegration.IsInExecution = $true
         $result = ''
         $escape = $Global:__KittyShellIntegration.Escape
+        if ($Global:__KittyShellIntegration.ChangeCursor) {
+            $result += "$escape[0 q"
+        }
         if ($Global:__KittyShellIntegration.SetTitle -and -not [string]::IsNullOrWhiteSpace($commandLine)) {
             $result += "$escape]2;$(__Kitty-Sanitize-Title $commandLine)`a"
         }
