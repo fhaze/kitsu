@@ -80,11 +80,15 @@
 #define KITTY_PRINTF_FORMAT printf
 #endif
 void log_error(const char *fmt, ...) __attribute__((format(KITTY_PRINTF_FORMAT, 1, 2)));
+#ifdef _WIN32
+#define fatal(...) { log_error(__VA_ARGS__); win32_report_fatal_error(); exit(EXIT_FAILURE); }
+#else
 #define fatal(...)              \
     {                           \
         log_error(__VA_ARGS__); \
         exit(EXIT_FAILURE);     \
     }
+#endif
 static inline void
 cleanup_free(void *p) {
     free(*(void **)p);

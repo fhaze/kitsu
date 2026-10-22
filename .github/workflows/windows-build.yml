@@ -109,6 +109,9 @@ jobs:
           - name: Test DLL-free PATH launchers
             run: python windows/test_path_launchers.py windows-package/kitsu -v
 
+          - name: Test GUI logging and detached logs
+            run: python windows/test_logging.py windows-package/kitsu -v
+
           - name: Test Unicode and long path handling
             run: |
               gcc -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -Ikitty windows/test_win32_compat.c kitty/win32-compat.c -o build/test-win32-compat.exe -lws2_32 -lbcrypt -ladvapi32 -lwtsapi32 -lshell32

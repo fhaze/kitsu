@@ -362,6 +362,8 @@ def encode_key_for_tty(
 def log_error_string(s: str) -> None:
     pass
 
+def windows_log_path() -> str: ...
+
 def glfw_get_key_name(key: int, native_key: int) -> Optional[str]:
     pass
 
