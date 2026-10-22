@@ -13,8 +13,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from ctypes import wintypes
 from pathlib import Path
+from typing import Generator
 
 PACKAGE = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 else Path('windows-package/kitsu').resolve()
 SOURCE = Path(__file__).resolve().parents[1]
@@ -49,6 +51,35 @@ def junction(link: Path, target: Path) -> None:
 
 def same_path(a: str, b: str | Path) -> bool:
     return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(str(b)))
+
+
+@contextmanager
+def legacy_launcher() -> Generator[Path, None, None]:
+    # Disable only activeCodePage in a disposable copy, as on Windows 10 1809.
+    with tempfile.NamedTemporaryFile(dir=PACKAGE / 'bin', prefix='legacy-', suffix='.exe', delete=False) as f:
+        exe = Path(f.name)
+    try:
+        shutil.copy2(PACKAGE / 'bin/kitsu.exe', exe)
+        manifest = (SOURCE / 'kitty/launcher/windows-app.manifest').read_bytes()
+        start, end = manifest.index(b'    <activeCodePage'), manifest.index(b'</activeCodePage>') + len(b'</activeCodePage>')
+        manifest = manifest[:start] + manifest[end:]
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.BeginUpdateResourceW.argtypes = (wintypes.LPCWSTR, wintypes.BOOL)
+        kernel.BeginUpdateResourceW.restype = wintypes.HANDLE
+        kernel.UpdateResourceW.argtypes = (wintypes.HANDLE, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.WORD, ctypes.c_void_p, wintypes.DWORD)
+        kernel.EndUpdateResourceW.argtypes = (wintypes.HANDLE, wintypes.BOOL)
+        handle = kernel.BeginUpdateResourceW(str(exe), False)
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        success = kernel.UpdateResourceW(handle, ctypes.cast(24, wintypes.LPCWSTR), ctypes.cast(1, wintypes.LPCWSTR), 0x409, manifest, len(manifest))
+        error = ctypes.get_last_error()
+        if not kernel.EndUpdateResourceW(handle, not success):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not success:
+            raise ctypes.WinError(error)
+        yield exe
+    finally:
+        exe.unlink()
 
 
 class TempDir(unittest.TestCase):
@@ -168,25 +199,70 @@ print(json.dumps({
 
 @unittest.skipUnless(sys.platform == 'win32', 'Windows executables')
 class TestFonts(TempDir):
-    def test_font_from_non_ascii_path(self) -> None:
-        font_dir = self.tmp / UNICODE_NAME
-        font_dir.mkdir()
+    def check_font(self, font_dir: Path, exe: Path | None = None) -> None:
+        storage = '\\\\?\\' + native(font_dir)
+        os.makedirs(storage)
         font = font_dir / f'フォント {UNICODE_NAME}.ttf'
-        shutil.copy2(SOURCE / 'kitty_tests/LiberationMono-Regular.ttf', font)
-        code = '''
-import json, os, sys
+        shutil.copy2(SOURCE / 'kitty_tests/LiberationMono-Regular.ttf', storage + '\\' + font.name)
+        code = """
+import ctypes, json, os, sys
 from kitty.fast_data_types import Face, add_font_file, fc_list
+from xml.sax.saxutils import escape
 path = sys.argv[1]
 added = add_font_file(path)
 norm = lambda p: os.path.normcase(os.path.normpath(p))
 descriptors = [d for d in fc_list() if norm(d['path']) == norm(path)]
+fc = ctypes.CDLL('libfontconfig-1.dll')
+for name, result, args in (
+    ('FcConfigCreate', ctypes.c_void_p, []),
+    ('FcConfigParseAndLoad', ctypes.c_int, [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]),
+    ('FcConfigBuildFonts', ctypes.c_int, [ctypes.c_void_p]),
+    ('FcConfigGetFonts', ctypes.c_void_p, [ctypes.c_void_p, ctypes.c_int]),
+    ('FcConfigDestroy', None, [ctypes.c_void_p]),
+):
+    fn = getattr(fc, name)
+    fn.restype, fn.argtypes = result, args
+config_path = sys.argv[2]
+with open(config_path, 'w', encoding='utf-8') as f:
+    f.write('<fontconfig><dir>' + escape(os.path.dirname(path)) + '</dir><cachedir>' + escape(sys.argv[3]) + '</cachedir></fontconfig>')
+config = fc.FcConfigCreate()
+if not config:
+    raise RuntimeError('FcConfigCreate failed')
+try:
+    if not fc.FcConfigParseAndLoad(config, config_path.encode('utf-8'), True) or not fc.FcConfigBuildFonts(config):
+        raise RuntimeError('Fontconfig directory scan failed')
+    fonts = fc.FcConfigGetFonts(config, 0)
+    count = ctypes.cast(fonts, ctypes.POINTER(ctypes.c_int))[0] if fonts else 0
+finally:
+    fc.FcConfigDestroy(config)
 print(json.dumps({
     'by_path': Face(path=path).postscript_name(), 'added': added, 'listed': len(descriptors),
     'by_descriptor': Face(descriptor=descriptors[0]).postscript_name() if descriptors else '',
+    'scanned': count,
 }))
-'''
-        result = run_python(code, str(font))
-        self.assertEqual(result, {'by_path': 'LiberationMono', 'added': True, 'listed': 1, 'by_descriptor': 'LiberationMono'})
+"""
+        result = run_python(code, str(font), str(self.tmp / f'{UNICODE_NAME}.conf'), str(self.tmp / f'cache {UNICODE_NAME}'), exe=exe)
+        self.assertEqual(result, {'by_path': 'LiberationMono', 'added': True, 'listed': 1, 'by_descriptor': 'LiberationMono', 'scanned': 1})
+
+    def test_font_from_non_ascii_path(self) -> None:
+        self.check_font(self.tmp / UNICODE_NAME)
+
+    def test_font_from_long_path(self) -> None:
+        font_dir = self.tmp.joinpath(*[f'{UNICODE_NAME} long font directory'] * 9)
+        self.assertGreater(len(native(font_dir)), 260)
+        self.check_font(font_dir)
+
+    def test_fonts_without_utf8_manifest(self) -> None:
+        if ctypes.windll.kernel32.GetACP() == 65001:
+            self.skipTest('Requires a non-UTF-8 system ANSI code page')
+        with legacy_launcher() as exe:
+            install = self.tmp / f'install {UNICODE_NAME}'
+            junction(install, PACKAGE)
+            exe = install / 'bin' / exe.name
+            acp = run_python('import ctypes, json; print(json.dumps(ctypes.windll.kernel32.GetACP()))', exe=exe)
+            self.assertNotEqual(acp, 65001)
+            self.check_font(self.tmp / UNICODE_NAME, exe)
+            self.check_font(self.tmp.joinpath(*[f'{UNICODE_NAME} long font directory'] * 9), exe)
 
 
 @unittest.skipUnless(sys.platform == 'win32', 'Windows executables')

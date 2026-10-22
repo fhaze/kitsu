@@ -1,4 +1,4 @@
 // The application manifest (RT_MANIFEST, CREATEPROCESS_MANIFEST_RESOURCE_ID).
 // The linker drops the default MinGW-w64 manifest when one is present.
-// Included by windows-icon.rc and built on its own for kitten.exe.
+// Included by windows-icon.rc for the launchers and kitten.exe.
 1 24 "kitty/launcher/windows-app.manifest"
