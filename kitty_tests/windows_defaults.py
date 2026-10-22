@@ -2,6 +2,7 @@
 # License: GPL v3 Copyright: 2026, Kitsu contributors
 
 import os
+import re
 import subprocess
 import unittest
 from types import SimpleNamespace
@@ -25,6 +26,72 @@ from .base import BaseTest
 
 @unittest.skipUnless(is_windows, 'Native Windows defaults')
 class WindowsDefaultsTest(BaseTest):
+    def test_windows_debug_config(self):
+        from kitty.debug_config import IssueData, compositor_name, debug_config
+
+        env = {'COMSPEC': r'C:\Windows\System32\cmd.exe', 'PATHEXT': '.COM;.EXE;.BAT', 'WSLENV': 'TERM', 'SHELL': 'pwsh.exe'}
+        with (
+            patch.object(os, 'uname', create=True, side_effect=AttributeError('os.uname is unavailable on Windows')),
+            patch.dict(os.environ, env),
+            patch('kitty.debug_config.current_fonts', return_value={}),
+            patch('kitty.debug_config.glfw_get_system_color_theme', return_value='light'),
+            patch('kitty.fast_data_types.get_boss', return_value=None),
+        ):
+            self.ae(IssueData().s, 'Windows')
+            self.ae(compositor_name(), 'Win32')
+            for channel in (None, 'private-channel-address-and-token'):
+                with self.subTest(channel=channel), patch.dict(os.environ):
+                    os.environ.pop('KITTY_DCS_CHANNEL', None)
+                    if channel is not None:
+                        os.environ['KITTY_DCS_CHANNEL'] = channel
+                    report = re.sub(r'\x1b\[[0-9;]*m', '', debug_config())
+                    self.assertIn('Running under: Win32', report)
+                    self.assertNotIn('X11', report)
+                    self.assertIn('Windows version:', report)
+                    self.assertRegex(report, r'Windows build: \d+\.\d+\.\d+\.\d+')
+                    self.assertIn('ConPTY:', report)
+                    self.assertIn('GUI log:', report)
+                    self.assertIn('GLFW not initialized', report)
+                    for name, value in env.items():
+                        self.assertRegex(report, re.escape(name) + r'\s+' + re.escape(value))
+                    self.assertRegex(report, r'KITTY_DCS_CHANNEL\s+' + ('not set' if channel is None else 'set'))
+                    self.assertNotIn('private-channel-address-and-token', report)
+
+    def test_windows_debug_info(self):
+        from kitty.debug_config import windows_debug_info
+
+        metrics = {'width': 800, 'height': 600, 'xdpi': 144.0, 'ydpi': 144.0, 'xscale': 1.5, 'yscale': 1.5}
+        with (
+            patch('winreg.OpenKey', side_effect=PermissionError('registry unavailable')),
+            patch('kitty.fast_data_types.get_boss', return_value=SimpleNamespace(os_window_map={1: None})),
+            patch('kitty.fast_data_types.get_os_window_size', return_value=metrics),
+            patch('kitty.fast_data_types.glfw_get_monitor_names', return_value=((r'\\.\DISPLAY1', 'Test monitor'),)),
+            patch('kitty.fast_data_types.glfw_get_monitor_workarea', return_value=((0, 0, 1920, 1080),)),
+        ):
+            for provider in ('system', 'bundled'):
+                with self.subTest(provider=provider), patch('kitty.fast_data_types.win32_conpty_provider', return_value=provider):
+                    lines = []
+                    windows_debug_info(lambda *args: lines.append(' '.join(map(str, args))))
+                    report = '\n'.join(lines)
+                    self.assertRegex(report, r'Windows build: \d+\.\d+\.\d+\n')
+                    self.assertIn(f'ConPTY: {provider}', report)
+                    self.assertIn(r'\\.\DISPLAY1 (Test monitor): work area (0, 0, 1920, 1080)', report)
+                    self.assertIn('Window 1: 800x600, DPI 144.0x144.0, scale 1.5x1.5', report)
+
+    def test_windows_query_os_name(self):
+        from kitty.terminfo import get_capabilities
+
+        from .base import parse_bytes
+
+        names = ('query-os-name', 'query-os_name', 'TN')
+        query = ';'.join(name.encode().hex() for name in names)
+        expected = [f'1+r{name.encode().hex()}={value.encode().hex()}' for name, value in zip(names, ('Windows', 'Windows', defaults.term))]
+        with patch.object(os, 'uname', create=True, side_effect=AttributeError('os.uname is unavailable on Windows')):
+            self.ae(list(get_capabilities(query, defaults)), expected)
+            screen = self.create_screen()
+            parse_bytes(screen, f'\x1bP+q{query}\x1b\\'.encode())
+            self.ae(screen.callbacks.wtcbuf, ''.join(expected).encode())
+
     def test_windows_reload_all(self):
         with patch('kitty.utils.kitten_exe', return_value='kitten.exe'), patch('subprocess.run') as run:
             reload_conf_in_all_kitties()
