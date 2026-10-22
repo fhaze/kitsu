@@ -10,7 +10,15 @@ from unittest.mock import Mock, patch
 from kitty.boss import Boss
 from kitty.constants import is_windows, kitty_exe
 from kitty.options.types import defaults
-from kitty.utils import cmdline_for_hold, cmdline_split, get_editor, get_editor_from_env_vars, is_windows_gui_executable, reload_conf_in_all_kitties, resolved_shell
+from kitty.utils import (
+    cmdline_for_hold,
+    cmdline_split,
+    get_editor,
+    get_editor_from_env_vars,
+    is_windows_gui_executable,
+    reload_conf_in_all_kitties,
+    resolved_shell,
+)
 
 from .base import BaseTest
 
