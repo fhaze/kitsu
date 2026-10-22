@@ -320,10 +320,10 @@ ssize_t kitty_win32_read(int fd, void *buf, size_t count);
 ssize_t kitty_win32_write(int fd, const void *buf, size_t count);
 int kitty_win32_close(int fd);
 // Whether connections to this listening socket should be peer-verified.
-// Windows local sockets have no peer credentials, but AF_UNIX sockets are
-// reported as verifiable so that callers fail closed (deny the peer)
-// rather than silently trusting it
+// All Windows listeners require verification; unsupported transports fail closed.
 bool kitty_win32_peer_credentials_are_available(int fd);
+// Checks the connecting loopback TCP process's TokenUser SID, not a POSIX uid.
+bool kitty_win32_peer_is_same_user(int fd);
 // open() honoring O_DIRECTORY, O_NOFOLLOW and, for symlinks, O_CREAT | O_EXCL
 int kitty_win32_open(const char *path, int flags, ...);
 #ifndef KITTY_WIN32_COMPAT_IMPL

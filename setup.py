@@ -824,7 +824,10 @@ def kitty_env(args: Options) -> Env:
         cflags.extend(pkg_config('cairo-ft', '--cflags-only-I'))
         platform_libs = pkg_config('cairo-ft', '--libs')
         platform_libs.extend(
-            '-lws2_32 -lbcrypt -lgdi32 -luser32 -lshell32 -ladvapi32 -lshlwapi -lole32 -luuid -ldwrite -lpsapi -lwtsapi32 -lsystre -lruntimeobject'.split()
+            (
+                '-lws2_32 -liphlpapi -lbcrypt -lgdi32 -luser32 -lshell32 -ladvapi32 -lshlwapi -lole32 -luuid '
+                '-ldwrite -lpsapi -lwtsapi32 -lsystre -lruntimeobject'
+            ).split()
         )
     else:
         cflags.extend(pkg_config('cairo-fc', '--cflags-only-I'))
@@ -1805,7 +1808,7 @@ def build_launcher(args: Options, launcher_dir: str = '.', bundle_type: str = 's
     link_targets.append(os.path.abspath(dest))
     desc = f'Linking {emphasis("launcher")} ...'
     if is_windows:
-        libs += ['-lws2_32', '-lshlwapi', '-lbcrypt', '-ladvapi32', '-lwtsapi32', '-lshell32']
+        libs += ['-lws2_32', '-liphlpapi', '-lshlwapi', '-lbcrypt', '-ladvapi32', '-lwtsapi32', '-lshell32']
         # GUI subsystem, otherwise Windows opens a console host (conhost or
         # Windows Terminal) for kitty.exe when it is not started from a shell
         ldflags.append('-mwindows')

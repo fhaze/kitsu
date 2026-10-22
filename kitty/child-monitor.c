@@ -2076,6 +2076,14 @@ accept_peer(int listen_fd, bool shutting_down, bool is_remote_control_peer, bool
         return false;
     }
     if (verify_peer_uid) {
+#ifdef _WIN32
+        if (!kitty_win32_peer_is_same_user(peer)) {
+            log_error("Denying access to peer because its Windows user could not be verified: %s", strerror(errno));
+            shutdown(peer, SHUT_RDWR);
+            safe_close(peer, __FILE__, __LINE__);
+            return true;
+        }
+#else
         uid_t peer_uid;
         gid_t peer_gid;
         if (!get_peer_credentials(peer, &peer_uid, &peer_gid)) {
@@ -2090,6 +2098,7 @@ accept_peer(int listen_fd, bool shutting_down, bool is_remote_control_peer, bool
             safe_close(peer, __FILE__, __LINE__);
             return true;
         }
+#endif
     }
     add_peer(peer, is_remote_control_peer);
     return true;

@@ -34,7 +34,7 @@ def patch(source: Path) -> None:
         source / 'meson.build',
         'c_args = []',
         "c_args = []\nadd_project_arguments('-D_FILE_OFFSET_BITS=64', language: 'c')\n"
-        "add_project_link_arguments('-lws2_32', '-lbcrypt', '-ladvapi32', '-lwtsapi32', '-lshell32', language: 'c')",
+        "add_project_link_arguments('-lws2_32', '-liphlpapi', '-lbcrypt', '-ladvapi32', '-lwtsapi32', '-lshell32', language: 'c')",
     )
     # FcStat's Win32 implementation has MAX_PATH buffers and ANSI APIs.
     stat = src / 'fcstat.c'

@@ -48,6 +48,6 @@ fontconfig rely on. Tests, run against a built package:
 
 ```sh
 gcc -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -Ikitty windows/test_win32_compat.c kitty/win32-compat.c \
-    -o build/test-win32-compat.exe -lws2_32 -lbcrypt -ladvapi32 -lwtsapi32 -lshell32 && ./build/test-win32-compat.exe
+    -o build/test-win32-compat.exe -lws2_32 -liphlpapi -lbcrypt -ladvapi32 -lwtsapi32 -lshell32 && ./build/test-win32-compat.exe
 python windows/test_unicode_paths.py windows-package/kitsu
 ```
