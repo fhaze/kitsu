@@ -4,9 +4,8 @@
   MinGW-w64 manifest, whose trustInfo and supportedOS entries it keeps.
 
   activeCodePage makes UTF-8 the ANSI code page of the process (Windows 10
-  1903 and newer), so that the narrow APIs used by third party libraries such
-  as fontconfig and FreeType handle all of Unicode. kitty's own code uses the
-  wide APIs and so does not depend on it.
+  1903 and newer), as a safety net for third party libraries. kitty's path
+  APIs and the bundled fontconfig use wide APIs and do not depend on it.
 
   longPathAware lets paths exceed MAX_PATH without the \\?\ prefix when long
   paths are enabled system wide.

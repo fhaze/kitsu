@@ -73,6 +73,25 @@ def runtime_components(package: Path, msys_root: Path, package_prefix: str) -> l
         )
     if not any(component['name'] == 'python' for component in components):
         raise ValueError('The packaged MSYS2 Python runtime was not identified')
+    fontconfig_info = package / 'bin/fontconfig-build.json'
+    if fontconfig_info.is_file():
+        info = json.loads(fontconfig_info.read_text(encoding='utf-8'))
+        dll = package / 'bin/libfontconfig-1.dll'
+        if digest(dll).hex() != info['dll_sha256']:
+            raise ValueError('The source-built fontconfig DLL does not match its build metadata')
+        components.append(
+            {
+                'type': 'library',
+                'bom-ref': 'fontconfig-source',
+                'name': 'fontconfig',
+                'version': info['version'],
+                'purl': f'pkg:generic/fontconfig@{quote(info["version"], safe="")}',
+                'properties': [
+                    {'name': 'kitty:packaged-file', 'value': 'bin/libfontconfig-1.dll'},
+                    {'name': 'kitty:source-sha256', 'value': info['source_sha256']},
+                ],
+            }
+        )
     return components
 
 
