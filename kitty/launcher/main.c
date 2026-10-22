@@ -221,6 +221,10 @@ fail:
     PyConfig_Clear(&config);
     if (PyStatus_IsExit(status)) return status.exitcode;
     single_instance_main(-1, NULL, NULL);
+#ifdef _WIN32
+    fprintf(stderr, "Fatal Python initialization error: %s\n", status.err_msg ? status.err_msg : "unknown error");
+    win32_report_fatal_error();
+#endif
     Py_ExitStatusException(status);
 }
 
@@ -472,6 +476,12 @@ handle_fast_commandline(CLISpec *cli_spec, const char *instance_group_prefix) {
     const char *ekfd = getenv("KITTY_EXEC_FOR_DETACH");
     bool is_exec_for_detach = ekfd && strcmp(ekfd, "detached") == 0;
     if (is_exec_for_detach) unsetenv("KITTY_EXEC_FOR_DETACH");
+    const char *detached_log = get_string_cli_val(cli_spec, "detached_log");
+    if (is_exec_for_detach && detached_log && detached_log[0] && !win32_redirect_log(detached_log, true)) {
+        fprintf(stderr, "Failed to redirect detached log to %s: %s\n", detached_log, strerror(errno));
+        win32_report_fatal_error();
+        exit(1);
+    }
 #else
     bool is_exec_for_detach = false;
 #endif
@@ -620,8 +630,13 @@ output_test_data(RunData *rd) {
     output_for_testing(rd->cli_spec);
 }
 
+#ifdef _WIN32
+static int
+kitty_main(int argc_, char *argv_[], char *envp[]) {
+#else
 int
 main(int argc_, char *argv_[], char *envp[]) {
+#endif
 #ifdef _WIN32
     // The C runtime's argv is in the ANSI code page, which cannot represent
     // most of Unicode, while everything here and Python expect UTF-8, so
@@ -648,6 +663,9 @@ main(int argc_, char *argv_[], char *envp[]) {
 #endif
     }
     if (!ensure_working_stdio()) return 1;
+#ifdef _WIN32
+    win32_setup_gui_logging();
+#endif
     char exe[PATH_MAX + 1] = {0};
     if (!read_exe_path(exe, sizeof(exe))) return 1;
     char exe_dir_buf[PATH_MAX + 1] = {0};
@@ -721,3 +739,12 @@ main(int argc_, char *argv_[], char *envp[]) {
     if (!being_tested) Py_FinalizeEx();
     return ret;
 }
+
+#ifdef _WIN32
+int
+main(int argc, char *argv[], char *envp[]) {
+    int ret = kitty_main(argc, argv, envp);
+    if (ret) win32_report_fatal_error();
+    return ret;
+}
+#endif

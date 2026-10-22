@@ -251,6 +251,7 @@ QUICK = (
     Probe('runtime.conpty', False),
     Probe('installation.path', False, remediation='Use the matching Kitsu bin directory first in PATH; do not mix versions.'),
     Probe('installation.kind', False),
+    Probe('installation.logging', False),
     Probe('installation.environment', False, remediation='Use a Windows shell with .COM and .EXE in PATHEXT to run native console helpers.'),
     Probe('configuration.parse', False, remediation='Fix configuration errors; generated includes are deliberately not executed.'),
 )
@@ -393,6 +394,11 @@ def quick_probe(probe_id: str) -> tuple[str, str, dict[str, Any]]:
             'bin_writable': os.access(bindir, os.W_OK),
             'windows': platform.version(),
         }
+    elif probe_id == 'installation.logging':
+        from kitty.fast_data_types import windows_log_path
+
+        path = windows_log_path()
+        evidence = {'gui_log': path, 'exists': Path(path).is_file(), 'rotation': 'At startup, at 1 MiB; one .1 backup.'}
     elif probe_id == 'installation.environment':
         extensions = os.environ.get('PATHEXT', '').upper().split(';')
         evidence = {'pathext_com': '.COM' in extensions, 'pathext_exe': '.EXE' in extensions}

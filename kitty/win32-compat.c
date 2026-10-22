@@ -16,6 +16,7 @@
 #undef pollfd
 #include <windows.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <winioctl.h>
 #include <aclapi.h>
 #include <wtsapi32.h>
@@ -2398,6 +2399,130 @@ win32_attach_parent_console(void) {
     if (!inherited[1]) freopen("CONOUT$", "w", stdout);
     if (!inherited[2]) freopen("CONOUT$", "w", stderr);
     return true;
+}
+// }}}
+
+// GUI diagnostics {{{
+char *
+win32_default_log_path(void) {
+    const char *local = kitty_win32_getenv("LOCALAPPDATA");
+    wchar_t folder[MAX_PATH];
+    wchar_t *base = local && local[0] ? kitty_win32_utf8_to_wide(local) : NULL;
+    if (!base && SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, SHGFP_TYPE_CURRENT, folder))) base = _wcsdup(folder);
+    wchar_t *path = base ? join_wide(base, L"\\Kitsu\\logs\\kitsu.log", NULL) : NULL;
+    char *ans = path ? kitty_win32_wide_to_utf8(path) : NULL;
+    free(base);
+    free(path);
+    return ans;
+}
+
+static HANDLE
+stderr_handle(void) {
+    int fd = fileno(stderr);
+    return fd < 0 ? INVALID_HANDLE_VALUE : (HANDLE)_get_osfhandle(fd);
+}
+
+static bool
+invisible_stderr(void) {
+    HANDLE h = stderr_handle();
+    DWORD mode;
+    if (h == INVALID_HANDLE_VALUE || !h) return true;
+    DWORD type = GetFileType(h);
+    return type != FILE_TYPE_DISK && type != FILE_TYPE_PIPE && !GetConsoleMode(h, &mode);
+}
+
+bool
+win32_redirect_log(const char *path, bool stdout_too) {
+    FILE *file = kitty_win32_fopen(path, "ab");
+    if (!file) return false;
+    // With no inherited handles freopen(NUL) can allocate fds above 2. Keep
+    // both the CRT streams and raw writes to the standard descriptors working.
+    bool ok = _dup2(fileno(file), fileno(stderr)) == 0 && _dup2(fileno(stderr), 2) == 0;
+    fclose(file);
+    if (ok) {
+        setvbuf(stderr, NULL, _IONBF, 0);
+        SetStdHandle(STD_ERROR_HANDLE, stderr_handle());
+        if (stdout_too) {
+            ok = _dup2(fileno(stderr), fileno(stdout)) == 0 && _dup2(fileno(stdout), 1) == 0;
+            if (ok) {
+                setvbuf(stdout, NULL, _IONBF, 0);
+                SetStdHandle(STD_OUTPUT_HANDLE, (HANDLE)_get_osfhandle(fileno(stdout)));
+            }
+        }
+    }
+    return ok;
+}
+
+void
+win32_setup_gui_logging(void) {
+    if (!invisible_stderr()) return;
+    char *path = win32_default_log_path();
+    wchar_t *wpath = path ? kitty_win32_wide_path(path) : NULL;
+    if (wpath) {
+        wchar_t *sep = wcsrchr(wpath, L'\\');
+        if (sep) {
+            *sep = 0;
+            wchar_t *parent = wcsrchr(wpath, L'\\');
+            if (parent) {
+                *parent = 0;
+                CreateDirectoryW(wpath, NULL);
+                *parent = L'\\';
+            }
+            CreateDirectoryW(wpath, NULL);
+            *sep = L'\\';
+        }
+        // Rotate at startup, keeping one previous log. An open log in another
+        // instance may prevent rotation; never discard it in that case.
+        WIN32_FILE_ATTRIBUTE_DATA info;
+        if (GetFileAttributesExW(wpath, GetFileExInfoStandard, &info) && (info.nFileSizeHigh || info.nFileSizeLow >= 1024 * 1024)) {
+            wchar_t *old = join_wide(wpath, L".1", NULL);
+            if (old) MoveFileExW(wpath, old, MOVEFILE_REPLACE_EXISTING);
+            free(old);
+        }
+        win32_redirect_log(path, false);
+    }
+    free(wpath);
+    free(path);
+}
+
+void
+win32_debug_log(const char *message) {
+    wchar_t *wide = kitty_win32_utf8_to_wide(message);
+    if (wide) {
+        OutputDebugStringW(wide);
+        OutputDebugStringW(L"\n");
+        free(wide);
+    }
+}
+
+void
+win32_report_fatal_error(void) {
+    char *path = win32_default_log_path();
+    wchar_t *wpath = path ? kitty_win32_wide_path(path) : NULL;
+    bool show = invisible_stderr(), logged = false;
+    if (wpath && !show) {
+        HANDLE file = CreateFileW(wpath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+        if (file != INVALID_HANDLE_VALUE) {
+            BY_HANDLE_FILE_INFORMATION a, b;
+            logged = GetFileInformationByHandle(file, &a) && GetFileInformationByHandle(stderr_handle(), &b) &&
+                a.dwVolumeSerialNumber == b.dwVolumeSerialNumber && a.nFileIndexHigh == b.nFileIndexHigh && a.nFileIndexLow == b.nFileIndexLow;
+            CloseHandle(file);
+        }
+        show = logged;
+    }
+    if (show) {
+        fflush(stderr);
+        wchar_t *display = path ? kitty_win32_utf8_to_wide(path) : NULL;
+        wchar_t *message = join_wide(
+            logged ? L"Kitsu encountered a fatal error. Details have been written to:\n\n" :
+                L"Kitsu encountered a fatal error and could not write its diagnostic log. Expected log location:\n\n",
+            display ? display : L"%LOCALAPPDATA%\\Kitsu\\logs\\kitsu.log", NULL);
+        MessageBoxW(NULL, message ? message : L"Kitsu encountered a fatal error.", L"Kitsu error", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+        free(message);
+        free(display);
+    }
+    free(wpath);
+    free(path);
 }
 // }}}
 
