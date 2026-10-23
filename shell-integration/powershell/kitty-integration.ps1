@@ -59,7 +59,9 @@ function Global:Prompt {
         $result += "$escape]133;B`a"
     }
     if ($Global:__KittyShellIntegration.ChangeCursor) {
-        $result += "$escape[5 q"
+        # Restore cursor_shape from the terminal config instead of forcing a beam.
+        # Mode zero also lets a config reload take effect at the prompt.
+        $result += "$escape[0 q"
     }
     $Global:__KittyShellIntegration.LastHistoryId = $history.Id
     return $result

@@ -148,6 +148,11 @@ class WindowsDefaultsTest(BaseTest):
         self.assertIn(b'integration-output', cp.stdout)
 
     def test_windows_powershell_prompt_integration(self):
+        from kitty.config import load_config
+        from kitty.fast_data_types import CURSOR_BLOCK
+
+        from .base import parse_bytes
+
         script = os.path.join(shell_integration_dir, 'powershell', 'kitty-integration.ps1').replace("'", "''")
         shells = [path for name in ('powershell.exe', 'pwsh.exe') if (path := shutil.which(name))]
         self.assertTrue(shells, 'Windows PowerShell must be available')
@@ -174,12 +179,14 @@ Write-Error 'test failure' -ErrorAction SilentlyContinue
 [Console]::Write((Prompt))
 """
                     encoded = base64.b64encode(command.encode('utf-16-le')).decode('ascii')
-                    cp = subprocess.run([shell, '-NoLogo', '-NoProfile', '-EncodedCommand', encoded], env=env, capture_output=True)
+                    cp = subprocess.run(
+                        [shell, '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], env=env, capture_output=True
+                    )
                     self.ae(cp.returncode, 0, cp.stderr.decode('utf-8', 'replace'))
                     output = cp.stdout.decode('utf-8', 'replace')
                     self.assertIn('integration-output', output)
+                    self.assertNotIn('\x1b[5 q', output)
                     for sequence, disabled in (
-                        ('\x1b[5 q', 'no-cursor'),
                         ('\x1b[0 q', 'no-cursor'),
                         ('\x1b]7;file:', 'no-cwd'),
                         ('\x1b]2;', 'no-title'),
@@ -193,6 +200,18 @@ Write-Error 'test failure' -ErrorAction SilentlyContinue
                             self.assertNotIn(sequence, output)
                         else:
                             self.assertIn(sequence, output)
+                    # Prompt output must clear application overrides so the renderer
+                    # keeps using cursor_shape, including after a config reload.
+                    if 'no-cursor' not in flags:
+                        self.assertTrue(output.endswith('\x1b[0 q'))
+                        self.ae(load_config().cursor_shape, CURSOR_BLOCK)
+                        screen = self.create_screen()
+                        for shape in ('block', 'beam', 'underline'):
+                            opts = load_config(overrides=(f'cursor_shape {shape}',))
+                            self.set_options({'cursor_shape': opts.cursor_shape})
+                            parse_bytes(screen, b'\x1b[5 q')
+                            parse_bytes(screen, cp.stdout)
+                            self.ae(screen.cursor.shape, 0)
 
     def test_windows_reload_all(self):
         with patch('kitty.utils.kitten_exe', return_value='kitten.exe'), patch('subprocess.run') as run:

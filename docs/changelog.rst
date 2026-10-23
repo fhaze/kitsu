@@ -202,6 +202,10 @@ Detailed list of changes
 0.49.2 [2026-10-01]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+- Windows: Fix PowerShell shell integration overriding :opt:`cursor_shape`
+  with a beam cursor at every prompt. Restore the configured shape instead,
+  keeping ``block`` as the default and respecting config reloads
+
 - Windows: Fix clicking a link or path to an executable, script or shortcut
   such as a ``.exe``, ``.bat``, ``.hta`` or ``.lnk`` file, to a network share,
   or with a protocol other than http, https and mailto running it or

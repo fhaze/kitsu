@@ -39,8 +39,9 @@ PowerShell 7 (`pwsh.exe`) from PATH, then Windows PowerShell (PATH or its standa
 SystemRoot location), and finally `COMSPEC`/`cmd.exe`. Set `shell cmd.exe` or
 `shell wsl.exe` in `kitty.conf` to choose another shell explicitly.
 
-PowerShell integration supplies prompt/command marks, cwd reporting and a beam
-cursor at the prompt (`shell_integration no-cursor` disables cursor changes).
+PowerShell integration supplies prompt/command marks and cwd reporting, and
+restores the configured `cursor_shape` at the prompt (default: `block`).
+`shell_integration no-cursor` disables cursor restoration.
 For cmd, Kitsu supplies prompt marks and cwd reporting only when `PROMPT` is
 unset; custom prompts are preserved. Cmd has no pre-execution hook, so command
 output boundaries, exit-status notifications and cursor changes still require
