@@ -2128,6 +2128,9 @@ def create_windows_installer(ddir: str, required: bool = False) -> str:
     ]
     if repo := os.environ.get('GITHUB_REPOSITORY'):
         cmd.append(f'/DAppURL=https://github.com/{repo}')
+    # signs setup.exe and unins000.exe with KITSU_SIGN_COMMAND, see windows/signing.py
+    from windows.signing import iscc_arguments
+    cmd.extend(iscc_arguments())
     cmd.append(os.path.join(src_base, 'windows', 'kitty.iss'))
     if verbose:
         print(shlex.join(cmd))
@@ -2696,6 +2699,9 @@ def package(args: Options, bundle_type: str, do_build_all: bool = True) -> None:
     elif bundle_type == 'windows-package':
         shutil.copy2(os.path.join(launcher_dir, 'kitten.exe'), os.path.join(ddir, 'cmd', 'kitten.exe'))
         bundle_wsl_kittens(args, libdir)
+        # Sign before zipping, the zip and the installer must carry the same signed files
+        from windows.signing import sign_package
+        sign_package(Path(ddir))
         create_windows_zip(ddir)
         # Stamp the release tag into the installed libdir so kitty +update can
         # distinguish -windows.N builds. Written after create_windows_zip so the
