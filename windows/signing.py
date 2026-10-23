@@ -24,6 +24,7 @@ Run as a script to check the signatures of a package:
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Sequence
@@ -127,8 +128,17 @@ def sign_package(package: Path, cmd: str | None = None, run: Callable[[str], Non
     if not cmd:
         return []
     files = first_party_files(package)
-    print(f'Signing {len(files)} files in {package}', flush=True)
-    sign_files(files, cmd, run)
+    aliases = {package / 'bin' / ('kitty' + ext): package / 'bin' / ('kitsu' + ext) for ext in ('.exe', '.com')}
+    for alias, source in aliases.items():
+        if alias.read_bytes() != source.read_bytes():
+            raise ValueError(f'Compatibility alias {alias} differs from {source} before signing')
+    # Timestamped signatures differ between invocations. Copy the signed launchers so their
+    # compatibility aliases remain identical, including their valid signature and timestamp.
+    to_sign = [p for p in files if p not in aliases]
+    print(f'Signing {len(to_sign)} files in {package}', flush=True)
+    sign_files(to_sign, cmd, run)
+    for alias, source in aliases.items():
+        shutil.copy2(source, alias)
     return files
 
 

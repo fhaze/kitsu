@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from signing import (
@@ -69,8 +70,36 @@ class SigningTest(unittest.TestCase):
             signed = sign_package(package, 'sign $f', commands.append)
             self.assertEqual(len(commands), 1)
             for path in signed:
-                self.assertIn(f'"{path}"', commands[0])
+                if path.name in ('kitty.exe', 'kitty.com') and path.parent.name == 'bin':
+                    self.assertNotIn(f'"{path}"', commands[0])
+                else:
+                    self.assertIn(f'"{path}"', commands[0])
             self.assertNotIn('slangc', commands[0])
+
+    def test_timestamped_compatibility_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            package = make_package(Path(tmp))
+
+            def timestamp_files(paths, cmd, run) -> None:
+                for i, path in enumerate(paths):
+                    path.write_bytes(path.read_bytes() + f'signature and timestamp {i}'.encode())
+
+            with patch('signing.sign_files', side_effect=timestamp_files):
+                signed = sign_package(package, SIGNTOOL)
+            self.assertEqual(signed, first_party_files(package))
+            for ext in ('.exe', '.com'):
+                source = (package / 'bin' / ('kitsu' + ext)).read_bytes()
+                self.assertIn(b'signature and timestamp', source)
+                self.assertEqual((package / 'bin' / ('kitty' + ext)).read_bytes(), source)
+
+    def test_refuses_different_compatibility_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            package = make_package(Path(tmp))
+            (package / 'bin/kitty.exe').write_bytes(b'different launcher')
+            with patch('signing.sign_files') as sign:
+                with self.assertRaisesRegex(ValueError, 'differs .* before signing'):
+                    sign_package(package, SIGNTOOL)
+                sign.assert_not_called()
 
     def test_batches(self) -> None:
         paths = [f'C:\\{i:03}.exe' for i in range(100)]
