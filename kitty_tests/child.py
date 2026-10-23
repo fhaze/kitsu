@@ -231,6 +231,7 @@ class ChildMemoryTest(BaseTest):
         # runs executables and scripts, unlike xdg-open
         import tempfile
         import time
+        from pathlib import Path
 
         from kitty.utils import open_url, windows_shell_open, windows_shell_open_risk
 
@@ -277,14 +278,63 @@ class ChildMemoryTest(BaseTest):
                 callback('o')
                 self.ae(opened, ['https://example.com', script])
             self.assertFalse(os.path.exists(marker))
-            # ShellExecuteEx() on its worker thread
-            windows_shell_open(script, tdir)
-            for i in range(300):
-                if os.path.exists(marker):
-                    break
-                time.sleep(0.1)
-            self.assertTrue(os.path.exists(marker), 'windows_shell_open() did not run the batch file')
-            time.sleep(0.5)
+            # ShellExecuteEx() in the helper, including a relative path and
+            # Unicode/URL-encoded names crossing the process boundary.
+            script = os.path.join(tdir, 'open image ☃ & space.bat')
+            with open(script, 'w') as f:
+                f.write(f'@echo ran> "{marker}"\n')
+            for url in (script, os.path.basename(script), Path(script).as_uri()):
+                process = windows_shell_open(url, tdir)
+                self.assertIsNotNone(process)
+                self.ae(process.wait(timeout=30), 0)
+                for i in range(300):
+                    if os.path.exists(marker):
+                        break
+                    time.sleep(0.1)
+                self.assertTrue(os.path.exists(marker), f'windows_shell_open() did not open {url!r}')
+                time.sleep(0.5)
+                os.remove(marker)
+
+    @unittest.skipUnless(is_windows, 'Windows GUI URL opening')
+    def test_windows_shell_open_with_gui_running(self):
+        # A standalone Python test yields the GIL while polling and can hide
+        # opener thread starvation. Exercise the actual C GUI event loop.
+        import tempfile
+        import time
+        from pathlib import Path
+
+        from kitty.constants import helper_process_popen_kwargs
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tdir:
+            marker = os.path.join(tdir, 'opened')
+            script = os.path.join(tdir, 'open.bat')
+            with open(script, 'w') as f:
+                f.write(f'@echo opened> "{marker}"\n')
+            watcher = os.path.join(tdir, 'watcher.py')
+            with open(watcher, 'w') as f:
+                f.write(
+                    'from kitty.fast_data_types import add_timer\n'
+                    'from kitty.utils import windows_shell_open\n'
+                    'def on_load(boss, data):\n'
+                    f'    add_timer(lambda timer_id: windows_shell_open({Path(script).as_uri()!r}), 0.2, False)\n'
+                )
+            with subprocess.Popen(
+                [
+                    kitty_exe(), '--config', 'NONE', '--start-as', 'minimized', '-o', f'watcher {watcher}',
+                    kitty_exe(), '+runpy', 'import time; time.sleep(10)',
+                ],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                **helper_process_popen_kwargs(),
+            ) as process:
+                try:
+                    deadline = time.monotonic() + 30
+                    while not os.path.exists(marker) and process.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.1)
+                    opened = os.path.exists(marker)
+                finally:
+                    process.terminate()
+                _, stderr = process.communicate(timeout=10)
+                self.assertTrue(opened, f'URL did not open while the GUI was running: {stderr.decode("utf-8", "replace")}')
 
     def _spawn_allocating_child(self, alloc_bytes: int) -> subprocess.Popen:
         p = subprocess.Popen(

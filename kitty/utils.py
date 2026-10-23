@@ -398,51 +398,74 @@ def windows_shell_open_risk(url: str, cwd: str | None = None) -> str:
     return ''
 
 
-def windows_shell_open(url: str, cwd: str | None = None) -> None:
+def windows_shell_open(url: str, cwd: str | None = None) -> 'PopenType[bytes] | None':
     # ShellExecute() can block for a long time, for example on an unreachable
-    # host, so it runs on its own thread with COM initialized, as it requires
-    import threading
+    # host. Use a helper process: the GUI's C main loop holds the GIL, so a
+    # Python worker thread cannot reliably run while the window is idle.
+    import subprocess
 
-    def run() -> None:
-        if sys.platform != 'win32':
-            return
+    code = 'from kitty.utils import windows_shell_open_in_helper; import sys; windows_shell_open_in_helper(sys.argv[1], sys.argv[2] or None)'
+    try:
+        process = subprocess.Popen(
+            [kitty_exe(), '+runpy', code, url, cwd or ''],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, **helper_process_popen_kwargs(),
+        )
+    except OSError as e:
+        log_error(f'Failed to open {url}: {e}')
+        return None
+    if (boss := get_boss()) is not None:
+        def on_death(pid: int, error: Exception | None) -> None:
+            process.poll()
+
+        boss.monitor_pid(process.pid, on_death)
+    return process
+
+
+def windows_shell_open_in_helper(url: str, cwd: str | None = None) -> None:
+    if sys.platform != 'win32':
+        return
+    from urllib.parse import unquote, urlparse
+
+    if url.lower().startswith('file:'):
+        parsed = urlparse(url)
+        url = windows_path_from_file_url(parsed.netloc, unquote(parsed.path))
+    try:
+        import ctypes
+        from ctypes import wintypes as w
+    except Exception:
         try:
-            import ctypes
-            from ctypes import wintypes as w
-        except Exception:
-            try:
-                open_with_default_app(url, cwd=cwd)
-            except OSError as e:
-                log_error(f'Failed to open {url}: {e}')
-            return
+            open_with_default_app(url, cwd=cwd)
+        except OSError as e:
+            log_error(f'Failed to open {url}: {e}')
+        return
 
-        class SHELLEXECUTEINFOW(ctypes.Structure):
-            _fields_ = [
-                ('cbSize', w.DWORD), ('fMask', w.ULONG), ('hwnd', w.HWND), ('lpVerb', w.LPCWSTR), ('lpFile', w.LPCWSTR),
-                ('lpParameters', w.LPCWSTR), ('lpDirectory', w.LPCWSTR), ('nShow', ctypes.c_int), ('hInstApp', w.HINSTANCE),
-                ('lpIDList', ctypes.c_void_p), ('lpClass', w.LPCWSTR), ('hkeyClass', w.HKEY), ('dwHotKey', w.DWORD),
-                ('hIconOrMonitor', w.HANDLE), ('hProcess', w.HANDLE),
-            ]
+    class SHELLEXECUTEINFOW(ctypes.Structure):
+        _fields_ = [
+            ('cbSize', w.DWORD), ('fMask', w.ULONG), ('hwnd', w.HWND), ('lpVerb', w.LPCWSTR), ('lpFile', w.LPCWSTR),
+            ('lpParameters', w.LPCWSTR), ('lpDirectory', w.LPCWSTR), ('nShow', ctypes.c_int), ('hInstApp', w.HINSTANCE),
+            ('lpIDList', ctypes.c_void_p), ('lpClass', w.LPCWSTR), ('hkeyClass', w.HKEY), ('dwHotKey', w.DWORD),
+            ('hIconOrMonitor', w.HANDLE), ('hProcess', w.HANDLE),
+        ]
 
-        COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, SEE_MASK_NOASYNC, SW_SHOWNORMAL = 0x2, 0x4, 0x100, 1
-        ole32 = ctypes.WinDLL('ole32')
-        ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, w.DWORD]
-        ole32.CoInitializeEx.restype = ctypes.c_long
-        shell32 = ctypes.WinDLL('shell32', use_last_error=True)
-        shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFOW)]
-        shell32.ShellExecuteExW.restype = w.BOOL
-        initialized = ole32.CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) >= 0
-        try:
-            info = SHELLEXECUTEINFOW(
-                cbSize=ctypes.sizeof(SHELLEXECUTEINFOW), fMask=SEE_MASK_NOASYNC, lpVerb='open', lpFile=url, lpDirectory=cwd or None,
-                nShow=SW_SHOWNORMAL)
-            if not shell32.ShellExecuteExW(ctypes.byref(info)):
-                log_error(f'Failed to open {url}: {ctypes.WinError(ctypes.get_last_error())}')
-        finally:
-            if initialized:
-                ole32.CoUninitialize()
-
-    threading.Thread(target=run, name='ShellOpen', daemon=True).start()
+    COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, SW_SHOWNORMAL = 0x2, 0x4, 1
+    SEE_MASK_NOASYNC, SEE_MASK_FLAG_NO_UI = 0x100, 0x400
+    ole32 = ctypes.WinDLL('ole32')
+    ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, w.DWORD]
+    ole32.CoInitializeEx.restype = ctypes.c_long
+    shell32 = ctypes.WinDLL('shell32', use_last_error=True)
+    shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFOW)]
+    shell32.ShellExecuteExW.restype = w.BOOL
+    initialized = ole32.CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) >= 0
+    try:
+        info = SHELLEXECUTEINFOW(
+            cbSize=ctypes.sizeof(SHELLEXECUTEINFOW), fMask=SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI,
+            lpVerb='open', lpFile=url, lpDirectory=cwd or None,
+            nShow=SW_SHOWNORMAL)
+        if not shell32.ShellExecuteExW(ctypes.byref(info)):
+            log_error(f'Failed to open {url}: {ctypes.WinError(ctypes.get_last_error())}')
+    finally:
+        if initialized:
+            ole32.CoUninitialize()
 
 
 def windows_open_with_default_app(url: str, cwd: str | None = None) -> None:
