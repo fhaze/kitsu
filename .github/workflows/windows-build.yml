@@ -1,6 +1,11 @@
 name: Windows build
 on:
     workflow_call:
+        secrets:
+            CERTUM_USERNAME:
+                required: false
+            CERTUM_OTP_URI:
+                required: false
         inputs:
             sign:
                 description: >-

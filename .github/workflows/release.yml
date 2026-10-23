@@ -11,6 +11,9 @@ jobs:
     build:
         name: Windows
         uses: ./.github/workflows/windows-build.yml
+        secrets:
+            CERTUM_USERNAME: ${{ secrets.CERTUM_USERNAME }}
+            CERTUM_OTP_URI: ${{ secrets.CERTUM_OTP_URI }}
         with:
             # Authenticode signing with the Certum certificate, from the release-signing environment
             sign: ${{ startsWith(github.ref, 'refs/tags/v') }}
