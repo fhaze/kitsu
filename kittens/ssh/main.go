@@ -179,6 +179,8 @@ type connection_data struct {
 	listen_on          string
 	test_script        string
 	dont_create_shm    bool
+	// Terminal size for the remote bootstrap to apply, 0 to leave it alone
+	tty_rows, tty_cols uint16
 
 	shm_name         string
 	script_type      string
@@ -493,6 +495,8 @@ func bootstrap_script(cd *connection_data) (err error) {
 		}
 	}
 	add_bool(cd.request_data, "REQUEST_DATA")
+	replacements["TTY_ROWS"] = strconv.Itoa(int(cd.tty_rows))
+	replacements["TTY_COLS"] = strconv.Itoa(int(cd.tty_cols))
 	add_bool(cd.echo_on, "ECHO_ON")
 	sd := maps.Clone(replacements)
 	if cd.request_data {
@@ -758,11 +762,25 @@ func run_ssh(ssh_args, server_args, found_extra_args []string, ssh_config_channe
 	cd.echo_on = term.WasEchoOnOriginally()
 	cd.host_opts, cd.literal_env = host_opts, literal_env
 	cd.request_data = need_to_request_data
+	var pcon *pseudoconsole
 	if use_dcs_channel_proxy() {
 		// Win32-OpenSSH does not send terminal modes to the server so the remote
 		// pty echoes input, therefore have the remote bootstrap disable echo
 		// and request the data itself rather than pre-sending it.
 		cd.request_data = true
+		// Run ssh in a pseudoconsole of its own so it gets the window size
+		// and resizes, see pseudoconsole_windows.go
+		if p, perr := open_pseudoconsole(term); perr == nil {
+			pcon = p
+			defer pcon.Close()
+		} else {
+			// ssh's stdout will be a pipe, so Win32-OpenSSH cannot read the
+			// console size and the server opens an 80x24 pty. Have the remote
+			// bootstrap set the size at least once.
+			if sz, err := term.GetSize(); err == nil && sz.Row > 0 && sz.Col > 0 {
+				cd.tty_rows, cd.tty_cols = sz.Row, sz.Col
+			}
+		}
 	}
 	cd.hostname_for_match, cd.username = hostname_for_match, uname
 	escape_codes_to_set_colors, err := change_colors(cd.host_opts.Color_scheme)
@@ -795,6 +813,13 @@ func run_ssh(ssh_args, server_args, found_extra_args []string, ssh_config_channe
 		return 1, err
 	}
 	cmd = append(cmd, cd.rcmd...)
+	if pcon != nil {
+		f := new_dcs_filter(os.Stdout, forward_dcs_to_kitty)
+		rc, err := pcon.run(term, cmd, f)
+		_ = f.Flush()
+		drain_potential_tty_garbage(term)
+		return rc, err
+	}
 	c := exec.Command(cmd[0], cmd[1:]...)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	var stdout_proxy_done chan struct{}
