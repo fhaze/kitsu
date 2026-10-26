@@ -20,6 +20,7 @@ tty_file_obj = None
 echo_on = int('ECHO_ON')
 data_dir = shell_integration_dir = ''
 request_data = int('REQUEST_DATA')
+tty_rows, tty_cols = int('TTY_ROWS'), int('TTY_COLS')
 leading_data = b''
 login_shell = os.environ.get('SHELL') or '/bin/sh'
 try:
@@ -45,6 +46,14 @@ def set_echo(fd, on=False):
         new[3] &= ~termios.ECHO
     termios.tcsetattr(fd, termios.TCSANOW, new)
     return fd, old
+
+
+def set_tty_size(fd):
+    if tty_rows > 0 and tty_cols > 0:
+        import fcntl
+        import struct
+        with contextlib.suppress(Exception):
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', tty_rows, tty_cols, 0, 0))
 
 
 def cleanup():
@@ -300,6 +309,7 @@ def main():
     # the value of O_CLOEXEC below is on macOS which is most likely to not have
     # os.O_CLOEXEC being still stuck with python2
     tty_file_obj = os.fdopen(os.open(os.ctermid(), os.O_RDWR | getattr(os, 'O_CLOEXEC', 16777216)), 'rb')
+    set_tty_size(tty_file_obj.fileno())
     try:
         if request_data:
             set_echo(tty_file_obj.fileno(), on=False)

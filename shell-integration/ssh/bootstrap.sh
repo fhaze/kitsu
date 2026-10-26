@@ -87,6 +87,10 @@ leading_data=""
 login_shell=""
 login_cwd=""
 
+tty_rows="TTY_ROWS"
+tty_cols="TTY_COLS"
+[ "$tty_rows" != "0" ] && [ "$tty_cols" != "0" ] && command stty rows "$tty_rows" columns "$tty_cols" < /dev/tty 2> /dev/null
+
 request_data="REQUEST_DATA"
 trap "cleanup_on_bootstrap_exit" EXIT
 [ "$request_data" = "1" ] && {

@@ -31,6 +31,12 @@ TEMP_CLEANUP = """    @classmethod
 
 """
 
+TEMP_CLEANUP_SIGNATURES = (
+    '    @classmethod\n    def _rmtree(cls, name, ignore_errors=False, repeated=False):\n',
+    '    @classmethod\n    def _rmtree(cls, name, ignore_errors=False, repeated=False, dir_fd=None,\n'
+    '                fullname=None):\n',
+)
+
 
 def patched_sources(stdlib: Path) -> dict[str, str]:
     poplib = (stdlib / 'poplib.py').read_text(encoding='utf-8')
@@ -38,10 +44,17 @@ def patched_sources(stdlib: Path) -> dict[str, str]:
         raise ValueError('The MSYS2 poplib source changed; review the CPython security backport')
     poplib = poplib.replace(POP_COMMAND, POP_COMMAND_FIXED)
     tempfile = (stdlib / 'tempfile.py').read_text(encoding='utf-8')
-    start = tempfile.index('    @classmethod\n    def _rmtree(cls, name, ignore_errors=False, repeated=False):\n')
-    end = tempfile.index('    @classmethod\n    def _cleanup(', start)
+    signatures = [signature for signature in TEMP_CLEANUP_SIGNATURES if tempfile.count(signature) == 1]
+    cleanup = '    @classmethod\n    def _cleanup('
+    import_shutil = 'import shutil as _shutil\n'
+    if len(signatures) != 1 or tempfile.count(cleanup) != 1 or tempfile.count(import_shutil) != 1:
+        raise ValueError('The MSYS2 tempfile source changed; review the CPython security backport')
+    start = tempfile.index(signatures[0])
+    end = tempfile.index(cleanup)
+    if end <= start:
+        raise ValueError('The MSYS2 tempfile source changed; review the CPython security backport')
     tempfile = tempfile[:start] + TEMP_CLEANUP + tempfile[end:]
-    tempfile = tempfile.replace('import shutil as _shutil\n', 'import shutil as _shutil\nimport subprocess as _subprocess\n', 1)
+    tempfile = tempfile.replace(import_shutil, import_shutil + 'import subprocess as _subprocess\n', 1)
     return {'poplib.py': poplib, 'tempfile.py': tempfile}
 
 
