@@ -95,10 +95,15 @@ class WindowsDependenciesTest(unittest.TestCase):
             vex: dict[str, Any] = {
                 'statements': [
                     {'vulnerability': {'name': cve}, 'products': [{'@id': product}, {'@id': python_product}], 'status': 'fixed'}
-                    for cve in ('CVE-2025-15367', 'CVE-2026-12345')
+                    for cve in ('CVE-2025-15367', 'CVE-2026-12345', 'CVE-2026-114583')
                 ]
             }
             verify_scan_inputs(archive, runtime, binaries, vex)
+
+            altered = copy.deepcopy(vex)
+            altered['statements'].pop()
+            with self.assertRaisesRegex(ValueError, 'Unexpected Python security attestations'):
+                verify_scan_inputs(archive, runtime, binaries, altered)
 
             altered = copy.deepcopy(binaries)
             altered['artifacts'][0]['version'] = '3.13.0'
