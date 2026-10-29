@@ -389,7 +389,8 @@ child_counter = count()
 
 
 class Child:
-    pending_handoff: tuple[int, int] | None = None
+    pending_handoff: tuple[int, int, str] | None = None
+    initial_title: str = ''
     child_fd: int | None = None
     pid: int | None = None
     initial_termios_state: list[Any] | None = None
@@ -511,7 +512,7 @@ class Child:
         opts = fast_data_types.get_options()
         self.forked = True
         if is_windows and Child.pending_handoff is not None:
-            self.child_fd, self.pid = Child.pending_handoff
+            self.child_fd, self.pid, self.initial_title = Child.pending_handoff
             Child.pending_handoff = None
             self.terminal_ready_fd = -1
             self.initial_termios_state = None

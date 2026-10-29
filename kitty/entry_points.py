@@ -127,11 +127,9 @@ def terminal_handoff(args: list[str]) -> None:
     from kitty.main import main
 
     master, pid, title = win32_receive_terminal_handoff()
-    Child.pending_handoff = master, pid
+    Child.pending_handoff = master, pid, title
     # A user session file must not launch another shell before the handoff.
     sys.argv = ['kitsu', '--session', 'none']
-    if title:
-        sys.argv.extend(('--title', title))
     try:
         main()
     finally:

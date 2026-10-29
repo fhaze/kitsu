@@ -65,21 +65,23 @@ def registry(path: str, name: str, value: str) -> Iterator[None]:
     except FileNotFoundError:
         existed = False
         key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, path)
-    with key:
-        try:
-            previous = winreg.QueryValueEx(key, name)
-        except FileNotFoundError:
-            previous = None
-        winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
-        try:
-            yield
-        finally:
-            if previous is None:
-                winreg.DeleteValue(key, name)
-            else:
-                winreg.SetValueEx(key, name, 0, previous[1], previous[0])
-    if not existed:
-        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
+    try:
+        with key:
+            try:
+                previous = winreg.QueryValueEx(key, name)
+            except FileNotFoundError:
+                previous = None
+            winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+            try:
+                yield
+            finally:
+                if previous is None:
+                    winreg.DeleteValue(key, name)
+                else:
+                    winreg.SetValueEx(key, name, 0, previous[1], previous[0])
+    finally:
+        if not existed:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
 
 
 def pipe(stack: ExitStack) -> tuple[w.HANDLE, w.HANDLE]:
@@ -189,10 +191,14 @@ def run(package: Path, gui: bool = False) -> None:
                     data = read(input_read, 1)
                 except TimeoutError:
                     continue
+                except BrokenPipeError:
+                    process.wait(10)
+                    break
                 print('INPUT:', repr(data), flush=True)
                 if b'exit' in data:
                     break
                 write(output_write, data.replace(b'\r', b'\r\n> '))
+            print('PASS: synthetic GUI fixture closed', flush=True)
         else:
             write(output_write, b'handoff output sentinel')
             assert read(input_read) == b'handoff input sentinel'
