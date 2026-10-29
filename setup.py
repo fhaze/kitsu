@@ -825,7 +825,7 @@ def kitty_env(args: Options) -> Env:
         platform_libs = pkg_config('cairo-ft', '--libs')
         platform_libs.extend(
             (
-                '-lws2_32 -liphlpapi -lbcrypt -lgdi32 -luser32 -lshell32 -ladvapi32 -lshlwapi -lole32 -luuid '
+                '-lws2_32 -liphlpapi -lbcrypt -lgdi32 -luser32 -lshell32 -ladvapi32 -lshlwapi -lole32 -loleaut32 -luuid '
                 '-ldwrite -lpsapi -lwtsapi32 -lsystre -lruntimeobject'
             ).split()
         )
@@ -1202,7 +1202,7 @@ def find_c_files() -> Tuple[List[str], List[str]]:
     else:
         exclude = {'core_text.m', 'cocoa_window.m', 'macos_process_info.c'}
     if not is_windows:
-        exclude |= {'win32-compat.c', 'win32-pty.c', 'win32_process_info.c', 'win32-notifications.c', 'win32-key-synthesis.c'}
+        exclude |= {'win32-compat.c', 'win32-pty.c', 'win32-handoff.c', 'win32_process_info.c', 'win32-notifications.c', 'win32-key-synthesis.c'}
     for x in sorted(os.listdir(d)):
         ext = os.path.splitext(x)[1]
         if ext in ('.c', '.m') and os.path.basename(x) not in exclude:
@@ -1959,6 +1959,11 @@ def bundle_windows_mesa(launcher_dir: str) -> None:
 # Terminal project relays them, kitty/win32-pty.c uses it when it is next to kitty.exe.
 CONPTY_NUGET_VERSION = '1.25.260930003'
 CONPTY_NUGET_SHA256 = '02b07b349af66d801159bdf9e440d4a1ce78bb951f37fc8609731665afdae7ee'
+OPENCONSOLE_PROXY_VERSION = '1.25.2733.0'
+OPENCONSOLE_PROXY_SHA256 = {
+    'x64': 'bf3ef2012f6c44d8340a4c58125acc9498d19b580f9890dc043cdf831852e796',
+    'arm64': '11b4fe264ecaa71b08cd84195536f68c669808155338e9f47f4da668b4cf0e26',
+}
 
 
 # Custom shaders are compiled at runtime by running slangc, which kitty looks up
@@ -2033,10 +2038,27 @@ def bundle_conpty(launcher_dir: str) -> None:
         ):
             with zf.open(member) as src, open(os.path.join(launcher_dir, dest), 'wb') as dst:
                 shutil.copyfileobj(src, dst)
+    # ConPTY's NuGet package omits the handoff marshaller; use Microsoft's
+    # portable release, preserving the original vendor binary/signature.
+    proxy_zip = os.path.join(cache_dir, f'OpenConsoleProxy-{OPENCONSOLE_PROXY_VERSION}-{arch}.zip')
+    if not os.path.exists(proxy_zip):
+        url = (f'https://github.com/microsoft/terminal/releases/download/v{OPENCONSOLE_PROXY_VERSION}/'
+               f'Microsoft.WindowsTerminal_{OPENCONSOLE_PROXY_VERSION}_{arch}.zip')
+        with urlopen(url) as src, open(proxy_zip, 'wb') as dst:
+            shutil.copyfileobj(src, dst)
+    with open(proxy_zip, 'rb') as f:
+        digest = hashlib.sha256(f.read()).hexdigest()
+    if digest != OPENCONSOLE_PROXY_SHA256[arch]:
+        os.remove(proxy_zip)
+        raise SystemExit(f'SHA256 mismatch for {proxy_zip}: {digest}')
+    with zipfile.ZipFile(proxy_zip) as zf:
+        member = f'terminal-{OPENCONSOLE_PROXY_VERSION}/OpenConsoleProxy.dll'
+        with zf.open(member) as src, open(os.path.join(launcher_dir, 'OpenConsoleProxy.dll'), 'wb') as dst:
+            shutil.copyfileobj(src, dst)
     with open(os.path.join(launcher_dir, 'OpenConsole-LICENSE.txt'), 'w') as f:
         f.write(
             textwrap.dedent("""\
-            conpty.dll and OpenConsole.exe are from the Windows Terminal project
+            conpty.dll, OpenConsole.exe and OpenConsoleProxy.dll are from the Windows Terminal project
             https://github.com/microsoft/terminal
 
             MIT License
@@ -2599,6 +2621,9 @@ def package(args: Options, bundle_type: str, do_build_all: bool = True) -> None:
     ddir = args.prefix
     if bundle_type == 'windows-package':
         shutil.rmtree(os.path.join(ddir, 'cmd'), ignore_errors=True)
+        for path in ('terminal-identity.msix', 'bin/kitsu-handoff.exe'):
+            if os.path.exists(stale := os.path.join(ddir, path)):
+                os.unlink(stale)
     for_freeze = bundle_type.endswith('-freeze')
     if bundle_type == 'linux-freeze':
         args.libdir_name = 'lib'
@@ -2702,6 +2727,8 @@ def package(args: Options, bundle_type: str, do_build_all: bool = True) -> None:
         # Sign before zipping, the zip and the installer must carry the same signed files
         from windows.signing import sign_package
         sign_package(Path(ddir))
+        from windows.terminal_package import build_terminal_package
+        build_terminal_package(Path(ddir).resolve(), '.'.join(map(str, version)), platform.machine().lower())
         create_windows_zip(ddir)
         # Stamp the release tag into the installed libdir so kitty +update can
         # distinguish -windows.N builds. Written after create_windows_zip so the

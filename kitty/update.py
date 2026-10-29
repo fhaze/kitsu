@@ -23,8 +23,10 @@ INNO_UNINSTALL_KEY = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\{7D0F
 # openssl pkey -pubout) trusted to sign installers. release.yml signs with the
 # private key in the KITSU_UPDATE_SIGNING_KEY secret, which must match one of these.
 UPDATE_SIGNING_KEYS: tuple[str, ...] = (
-    'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENGTCzJT9JTy65u7CPJJu01Q0F6+3MrusZ0ALSiRT3Slg76RyPUOehFHRaKVcPTxWkY0YbC802PhcJ6NLvPGN0Q==',  # primary, in the KITSU_UPDATE_SIGNING_KEY secret
-    'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEte+DD6xVfqUKcOHMAdoXJFgG6l/3q7k7trsn6H0f4EapgJWp0iMLC5asHhf0CJmR3ITTVAKx0Y89i0EhZg6V9A==',  # offline backup, for rotation if the primary is lost
+    # Primary, in the KITSU_UPDATE_SIGNING_KEY secret
+    'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENGTCzJT9JTy65u7CPJJu01Q0F6+3MrusZ0ALSiRT3Slg76RyPUOehFHRaKVcPTxWkY0YbC802PhcJ6NLvPGN0Q==',
+    # Offline backup, for rotation if the primary is lost
+    'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEte+DD6xVfqUKcOHMAdoXJFgG6l/3q7k7trsn6H0f4EapgJWp0iMLC5asHhf0CJmR3ITTVAKx0Y89i0EhZg6V9A==',
 )
 P256_SPKI_PREFIX = bytes.fromhex('3059301306072a8648ce3d020106082a8648ce3d030107034200')
 MAX_SIGNATURE_SIZE = 1024

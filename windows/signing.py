@@ -62,6 +62,11 @@ def first_party_files(package: Path) -> list[Path]:
     if missing:
         raise ValueError(f'Files to sign are missing from {package}: {", ".join(missing)}')
     found = {package / name for name in REQUIRED_FILES}
+    if (package / 'terminal-identity.msix').is_file():
+        if not (package / 'bin/kitsu-handoff.exe').is_file():
+            raise ValueError(f'Terminal identity launcher is missing from {package}: bin/kitsu-handoff.exe')
+        found.add(package / 'terminal-identity.msix')
+        found.add(package / 'bin' / 'kitsu-handoff.exe')
     # the launchers on PATH and the extension modules of the kitty package are all built here
     for directory in (package / 'cmd', package / 'lib' / 'kitty'):
         found.update(p for p in directory.rglob('*') if p.is_file() and p.suffix.lower() in PE_SUFFIXES)

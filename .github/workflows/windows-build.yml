@@ -112,6 +112,7 @@ jobs:
               python -m unittest discover -s .github/workflows -p 'test_windows_dependencies.py'
               python -m unittest discover -s windows -p 'test_python_runtime.py'
               python -m unittest discover -s windows -p 'test_signing.py'
+              python -m unittest discover -s windows -p 'test_terminal_package.py'
               pwsh -NoProfile -File windows/Connect-SimplySign.ps1 -SelfTest
 
           - name: Create a throwaway test signing certificate
@@ -192,6 +193,9 @@ jobs:
 
           - name: Test ConPTY child UTF-8 code pages and escape payloads
             run: python windows/test_console_utf8.py windows-package/kitsu
+
+          - name: Test cross-process COM terminal handoff
+            run: python windows/test_terminal_handoff.py windows-package/kitsu
 
           - name: Test Windows config reload IPC and kitten error reporting
             run: |

@@ -33,6 +33,7 @@ bool win32_pty_signal_pid(pid_t pid, int sig);
 
 void win32_pty_init(void);
 const char *win32_pty_provider(void);
+long win32_receive_handoff(int *master_fd, unsigned long *pid, wchar_t **title, unsigned long timeout);
 
 // CreateProcess() runs batch files via cmd.exe, which parses their command
 // line itself, so the usual quoting does not stop arguments from running
