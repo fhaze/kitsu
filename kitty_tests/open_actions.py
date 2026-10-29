@@ -4,6 +4,7 @@
 
 import os
 from contextlib import contextmanager
+from unittest.mock import patch
 
 from kitty.utils import get_editor
 
@@ -24,6 +25,15 @@ def patch_env(**kw):
 
 
 class TestOpenActions(BaseTest):
+    def test_editor_command_quoting(self):
+        from kitty.open_actions import actions_for_url
+
+        self.set_options()
+        editor = [r'C:\Program Files\Editor\editor.exe', '--wait', 'argument with spaces']
+        with patch('kitty.open_actions.get_editor', return_value=editor):
+            actions = tuple(actions_for_url('file:///tmp/moo.txt', 'protocol file\naction launch $EDITOR $FILE_PATH'))
+        self.ae(actions[0].args, (*editor, '/tmp/moo.txt'))
+
     def test_parsing_of_open_actions(self):
         from kitty.open_actions import KeyAction, actions_for_url
 

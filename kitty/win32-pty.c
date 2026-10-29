@@ -23,6 +23,7 @@
 #include <stdbool.h>
 #include <errno.h>
 void log_error(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+HRESULT win32_pty_handoff(HANDLE *, HANDLE *, HANDLE, HANDLE, HANDLE, HANDLE, int *, DWORD *);
 #define UNUSED __attribute__((unused))
 
 // Kept minimal on purpose, data-types.h pulls in Python.h and kitty types that
@@ -42,10 +43,12 @@ const char *win32_pty_provider(void);
 typedef HRESULT(WINAPI *create_pseudo_console_func)(COORD, HANDLE, HANDLE, DWORD, HPCON *);
 typedef HRESULT(WINAPI *resize_pseudo_console_func)(HPCON, COORD);
 typedef VOID(WINAPI *close_pseudo_console_func)(HPCON);
+typedef HRESULT(WINAPI *pack_pseudo_console_func)(HANDLE, HANDLE, HANDLE, HPCON *);
 static struct {
     create_pseudo_console_func create;
     resize_pseudo_console_func resize;
     close_pseudo_console_func close;
+    pack_pseudo_console_func pack;
 } conpty_api = {0};
 
 const char *
@@ -78,11 +81,15 @@ load_conpty_api(void) {
     *(void **)(&c) = dlsym(m, "ConptyCreatePseudoConsole");
     *(void **)(&r) = dlsym(m, "ConptyResizePseudoConsole");
     *(void **)(&x) = dlsym(m, "ConptyClosePseudoConsole");
+    *(void **)(&conpty_api.pack) = dlsym(m, "ConptyPackPseudoConsole");
     if (c && r && x) {
         conpty_api.create = c;
         conpty_api.resize = r;
         conpty_api.close = x;
-    } else FreeLibrary(m);
+    } else {
+        conpty_api.pack = NULL;
+        FreeLibrary(m);
+    }
 }
 
 typedef struct Win32Pty {
@@ -249,42 +256,10 @@ start_thread(unsigned(__stdcall *func)(void *), Win32Pty *pty) {
 }
 // }}}
 
-bool
-win32_pty_open(int *master_fd, int *slave_fd, unsigned short rows, unsigned short cols) {
-    *master_fd = *slave_fd = -1;
-    HANDLE in_read = INVALID_HANDLE_VALUE, in_write = INVALID_HANDLE_VALUE, out_read = INVALID_HANDLE_VALUE, out_write = INVALID_HANDLE_VALUE;
+static bool
+connect_pty(Win32Pty *pty, int *master_fd, int *slave_fd) {
     SOCKET s[2] = {INVALID_SOCKET, INVALID_SOCKET};
     int saved_errno;
-    Win32Pty *pty = calloc(1, sizeof(Win32Pty));
-    if (!pty) {
-        errno = ENOMEM;
-        return false;
-    }
-    pty->pty_in_write = pty->pty_out_read = INVALID_HANDLE_VALUE;
-    pty->bridge_sock = INVALID_SOCKET;
-    pty->refcount = 1;
-    pty->master_fd = -1;
-    if (!CreatePipe(&in_read, &in_write, NULL, 0) || !CreatePipe(&out_read, &out_write, NULL, 0)) {
-        set_errno_from_last_error();
-        goto fail;
-    }
-    COORD size = {.X = (SHORT)(cols ? cols : 80), .Y = (SHORT)(rows ? rows : 24)};
-    HRESULT hr = conpty_api.create(size, in_read, out_write, 0, &pty->hpc);
-    if (FAILED(hr)) {
-        log_error("CreatePseudoConsole failed with HRESULT: 0x%08lx", (unsigned long)hr);
-        errno = hr == E_OUTOFMEMORY ? ENOMEM : EIO;
-        goto fail;
-    }
-    // conhost has its own copies of these
-    CloseHandle(in_read);
-    in_read = INVALID_HANDLE_VALUE;
-    CloseHandle(out_write);
-    out_write = INVALID_HANDLE_VALUE;
-    pty->pty_in_write = in_write;
-    in_write = INVALID_HANDLE_VALUE;
-    pty->pty_out_read = out_read;
-    out_read = INVALID_HANDLE_VALUE;
-
     if (kitty_win32_socketpair((uintptr_t *)s) != 0) {
         log_error("Failed to create loopback socketpair for ConPTY bridge with WSA error: %d", WSAGetLastError());
         goto fail;
@@ -339,10 +314,6 @@ win32_pty_open(int *master_fd, int *slave_fd, unsigned short rows, unsigned shor
 fail:
     saved_errno = errno;
     if (pty->hpc) close_pseudo_console(pty);
-    if (in_read != INVALID_HANDLE_VALUE) CloseHandle(in_read);
-    if (in_write != INVALID_HANDLE_VALUE) CloseHandle(in_write);
-    if (out_read != INVALID_HANDLE_VALUE) CloseHandle(out_read);
-    if (out_write != INVALID_HANDLE_VALUE) CloseHandle(out_write);
     if (s[0] != INVALID_SOCKET) closesocket(s[0]);
     if (s[1] != INVALID_SOCKET) closesocket(s[1]);
     if (*master_fd >= 0) {
@@ -356,6 +327,95 @@ fail:
     pty_unref(pty);
     errno = saved_errno;
     return false;
+}
+
+static Win32Pty *
+new_pty(void) {
+    Win32Pty *pty = calloc(1, sizeof(Win32Pty));
+    if (pty) {
+        pty->pty_in_write = pty->pty_out_read = INVALID_HANDLE_VALUE;
+        pty->bridge_sock = INVALID_SOCKET;
+        pty->refcount = 1;
+        pty->master_fd = -1;
+    } else errno = ENOMEM;
+    return pty;
+}
+
+bool
+win32_pty_open(int *master_fd, int *slave_fd, unsigned short rows, unsigned short cols) {
+    *master_fd = *slave_fd = -1;
+    Win32Pty *pty = new_pty();
+    if (!pty) return false;
+    HANDLE in_read = INVALID_HANDLE_VALUE, out_write = INVALID_HANDLE_VALUE;
+    bool ok = CreatePipe(&in_read, &pty->pty_in_write, NULL, 0) && CreatePipe(&pty->pty_out_read, &out_write, NULL, 0);
+    if (!ok) set_errno_from_last_error();
+    else {
+        COORD size = {.X = (SHORT)(cols ? cols : 80), .Y = (SHORT)(rows ? rows : 24)};
+        HRESULT hr = conpty_api.create(size, in_read, out_write, 0, &pty->hpc);
+        ok = SUCCEEDED(hr);
+        if (!ok) {
+            log_error("CreatePseudoConsole failed with HRESULT: 0x%08lx", (unsigned long)hr);
+            errno = hr == E_OUTOFMEMORY ? ENOMEM : EIO;
+        }
+    }
+    if (in_read != INVALID_HANDLE_VALUE) CloseHandle(in_read);
+    if (out_write != INVALID_HANDLE_VALUE) CloseHandle(out_write);
+    if (ok) return connect_pty(pty, master_fd, slave_fd);
+    pty_unref(pty);
+    return false;
+}
+
+// COM only lends the handles for the duration of the call. Pack our copies into
+// a ConPTY so resize/close use its signal/reference pipes, not a new console.
+HRESULT
+win32_pty_handoff(HANDLE *input, HANDLE *output, HANDLE signal, HANDLE reference, HANDLE server, HANDLE client, int *master_fd, DWORD *pid) {
+    *input = *output = NULL;
+    *master_fd = -1;
+    if (!conpty_api.pack) return E_NOTIMPL;
+    Win32Pty *pty = new_pty();
+    if (!pty) return E_OUTOFMEMORY;
+    HANDLE owned[3] = {NULL, NULL, NULL}, source[3] = {server, reference, signal};
+    HRESULT hr = S_OK;
+    for (unsigned i = 0; i < 3; i++) {
+        if (!DuplicateHandle(GetCurrentProcess(), source[i], GetCurrentProcess(), &owned[i], 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+            hr = HRESULT_FROM_WIN32(GetLastError());
+            goto fail;
+        }
+    }
+    if (!DuplicateHandle(GetCurrentProcess(), client, GetCurrentProcess(), &pty->process, 0, FALSE, DUPLICATE_SAME_ACCESS) ||
+        !CreatePipe(input, &pty->pty_in_write, NULL, 128 * 1024) || !CreatePipe(&pty->pty_out_read, output, NULL, 128 * 1024)) {
+        hr = HRESULT_FROM_WIN32(GetLastError());
+        goto fail;
+    }
+    pty->pid = GetProcessId(pty->process);
+    if (!pty->pid) { hr = HRESULT_FROM_WIN32(GetLastError()); goto fail; }
+    hr = conpty_api.pack(owned[0], owned[1], owned[2], &pty->hpc);
+    if (FAILED(hr)) goto fail;
+    memset(owned, 0, sizeof(owned)); // the packed ConPTY owns them now
+    *pid = pty->pid;
+    pty_ref(pty);
+    if (!RegisterWaitForSingleObject(&pty->wait_handle, pty->process, process_exited, pty, INFINITE, WT_EXECUTEONLYONCE)) {
+        pty_unref(pty);
+        hr = HRESULT_FROM_WIN32(GetLastError());
+        goto fail;
+    }
+    int slave = -1;
+    if (connect_pty(pty, master_fd, &slave)) {
+        _close(slave);
+        return S_OK;
+    }
+    pty = NULL; // connect_pty consumes the reference on both paths
+    hr = E_FAIL;
+fail:
+    for (unsigned i = 0; i < 3; i++) if (owned[i]) CloseHandle(owned[i]);
+    if (*input) CloseHandle(*input);
+    if (*output) CloseHandle(*output);
+    *input = *output = NULL;
+    if (pty) {
+        if (pty->hpc) close_pseudo_console(pty);
+        pty_unref(pty);
+    }
+    return hr;
 }
 
 // spawn {{{

@@ -117,6 +117,33 @@ def update(args: list[str]) -> None:
     main(args)
 
 
+def terminal_handoff(args: list[str]) -> None:
+    from kitty.constants import is_windows
+
+    if not is_windows:
+        raise SystemExit('Terminal handoff is only available on Windows')
+    from kitty.child import Child
+    from kitty.fast_data_types import win32_receive_terminal_handoff
+    from kitty.main import main
+
+    master, pid, title = win32_receive_terminal_handoff()
+    Child.pending_handoff = master, pid, title
+    # A user session file must not launch another shell before the handoff.
+    sys.argv = ['kitsu', '--session', 'none']
+    try:
+        main()
+    finally:
+        if Child.pending_handoff is not None:
+            os.close(master)
+            Child.pending_handoff = None
+
+
+def default_terminal(args: list[str]) -> None:
+    from kitty.default_terminal import main
+
+    main(args)
+
+
 def namespaced(args: list[str]) -> None:
     try:
         func = namespaced_entry_points[args[1]]
@@ -147,6 +174,8 @@ namespaced_entry_points['kitten'] = run_kitten
 namespaced_entry_points['shebang'] = shebang
 namespaced_entry_points['wsl-setup'] = wsl_setup
 namespaced_entry_points['health-check'] = health_check
+namespaced_entry_points['terminal-handoff'] = terminal_handoff
+namespaced_entry_points['default-terminal'] = default_terminal
 
 
 def setup_openssl_environment(ext_dir: str) -> None:

@@ -389,6 +389,8 @@ child_counter = count()
 
 
 class Child:
+    pending_handoff: tuple[int, int, str] | None = None
+    initial_title: str = ''
     child_fd: int | None = None
     pid: int | None = None
     initial_termios_state: list[Any] | None = None
@@ -509,6 +511,16 @@ class Child:
             return None
         opts = fast_data_types.get_options()
         self.forked = True
+        if is_windows and Child.pending_handoff is not None:
+            self.child_fd, self.pid, self.initial_title = Child.pending_handoff
+            Child.pending_handoff = None
+            self.terminal_ready_fd = -1
+            self.initial_termios_state = None
+            self.argv = self.cmdline_of_pid(self.pid) or self.argv
+            self.unmodified_argv = list(self.argv)
+            self.final_exe = self.final_argv0 = self.argv[0]
+            set_blocking(self.child_fd, False)
+            return self.pid
         master, slave = openpty()
         stdin, self.stdin = self.stdin, None
         ready_read_fd, ready_write_fd = os.pipe()
@@ -614,7 +626,8 @@ class Child:
         self.terminal_ready_fd = -1
 
     def mark_terminal_ready(self) -> None:
-        os.close(self.terminal_ready_fd)
+        if self.terminal_ready_fd >= 0:
+            os.close(self.terminal_ready_fd)
         self.terminal_ready_fd = -1
 
     def cmdline_of_pid(self, pid: int) -> list[str]:

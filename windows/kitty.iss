@@ -83,6 +83,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "addtopath"; Description: "Add Kitsu and kitten to the &PATH"; GroupDescription: "Integration:"
 Name: "wsl"; Description: "Install the kitten command into &WSL distributions and add it to their PATH"; GroupDescription: "Integration:"; Check: WslAvailable
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "terminalidentity"; Description: "Register Kitsu in Windows default &terminal settings (current user)"; GroupDescription: "Integration:"; Flags: unchecked; Check: TerminalIdentityAvailable
 
 [InstallDelete]
 ; Remove shortcuts left by the old branding during an in-place upgrade.
@@ -111,10 +112,12 @@ Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\kitty.ex
 Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\kitty.exe"; ValueType: string; ValueName: "Path"; ValueData: "{app}\bin"
 
 [Run]
+Filename: "{app}\{#AppExe}"; Parameters: "+default-terminal register"; StatusMsg: "Registering Kitsu terminal identity..."; Flags: runhidden waituntilterminated; Tasks: terminalidentity
 Filename: "{app}\{#AppExe}"; Parameters: "+wsl-setup"; StatusMsg: "Installing kitten into WSL distributions..."; Flags: runhidden waituntilterminated; Tasks: wsl
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
+Filename: "{app}\{#AppExe}"; Parameters: "+default-terminal unregister"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveTerminalIdentity"; Check: TerminalIdentityWasSelected
 Filename: "{app}\{#AppExe}"; Parameters: "+wsl-setup --uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveWslKitten"; Check: WslTaskWasSelected
 
 [UninstallDelete]
@@ -122,6 +125,20 @@ Filename: "{app}\{#AppExe}"; Parameters: "+wsl-setup --uninstall"; Flags: runhid
 Type: filesandordirs; Name: "{app}\lib"
 
 [Code]
+function TerminalIdentityAvailable: Boolean;
+begin
+  #if FileExists(SourceDir + "\terminal-identity.msix")
+    Result := (not IsAdminInstallMode) and (GetWindowsVersion >= $0A00585D);
+  #else
+    Result := False;
+  #endif
+end;
+
+function TerminalIdentityWasSelected: Boolean;
+begin
+  Result := (not IsAdminInstallMode) and FileExists(ExpandConstant('{app}\terminal-identity.msix'));
+end;
+
 function WslAvailable: Boolean;
 begin
   Result := FileExists(ExpandConstant('{sys}\wsl.exe'));

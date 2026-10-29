@@ -24,6 +24,27 @@ Run `kitsu` from cmd or PowerShell after enabling the installer's PATH task.
 The `kitsu.com` console shim makes command-line invocations wait and preserves
 their output; `kitsu.exe` launches the GUI without an extra console window.
 
+On Windows 11 22H2 or newer, a signed package can register Kitsu as a default
+terminal candidate. Choose the installer's optional current-user terminal task,
+or run `kitsu +default-terminal register` from a portable extraction. Select
+Kitsu in Windows' default-terminal settings, or explicitly run
+`kitsu +default-terminal enable` to select it and back up the previous setting.
+Registration alone never changes the selected terminal. `status` prints the
+current delegation pair, `restore` restores the previous pair, and `unregister`
+restores it and removes the current user's package registration. Restore leaves
+the selection alone if another terminal has since been chosen.
+
+Keep portable extractions at their registered location; unregister before moving
+or deleting them. Unsigned development builds do not contain the sparse MSIX
+identity and cannot register. Builds with `KITSU_SIGN_COMMAND` also require the
+Windows SDK's MakeAppx, mt and SignTool utilities (`KITSU_MAKEAPPX` can point to
+MakeAppx). The package publisher is derived from the signing certificate; local
+test certificates must be trusted before registration. Only the dedicated COM
+launcher carries package identity, so normal launches remain usable on older
+Windows versions. Windows 11 Settings discovery and Explorer/Win+R delegation
+still require Windows 11 validation; Server 2022 can only exercise the synthetic
+cross-process handoff test, not OS default-terminal selection.
+
 [source,powershell]
 ----
 kitsu --version

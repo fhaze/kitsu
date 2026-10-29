@@ -37,6 +37,19 @@ TEMP_CLEANUP_SIGNATURES = (
     '                fullname=None):\n',
 )
 
+TAR_FILTER_CHECK = '''    if os.path.commonpath([target_path, dest_path]) != dest_path:
+        raise OutsideDestinationError(member, target_path)
+    # Limit permissions (no high bits, and go-w)
+'''
+TAR_FILTER_FIXED = '''    if os.path.commonpath([target_path, dest_path]) != dest_path:
+        raise OutsideDestinationError(member, target_path)
+    # A link must not replace the extraction directory itself.
+    if ((member.islnk() or member.issym())
+            and os.path.normpath(name) == os.curdir):
+        raise OutsideDestinationError(member, target_path)
+    # Limit permissions (no high bits, and go-w)
+'''
+
 
 def patched_sources(stdlib: Path) -> dict[str, str]:
     poplib = (stdlib / 'poplib.py').read_text(encoding='utf-8')
@@ -55,7 +68,12 @@ def patched_sources(stdlib: Path) -> dict[str, str]:
         raise ValueError('The MSYS2 tempfile source changed; review the CPython security backport')
     tempfile = tempfile[:start] + TEMP_CLEANUP + tempfile[end:]
     tempfile = tempfile.replace(import_shutil, import_shutil + 'import subprocess as _subprocess\n', 1)
-    return {'poplib.py': poplib, 'tempfile.py': tempfile}
+    tarfile = (stdlib / 'tarfile.py').read_text(encoding='utf-8')
+    if tarfile.count(TAR_FILTER_CHECK) != 1 or TAR_FILTER_FIXED in tarfile:
+        raise ValueError('The MSYS2 tarfile source changed; review the CPython security backport')
+    # CPython 3.14 fix: https://github.com/python/cpython/commit/0901ad4ffb22605f12b705d1c1197f0a01f0ba0b
+    tarfile = tarfile.replace(TAR_FILTER_CHECK, TAR_FILTER_FIXED)
+    return {'poplib.py': poplib, 'tempfile.py': tempfile, 'tarfile.py': tarfile}
 
 
 def harden_python(stdlib: Path) -> None:
@@ -92,7 +110,10 @@ def verify_archive(package: Path, archive: Path) -> None:
                     expected = digest.hexdigest()
                 if sha256(package.parent / path) != expected:
                     raise ValueError(f'The tested package differs from the ZIP: {entry.filename}')
-        required = ['bin/kitten.exe', *(f'lib/{stdlib.name}/{name}' for stdlib in (package / 'lib').glob('python*') for name in ('poplib.py', 'tempfile.py'))]
+        required = [
+            'bin/kitten.exe',
+            *(f'lib/{stdlib.name}/{name}' for stdlib in (package / 'lib').glob('python*') for name in ('poplib.py', 'tempfile.py', 'tarfile.py')),
+        ]
         for name in required:
             if f'{package.name}/{name}' not in z.namelist():
                 raise ValueError(f'The ZIP is missing a security-patched runtime file: {name}')

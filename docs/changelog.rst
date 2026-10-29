@@ -202,6 +202,10 @@ Detailed list of changes
 0.49.2 [2026-10-01]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+- Windows: Add opt-in default-terminal registration for signed packages on
+  Windows 11 22H2+, with COM terminal handoff into Kitsu's existing PTY bridge,
+  sparse package identity, and explicit delegation backup/restore. :issue:`193`
+
 - Windows: Fix PowerShell shell integration overriding :opt:`cursor_shape`
   with a beam cursor at every prompt. Restore the configured shape instead,
   keeping ``block`` as the default and respecting config reloads

@@ -12,6 +12,8 @@ from kitty.simple_cli_definitions import OptionDefinition
 from kitty.types import LayerShellConfig, SignalInfo
 from kitty.typing_compat import EdgeLiteral, NotRequired, ReadableBuffer, WriteableBuffer
 
+def win32_receive_terminal_handoff(timeout: int = 60000) -> tuple[int, int, str]: ...
+
 # Constants {{{
 SCALE_BITS: int
 NULL_COLOR_VALUE: int

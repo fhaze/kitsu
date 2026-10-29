@@ -104,7 +104,7 @@ def verify_scan_inputs(archive: Path, runtime: dict[str, Any], binaries: dict[st
         raise ValueError('The runtime inventory does not describe this ZIP')
     if binaries['source']['name'] != 'kitsu-windows' or binaries['source']['version'] != version:
         raise ValueError('The binary inventory does not describe this ZIP')
-    if {s['vulnerability']['name'] for s in vex['statements']} != {'CVE-2025-15367', 'CVE-2026-12345'}:
+    if {s['vulnerability']['name'] for s in vex['statements']} != {'CVE-2025-15367', 'CVE-2026-12345', 'CVE-2026-114583'}:
         raise ValueError('Unexpected Python security attestations')
     python = next(c for c in runtime['components'] if c['name'] == 'python')
     python_product = f'pkg:generic/python@{python["version"]}?kitty_package={version}'
@@ -161,6 +161,7 @@ def main() -> None:
     fixes = {
         'CVE-2025-15367': 'Backported CPython POP3 control-character validation: https://github.com/python/cpython/commit/b234a2b67539f787e191d2ef19a7cbdce32874e7',
         'CVE-2026-12345': 'Replaced Windows TemporaryDirectory cleanup with kitten __remove_tree__, using Go >=1.26 handle-relative os.RemoveAll: https://go.dev/cl/661575',
+        'CVE-2026-114583': 'Backported CPython tar filter rejection of links replacing the extraction directory: https://github.com/python/cpython/commit/0901ad4ffb22605f12b705d1c1197f0a01f0ba0b',
     }
     vex = {
         '@context': 'https://openvex.dev/ns/v0.2.0',
