@@ -3,18 +3,29 @@ import sysconfig
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from zipfile import ZipFile
 
 from python_runtime import POP_COMMAND, TEMP_CLEANUP, TEMP_CLEANUP_SIGNATURES, harden_python, verify_archive, verify_python
 
 
 class PythonRuntimePatchTest(unittest.TestCase):
+    def setUp(self) -> None:
+        # Native extension integrity has its own tests; these cover stdlib patches.
+        verifier = patch('windows.python_ssl.verify')
+        verifier.start()
+        self.addCleanup(verifier.stop)
+
+    def copy_tarfile(self, directory: Path) -> None:
+        shutil.copy2(Path(sysconfig.get_path('stdlib')) / 'tarfile.py', directory / 'tarfile.py')
+
     def test_supported_cleanup_signatures(self) -> None:
         for signature in TEMP_CLEANUP_SIGNATURES:
             with self.subTest(signature=signature), tempfile.TemporaryDirectory() as tmp:
                 package = Path(tmp) / 'kitty'
                 original = Path(tmp) / 'python3.14'
                 original.mkdir()
+                self.copy_tarfile(original)
                 (original / 'poplib.py').write_text(POP_COMMAND, encoding='utf-8')
                 cleanup = '    @classmethod\n    def _cleanup(cls, name):\n        cls._rmtree(name)\n'
                 source = 'import shutil as _shutil\n\nclass TemporaryDirectory:\n' + signature + '        pass\n\n' + cleanup
@@ -61,13 +72,13 @@ class PythonRuntimePatchTest(unittest.TestCase):
             stdlib.mkdir(parents=True)
             (package / 'bin').mkdir()
             (package / 'bin/kitten.exe').write_bytes(b'helper')
-            for name in ('poplib.py', 'tempfile.py'):
+            for name in ('poplib.py', 'tempfile.py', 'tarfile.py'):
                 shutil.copy2(original / name, stdlib / name)
             with self.assertRaisesRegex(ValueError, 'backport was not verified'):
                 verify_python(package, original)
             harden_python(stdlib)
             verify_python(package, original)
-            for name in ('poplib.py', 'tempfile.py'):
+            for name in ('poplib.py', 'tempfile.py', 'tarfile.py'):
                 with self.subTest(name=name):
                     patched = (stdlib / name).read_bytes()
                     (stdlib / name).write_bytes(patched + b'\n')
@@ -91,7 +102,16 @@ class PythonRuntimePatchTest(unittest.TestCase):
             (package / 'bin').mkdir(parents=True)
             stdlib = package / 'lib/python3.14'
             stdlib.mkdir(parents=True)
-            for path in (package / 'bin/kitten.exe', stdlib / 'poplib.py', stdlib / 'tempfile.py'):
+            extensions = stdlib / 'lib-dynload'
+            extensions.mkdir()
+            for path in (
+                package / 'bin/kitten.exe',
+                stdlib / 'poplib.py',
+                stdlib / 'tempfile.py',
+                stdlib / 'tarfile.py',
+                extensions / '_ssl-build.json',
+                extensions / '_ssl.test.pyd',
+            ):
                 path.write_bytes(b'tested')
             archive = Path(tmp) / 'kitty.zip'
             with ZipFile(archive, 'w') as z:
@@ -102,6 +122,18 @@ class PythonRuntimePatchTest(unittest.TestCase):
             (stdlib / 'tempfile.py').write_bytes(b'not the tested runtime')
             with self.assertRaisesRegex(ValueError, 'differs from the ZIP'):
                 verify_archive(package, archive)
+
+    def test_changed_tar_source_fails_before_writing_patches(self) -> None:
+        original = Path(sysconfig.get_path('stdlib'))
+        with tempfile.TemporaryDirectory() as tmp:
+            stdlib = Path(tmp)
+            for name in ('poplib.py', 'tempfile.py'):
+                shutil.copy2(original / name, stdlib / name)
+            (stdlib / 'tarfile.py').write_text('changed upstream source', encoding='utf-8')
+            before = (stdlib / 'poplib.py').read_bytes()
+            with self.assertRaisesRegex(ValueError, 'tarfile source changed'):
+                harden_python(stdlib)
+            self.assertEqual((stdlib / 'poplib.py').read_bytes(), before)
 
 
 if __name__ == '__main__':

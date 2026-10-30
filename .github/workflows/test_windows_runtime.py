@@ -4,6 +4,7 @@ import poplib
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import unittest
@@ -12,6 +13,21 @@ from unittest.mock import patch
 
 
 class WindowsRuntimeTest(unittest.TestCase):
+    def test_tar_filters_reject_links_replacing_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ('', '.', './', 'sub/..'):
+                for kind in (tarfile.SYMTYPE, tarfile.LNKTYPE):
+                    member = tarfile.TarInfo(name)
+                    member.type = kind
+                    member.linkname = '.'
+                    for filter in (tarfile.tar_filter, tarfile.data_filter):
+                        with self.subTest(name=name, kind=kind, filter=filter.__name__):
+                            with self.assertRaises(tarfile.OutsideDestinationError):
+                                filter(member, tmp)
+            ordinary = tarfile.TarInfo('ordinary.txt')
+            for filter in (tarfile.tar_filter, tarfile.data_filter):
+                self.assertEqual(filter(ordinary, tmp).name, ordinary.name)
+
     def junction(self, link: Path, target: Path) -> None:
         subprocess.run(
             ['cmd.exe', '/d', '/c', 'mklink', '/J', str(link).replace('/', '\\'), str(target).replace('/', '\\')],

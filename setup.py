@@ -1891,6 +1891,9 @@ def bundle_windows_runtime(ddir: str, launcher_dir: str) -> None:
     from windows.python_runtime import harden_python
 
     harden_python(Path(stdlib_dest))
+    from windows.python_ssl import build as build_python_ssl
+
+    build_python_ssl(Path(stdlib_dest))
     compileall.compile_dir(stdlib_dest, force=True, optimize=2, quiet=1, workers=0, invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH, ddir='')
 
     # MSYS2 fontconfig looks for its configuration in <dir of DLL>/../etc/fonts
