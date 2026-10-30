@@ -81,7 +81,9 @@ class PythonSSLTest(unittest.TestCase):
     def test_normal_tls_over_local_sockets(self) -> None:
         # Exercise the native _socket C API as used by urllib, as well as BIOs.
         client_context = ssl.create_default_context(cafile=str(CERTS / 'pycacert.pem'))
+        client_context.minimum_version = ssl.TLSVersion.TLSv1_2
         server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_context.minimum_version = ssl.TLSVersion.TLSv1_2
         server_context.load_cert_chain(str(CERTS / 'keycert3.pem'))
         previous_timeout = socket.getdefaulttimeout()
         try:
