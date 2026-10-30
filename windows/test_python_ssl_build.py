@@ -16,7 +16,9 @@ class PythonSSLBuildTest(unittest.TestCase):
             archive.write_bytes(b'not the verified upstream source')
             with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
                 prepare_source(archive, work)
-            self.assertEqual(list(work.iterdir()), [archive])
+            entries = list(work.iterdir())
+            self.assertEqual(len(entries), 1)
+            self.assertTrue(entries[0].samefile(archive))
 
     def test_only_the_tested_extension_is_verified(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
