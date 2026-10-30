@@ -111,6 +111,7 @@ jobs:
             run: |
               python -m unittest discover -s .github/workflows -p 'test_windows_dependencies.py'
               python -m unittest discover -s windows -p 'test_python_runtime.py'
+              python -m unittest discover -s windows -p 'test_python_ssl_build.py'
               python -m unittest discover -s windows -p 'test_signing.py'
               pwsh -NoProfile -File windows/Connect-SimplySign.ps1 -SelfTest
 
@@ -258,6 +259,13 @@ jobs:
           - name: Test bundled Python security fixes
             shell: cmd
             run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import runpy; runpy.run_path('.github/workflows/test_windows_runtime.py', run_name='__main__')"
+
+          - name: Test bundled Python TLS security fix offline
+            shell: cmd
+            env:
+              KITSU_SSL_TEST_MODULE: ${{ github.workspace }}/windows-package/kitsu/lib/python3.14/lib-dynload
+              KITSU_SSL_TEST_CERTS: ${{ github.workspace }}/build/python-ssl/Python-3.14.10/Lib/test/certdata
+            run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import runpy; runpy.run_path('windows/test_python_ssl.py', run_name='__main__')"
 
           - name: Test updates and notification policy
             shell: cmd
