@@ -111,7 +111,7 @@ jobs:
             run: |
               python -m unittest discover -s .github/workflows -p 'test_windows_dependencies.py'
               python -m unittest discover -s windows -p 'test_python_runtime.py'
-              python -m unittest discover -s windows -p 'test_python_ssl_build.py'
+              python -m unittest discover -s windows -p 'test_python_ssl_vendor.py'
               python -m unittest discover -s windows -p 'test_signing.py'
               pwsh -NoProfile -File windows/Connect-SimplySign.ps1 -SelfTest
 
@@ -264,7 +264,7 @@ jobs:
             shell: cmd
             env:
               KITSU_SSL_TEST_MODULE: ${{ github.workspace }}/windows-package/kitsu/lib/python3.14/lib-dynload
-              KITSU_SSL_TEST_CERTS: ${{ github.workspace }}/build/python-ssl/Python-3.14.10/Lib/test/certdata
+              KITSU_SSL_TEST_CERTS: ${{ github.workspace }}/build/python-ssl/certdata
             run: start "" /b /wait windows-package\kitsu\bin\kitsu.exe +runpy "import runpy; runpy.run_path('windows/test_python_ssl.py', run_name='__main__')"
 
           - name: Test updates and notification policy
