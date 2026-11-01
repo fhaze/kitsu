@@ -81,6 +81,11 @@ def build_terminal_package(package: Path, version: str, arch: str) -> None:
             ],
             env=env,
         )
+        # Sparse-package references resolve against ExternalLocation. Keeping
+        # these only inside the MSIX leaves discovery assets/public folders absent.
+        (stage / 'Public' / 'README.txt').write_text('Kitsu default-terminal app extensions.\n', encoding='utf-8')
+        for directory in ('Assets', 'Public'):
+            shutil.copytree(stage / directory, package / directory, dirs_exist_ok=True)
         # Sparse manifests refer to external binaries, so skip MakeAppx's
         # payload existence checks with /nv.
         sdk = Path(makeappx())

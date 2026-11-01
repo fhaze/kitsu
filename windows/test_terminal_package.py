@@ -1,6 +1,25 @@
+import sys
 import unittest
+from pathlib import Path, PureWindowsPath
+from xml.etree import ElementTree
+from zipfile import ZipFile
 
 from windows.terminal_package import package_version
+
+
+def verify_external_paths(package: Path) -> None:
+    with ZipFile(package / 'terminal-identity.msix') as archive:
+        manifest = ElementTree.fromstring(archive.read('AppxManifest.xml'))
+    paths: set[str] = set()
+    for element in manifest.iter():
+        if element.tag.rpartition('}')[2] == 'Logo' and element.text:
+            paths.add(element.text)
+        for name, value in element.attrib.items():
+            if name.endswith('Logo') or name in ('Executable', 'Path', 'PublicFolder'):
+                paths.add(value)
+    missing = [name for name in sorted(paths) if not (package / Path(*PureWindowsPath(name).parts)).exists()]
+    if missing:
+        raise ValueError(f'Sparse manifest paths missing from the external location: {", ".join(missing)}')
 
 
 class TerminalPackageTest(unittest.TestCase):
@@ -13,4 +32,8 @@ class TerminalPackageTest(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    if len(sys.argv) == 2 and Path(sys.argv[1]).is_dir():
+        verify_external_paths(Path(sys.argv[1]))
+        print('PASS: all sparse manifest assets, public folders, executables and proxy DLLs exist externally')
+    else:
+        unittest.main()

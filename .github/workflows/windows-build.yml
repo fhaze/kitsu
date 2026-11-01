@@ -183,6 +183,9 @@ jobs:
               python windows/signing.py verify windows-package/kitsu "${{ steps.pkg.outputs.setup }}" \
                 --thumbprint "$THUMBPRINT" ${{ inputs.sign && '--require-timestamp' || '' }}
 
+          - name: Verify sparse terminal manifest external paths
+            run: python -m windows.test_terminal_package windows-package/kitsu
+
           - name: Test Windows console and TUI key handling
             run: |
               go test ./tools/tty ./tools/tui/loop ./tools/tui/readline ./kittens/choose_files
