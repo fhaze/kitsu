@@ -1,7 +1,8 @@
 import tempfile
 import unittest
-from unittest.mock import patch
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from unittest.mock import patch
 
 from signing import (
     REQUIRED_FILES,
@@ -36,6 +37,19 @@ def make_package(root: Path) -> Path:
 
 
 class SigningTest(unittest.TestCase):
+    def test_terminal_identity_signing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            package = make_package(Path(tmp))
+            identity = package / 'terminal-identity.msix'
+            launcher = package / 'bin/kitsu-handoff.exe'
+            identity.write_bytes(b'MSIX')
+            with self.assertRaisesRegex(ValueError, 'kitsu-handoff.exe'):
+                first_party_files(package)
+            launcher.write_bytes(b'MZ')
+            files = first_party_files(package)
+            self.assertIn(identity, files)
+            self.assertIn(launcher, files)
+
     def test_signs_only_first_party_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             package = make_package(Path(tmp))
@@ -80,7 +94,7 @@ class SigningTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             package = make_package(Path(tmp))
 
-            def timestamp_files(paths, cmd, run) -> None:
+            def timestamp_files(paths: Sequence[Path], cmd: str, run: Callable[[str], None]) -> None:
                 for i, path in enumerate(paths):
                     path.write_bytes(path.read_bytes() + f'signature and timestamp {i}'.encode())
 

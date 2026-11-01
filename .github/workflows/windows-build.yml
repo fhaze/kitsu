@@ -113,6 +113,8 @@ jobs:
               python -m unittest discover -s windows -p 'test_python_runtime.py'
               python -m unittest discover -s windows -p 'test_python_ssl_vendor.py'
               python -m unittest discover -s windows -p 'test_signing.py'
+              python -m unittest discover -s windows -p 'test_terminal_package.py'
+              python -m unittest discover -s windows -p 'test_terminal_handoff_registry.py'
               pwsh -NoProfile -File windows/Connect-SimplySign.ps1 -SelfTest
 
           - name: Create a throwaway test signing certificate
@@ -181,6 +183,9 @@ jobs:
               python windows/signing.py verify windows-package/kitsu "${{ steps.pkg.outputs.setup }}" \
                 --thumbprint "$THUMBPRINT" ${{ inputs.sign && '--require-timestamp' || '' }}
 
+          - name: Verify sparse terminal manifest external paths
+            run: python -m windows.test_terminal_package windows-package/kitsu
+
           - name: Test Windows console and TUI key handling
             run: |
               go test ./tools/tty ./tools/tui/loop ./tools/tui/readline ./kittens/choose_files
@@ -193,6 +198,9 @@ jobs:
 
           - name: Test ConPTY child UTF-8 code pages and escape payloads
             run: python windows/test_console_utf8.py windows-package/kitsu
+
+          - name: Test cross-process COM terminal handoff
+            run: python windows/test_terminal_handoff.py windows-package/kitsu
 
           - name: Test Windows config reload IPC and kitten error reporting
             run: |

@@ -1142,7 +1142,7 @@ class Boss:
                                 assert isinstance(window.launch_spec, LaunchSpec)
                                 launch(get_boss(), window.launch_spec.opts, window.launch_spec.args)
                     continue
-                wstate = args.start_as if args.start_as and args.start_as != 'normal' else None  # ty: ignore[redundant-condition]
+                wstate = args.start_as if args.start_as and args.start_as != 'normal' else None
                 os_window_id = self.add_os_window(
                     session,
                     wclass=args.cls,

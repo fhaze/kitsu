@@ -372,6 +372,23 @@ spawn(PyObject *self UNUSED, PyObject *args) {
 
 #ifdef _WIN32
 static PyObject*
+win32_receive_terminal_handoff(PyObject *self UNUSED, PyObject *args) {
+    unsigned long timeout = 60000, pid = 0;
+    if (!PyArg_ParseTuple(args, "|k", &timeout)) return NULL;
+    int master = -1;
+    wchar_t *title = NULL;
+    long hr;
+    Py_BEGIN_ALLOW_THREADS
+    hr = win32_receive_handoff(&master, &pid, &title, timeout);
+    Py_END_ALLOW_THREADS
+    if (hr < 0) return PyErr_Format(PyExc_OSError, "Terminal handoff failed: HRESULT 0x%08lx", (unsigned long)hr);
+    PyObject *ans = Py_BuildValue("ikN", master, pid, PyUnicode_FromWideChar(title ? title : L"", -1));
+    free(title);
+    if (!ans) close(master);
+    return ans;
+}
+
+static PyObject*
 win32_conpty_provider(PyObject *self UNUSED, PyObject *args UNUSED) {
     return PyUnicode_FromString(win32_pty_provider());
 }
@@ -408,6 +425,7 @@ static PyMethodDef module_methods[] = {
     METHODB(spawn, METH_VARARGS),
 #ifdef _WIN32
     METHODB(win32_conpty_provider, METH_NOARGS),
+    METHODB(win32_receive_terminal_handoff, METH_VARARGS),
     METHODB(win32_batch_command_line, METH_VARARGS),
     METHODB(openpty, METH_VARARGS),
     METHODB(set_blocking, METH_VARARGS),

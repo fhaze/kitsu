@@ -5,13 +5,14 @@
 import os
 import posixpath
 import shlex
+import subprocess
 from collections.abc import Iterable, Iterator
 from contextlib import suppress
 from typing import Any, NamedTuple
 from urllib.parse import ParseResult, unquote, urlparse
 
 from .conf.utils import KeyAction, to_cmdline_implementation
-from .constants import config_dir
+from .constants import config_dir, is_windows
 from .fast_data_types import get_options
 from .guess_mime_type import guess_type
 from .options.utils import ActionAlias, MapType, resolve_aliases_and_parse_actions
@@ -69,12 +70,14 @@ def parse(lines: Iterable[str]) -> Iterator[OpenAction]:
     if match_criteria and raw_actions:
         entries.append((tuple(match_criteria), tuple(raw_actions)))
 
+    editor = subprocess.list2cmdline(get_editor()) if is_windows else shlex.join(get_editor())
     with to_cmdline_implementation.filter_env_vars(
-        'URL', 'FILE_PATH', 'FILE', 'FRAGMENT', 'URL_PATH', 'NETLOC', EDITOR=shlex.join(get_editor()), SHELL=resolved_shell(get_options())[0]
+        'URL', 'FILE_PATH', 'FILE', 'FRAGMENT', 'URL_PATH', 'NETLOC', EDITOR=editor, SHELL=resolved_shell(get_options())[0]
     ):
         for mc, action_defns in entries:
             actions: list[KeyAction] = []
             for defn in action_defns:
+                defn = expandvars(defn, {'EDITOR': editor}, fallback_to_os_env=False)
                 actions.extend(resolve_aliases_and_parse_actions(defn, alias_map, MapType.OPEN_ACTION))
             yield OpenAction(mc, tuple(actions))
 

@@ -794,7 +794,7 @@ class Window:
         self.needs_attention = False
         self.ignore_focus_changes = self.initial_ignore_focus_changes
         self.override_title = override_title
-        self.default_title = os.path.basename(child.argv[0] or appname)
+        self.default_title = sanitize_title(child.initial_title) or os.path.basename(child.argv[0] or appname)
         self.child_title = self.default_title
         self.title_stack: Deque[str] = deque(maxlen=10)
         self.user_vars: dict[str, str] = {}

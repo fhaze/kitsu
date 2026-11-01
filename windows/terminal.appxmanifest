@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+ xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+ xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+ xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+ xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+ xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+ IgnorableNamespaces="uap uap3 uap10 com rescap">
+  <Identity Name="FHaze.Kitsu.Terminal" Publisher="@PUBLISHER@" Version="@VERSION@" ProcessorArchitecture="@ARCH@" />
+  <Properties>
+    <DisplayName>Kitsu</DisplayName><PublisherDisplayName>FHaze</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo><uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+  </Properties>
+  <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22621.0" MaxVersionTested="10.0.26100.0" /></Dependencies>
+  <Resources><Resource Language="en-US" /></Resources>
+  <Applications>
+    <Application Id="Kitsu" Executable="bin\kitsu-handoff.exe" uap10:RuntimeBehavior="win32App" uap10:TrustLevel="mediumIL">
+      <uap:VisualElements AppListEntry="none" DisplayName="Kitsu" Description="Kitsu terminal" BackgroundColor="transparent"
+        Square150x150Logo="Assets\Logo.png" Square44x44Logo="Assets\SmallLogo.png" />
+      <Extensions>
+        <uap3:Extension Category="windows.appExtension">
+          <uap3:AppExtension Name="com.microsoft.windows.console.host" Id="OpenConsole" DisplayName="OpenConsole"
+           Description="Microsoft OpenConsole for Kitsu" PublicFolder="Public">
+            <uap3:Properties><Clsid>{2EACA947-7F5F-4CFA-BA87-8F7FBEEFBE69}</Clsid></uap3:Properties>
+          </uap3:AppExtension>
+        </uap3:Extension>
+        <uap3:Extension Category="windows.appExtension">
+          <uap3:AppExtension Name="com.microsoft.windows.terminal.host" Id="Terminal" DisplayName="Kitsu"
+           Description="Kitsu terminal handoff" PublicFolder="Public">
+            <uap3:Properties><Clsid>{75AB2A9B-3128-4777-9D2B-3126EC262B1D}</Clsid></uap3:Properties>
+          </uap3:AppExtension>
+        </uap3:Extension>
+        <com:Extension Category="windows.comServer"><com:ComServer>
+          <com:ExeServer Executable="bin\OpenConsole.exe" DisplayName="OpenConsole">
+            <com:Class Id="2EACA947-7F5F-4CFA-BA87-8F7FBEEFBE69" />
+          </com:ExeServer>
+          <com:ExeServer Executable="bin\kitsu-handoff.exe" Arguments="+terminal-handoff" DisplayName="Kitsu">
+            <com:Class Id="75AB2A9B-3128-4777-9D2B-3126EC262B1D" />
+          </com:ExeServer>
+        </com:ComServer></com:Extension>
+        <com:Extension Category="windows.comInterface"><com:ComInterface>
+          <com:ProxyStub Id="3171DE52-6EFA-4AEF-8A9F-D02BD67E7A4F" DisplayName="OpenConsoleHandoffProxy" Path="bin\OpenConsoleProxy.dll" />
+          <com:Interface Id="E686C757-9A35-4A1C-B3CE-0BCC8B5C69F4" ProxyStubClsid="3171DE52-6EFA-4AEF-8A9F-D02BD67E7A4F" />
+          <com:Interface Id="6F23DA90-15C5-4203-9DB0-64E73F1B1B00" ProxyStubClsid="3171DE52-6EFA-4AEF-8A9F-D02BD67E7A4F" />
+          <com:Interface Id="746E6BC0-AB05-4E38-AB14-71E86763141F" ProxyStubClsid="3171DE52-6EFA-4AEF-8A9F-D02BD67E7A4F" />
+        </com:ComInterface></com:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities><rescap:Capability Name="runFullTrust" /><rescap:Capability Name="unvirtualizedResources" /></Capabilities>
+</Package>

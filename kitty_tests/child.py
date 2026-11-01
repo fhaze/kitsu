@@ -34,6 +34,27 @@ def write_batch_file_recorder(path: str) -> None:
 
 
 class ChildMemoryTest(BaseTest):
+    def test_windows_handoff_child(self):
+        self.set_options()
+        child = Child(['unused.exe'], '')
+        title = 'Kitsu handoff validation — synthetic console'
+        try:
+            with (
+                patch('kitty.child.is_windows', True),
+                patch('kitty.child.set_blocking') as set_blocking,
+                patch.object(child, 'cmdline_of_pid', return_value=['python.exe']),
+                patch.object(Child, 'pending_handoff', (123, 456, title)),
+            ):
+                self.ae(child.fork(), 456)
+                self.ae(child.child_fd, 123)
+                self.ae(child.initial_title, title)
+                self.ae(child.argv, ['python.exe'])
+                self.ae(child.terminal_ready_fd, -1)
+                self.assertIsNone(Child.pending_handoff)
+                set_blocking.assert_called_once_with(123, False)
+        finally:
+            child.child_fd = None
+
     def test_windows_shell_detection(self):
         with patch('kitty.child.is_windows', True):
             for executable in ('cmd.exe', r'C:\Program Files\PowerShell\7\pwsh.exe', 'powershell.exe'):
