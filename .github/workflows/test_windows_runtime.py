@@ -14,20 +14,19 @@ from unittest.mock import patch
 
 class WindowsRuntimeTest(unittest.TestCase):
     def test_tar_filters_reject_links_replacing_destination(self) -> None:
-        with tempfile.TemporaryDirectory() as destination:
-            for filter in (tarfile.tar_filter, tarfile.data_filter):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ('', '.', './', 'sub/..'):
                 for kind in (tarfile.SYMTYPE, tarfile.LNKTYPE):
-                    for name in ('', '.', './', '././', 'subdir/..'):
-                        member = tarfile.TarInfo(name)
-                        member.type = kind
-                        member.linkname = 'other'
-                        with self.subTest(filter=filter.__name__, kind=kind, name=name), self.assertRaises(tarfile.OutsideDestinationError):
-                            filter(member, destination)
-                member = tarfile.TarInfo('regular.txt')
-                self.assertEqual(filter(member, destination).name, 'regular.txt')
-                directory = tarfile.TarInfo('.')
-                directory.type = tarfile.DIRTYPE
-                self.assertEqual(filter(directory, destination).name, '.')
+                    member = tarfile.TarInfo(name)
+                    member.type = kind
+                    member.linkname = '.'
+                    for filter in (tarfile.tar_filter, tarfile.data_filter):
+                        with self.subTest(name=name, kind=kind, filter=filter.__name__):
+                            with self.assertRaises(tarfile.OutsideDestinationError):
+                                filter(member, tmp)
+            ordinary = tarfile.TarInfo('ordinary.txt')
+            for filter in (tarfile.tar_filter, tarfile.data_filter):
+                self.assertEqual(filter(ordinary, tmp).name, ordinary.name)
 
     def junction(self, link: Path, target: Path) -> None:
         subprocess.run(

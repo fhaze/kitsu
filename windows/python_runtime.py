@@ -37,18 +37,36 @@ TEMP_CLEANUP_SIGNATURES = (
     '                fullname=None):\n',
 )
 
-TAR_FILTER_CHECK = '''    if os.path.commonpath([target_path, dest_path]) != dest_path:
+TAR_DESTINATION = """    if os.path.commonpath([target_path, dest_path]) != dest_path:
         raise OutsideDestinationError(member, target_path)
     # Limit permissions (no high bits, and go-w)
-'''
-TAR_FILTER_FIXED = '''    if os.path.commonpath([target_path, dest_path]) != dest_path:
+"""
+TAR_DESTINATION_FIXED = """    if os.path.commonpath([target_path, dest_path]) != dest_path:
         raise OutsideDestinationError(member, target_path)
-    # A link must not replace the extraction directory itself.
+    # A link member named after the destination directory itself
+    # would replace it with a (sym)link, redirecting the destination
+    # for all subsequent members.
     if ((member.islnk() or member.issym())
             and os.path.normpath(name) == os.curdir):
         raise OutsideDestinationError(member, target_path)
     # Limit permissions (no high bits, and go-w)
-'''
+"""
+TAR_DATA_DESTINATION = """            # A link member that resolves to the destination directory itself
+            # would replace it with a (sym)link, redirecting the destination
+            # for all subsequent members.
+            if target_path == dest_path:
+                raise OutsideDestinationError(member, target_path)
+"""
+
+
+def checked_tarfile(source: str) -> str:
+    # Reviewed upstream fix in Python 3.14.10: preserve it without reapplying.
+    if source.count(TAR_DESTINATION_FIXED) == 1 and TAR_DESTINATION not in source and TAR_DATA_DESTINATION not in source:
+        return source
+    # Retain the exact reviewed older shape for source-level compatibility.
+    if source.count(TAR_DESTINATION) == 1 and source.count(TAR_DATA_DESTINATION) == 1 and TAR_DESTINATION_FIXED not in source:
+        return source.replace(TAR_DESTINATION, TAR_DESTINATION_FIXED).replace(TAR_DATA_DESTINATION, '')
+    raise ValueError('The MSYS2 tarfile source changed; review the CPython security fix')
 
 
 def patched_sources(stdlib: Path) -> dict[str, str]:
@@ -68,11 +86,8 @@ def patched_sources(stdlib: Path) -> dict[str, str]:
         raise ValueError('The MSYS2 tempfile source changed; review the CPython security backport')
     tempfile = tempfile[:start] + TEMP_CLEANUP + tempfile[end:]
     tempfile = tempfile.replace(import_shutil, import_shutil + 'import subprocess as _subprocess\n', 1)
-    tarfile = (stdlib / 'tarfile.py').read_text(encoding='utf-8')
-    if tarfile.count(TAR_FILTER_CHECK) != 1 or TAR_FILTER_FIXED in tarfile:
-        raise ValueError('The MSYS2 tarfile source changed; review the CPython security backport')
-    # CPython 3.14 fix: https://github.com/python/cpython/commit/0901ad4ffb22605f12b705d1c1197f0a01f0ba0b
-    tarfile = tarfile.replace(TAR_FILTER_CHECK, TAR_FILTER_FIXED)
+    # CPython 3.14 backport: https://github.com/python/cpython/commit/0901ad4
+    tarfile = checked_tarfile((stdlib / 'tarfile.py').read_text(encoding='utf-8'))
     return {'poplib.py': poplib, 'tempfile.py': tempfile, 'tarfile.py': tarfile}
 
 
@@ -89,6 +104,9 @@ def verify_python(package: Path, original_stdlib: Path) -> None:
             raise ValueError(f'The shipped Python security backport was not verified: {name}')
     if not (package / 'bin/kitten.exe').is_file():
         raise ValueError('The native Windows cleanup helper is missing')
+    from windows.python_ssl import verify
+
+    verify(stdlib, original_stdlib)
 
 
 def sha256(path: Path) -> str:
@@ -112,8 +130,18 @@ def verify_archive(package: Path, archive: Path) -> None:
                     raise ValueError(f'The tested package differs from the ZIP: {entry.filename}')
         required = [
             'bin/kitten.exe',
-            *(f'lib/{stdlib.name}/{name}' for stdlib in (package / 'lib').glob('python*') for name in ('poplib.py', 'tempfile.py', 'tarfile.py')),
+            *(
+                f'lib/{stdlib.name}/{name}'
+                for stdlib in (package / 'lib').glob('python*')
+                for name in ('poplib.py', 'tempfile.py', 'tarfile.py')
+            ),
         ]
+        for stdlib in (package / 'lib').glob('python*'):
+            extensions = list((stdlib / 'lib-dynload').glob('_ssl*.pyd'))
+            if len(extensions) != 1:
+                raise ValueError('Unexpected packaged SSL extension layout')
+            required.append(extensions[0].relative_to(package).as_posix())
+            required.append(f'bin/lib{stdlib.name}.dll')
         for name in required:
             if f'{package.name}/{name}' not in z.namelist():
                 raise ValueError(f'The ZIP is missing a security-patched runtime file: {name}')

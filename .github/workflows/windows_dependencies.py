@@ -104,9 +104,12 @@ def verify_scan_inputs(archive: Path, runtime: dict[str, Any], binaries: dict[st
         raise ValueError('The runtime inventory does not describe this ZIP')
     if binaries['source']['name'] != 'kitsu-windows' or binaries['source']['version'] != version:
         raise ValueError('The binary inventory does not describe this ZIP')
-    if {s['vulnerability']['name'] for s in vex['statements']} != {'CVE-2025-15367', 'CVE-2026-12345', 'CVE-2026-114583'}:
+    if {s['vulnerability']['name'] for s in vex['statements']} != {'CVE-2025-15367', 'CVE-2026-12345'}:
         raise ValueError('Unexpected Python security attestations')
     python = next(c for c in runtime['components'] if c['name'] == 'python')
+    vendor_version = re.fullmatch(r'3\.14\.(\d+)', python['version'])
+    if vendor_version is None or int(vendor_version[1]) < 10:
+        raise ValueError('The inventory requires upstream-fixed MSYS2 Python >= 3.14.10')
     python_product = f'pkg:generic/python@{python["version"]}?kitty_package={version}'
     if python['purl'] != python_product:
         raise ValueError('The Python identity is not restricted to this ZIP')
@@ -114,6 +117,8 @@ def verify_scan_inputs(archive: Path, runtime: dict[str, Any], binaries: dict[st
         if statement['status'] != 'fixed' or statement['products'] != [{'@id': product}, {'@id': python_product}]:
             raise ValueError('The security attestation is not restricted to this fixed ZIP')
     paths = {p['value'] for p in python['properties'] if p['name'] == 'kitty:packaged-file'}
+    if not any(p.startswith('lib/python3.14/lib-dynload/_ssl.') and p.endswith('.pyd') for p in paths):
+        raise ValueError('The fixed vendor SSL extension was not inventoried')
     python_binaries = [c for c in binaries['artifacts'] if c['name'].lower() in ('python', 'cpython')]
     if not python_binaries:
         raise ValueError('The Python binaries were not identified')
@@ -161,7 +166,6 @@ def main() -> None:
     fixes = {
         'CVE-2025-15367': 'Backported CPython POP3 control-character validation: https://github.com/python/cpython/commit/b234a2b67539f787e191d2ef19a7cbdce32874e7',
         'CVE-2026-12345': 'Replaced Windows TemporaryDirectory cleanup with kitten __remove_tree__, using Go >=1.26 handle-relative os.RemoveAll: https://go.dev/cl/661575',
-        'CVE-2026-114583': 'Backported CPython tar filter rejection of links replacing the extraction directory: https://github.com/python/cpython/commit/0901ad4ffb22605f12b705d1c1197f0a01f0ba0b',
     }
     vex = {
         '@context': 'https://openvex.dev/ns/v0.2.0',
