@@ -104,7 +104,7 @@ def verify_scan_inputs(archive: Path, runtime: dict[str, Any], binaries: dict[st
         raise ValueError('The runtime inventory does not describe this ZIP')
     if binaries['source']['name'] != 'kitsu-windows' or binaries['source']['version'] != version:
         raise ValueError('The binary inventory does not describe this ZIP')
-    if {s['vulnerability']['name'] for s in vex['statements']} != {'CVE-2025-15367', 'CVE-2026-12345'}:
+    if {s['vulnerability']['name'] for s in vex['statements']} != {'CVE-2025-15367', 'CVE-2026-12345', 'CVE-2026-114583', 'CVE-2026-115557'}:
         raise ValueError('Unexpected Python security attestations')
     python = next(c for c in runtime['components'] if c['name'] == 'python')
     python_product = f'pkg:generic/python@{python["version"]}?kitty_package={version}'
@@ -144,6 +144,15 @@ def main() -> None:
     components = runtime_components(package, msys_root, os.environ['MINGW_PACKAGE_PREFIX'])
     python = next(c for c in components if c['name'] == 'python')
     python['purl'] += f'?kitty_package={artifact_version}'
+    ssl_info = json.loads((package / 'lib' / Path(sysconfig.get_path('stdlib')).name / 'lib-dynload/_ssl-build.json').read_text(encoding='utf-8'))
+    python['properties'].extend(
+        {'name': name, 'value': ssl_info[key]}
+        for name, key in (
+            ('kitty:ssl-source-version', 'source_version'),
+            ('kitty:ssl-source-sha256', 'source_sha256'),
+            ('kitty:ssl-extension-sha256', 'extension_sha256'),
+        )
+    )
     output.write_text(
         json.dumps(
             {
@@ -161,6 +170,11 @@ def main() -> None:
     fixes = {
         'CVE-2025-15367': 'Backported CPython POP3 control-character validation: https://github.com/python/cpython/commit/b234a2b67539f787e191d2ef19a7cbdce32874e7',
         'CVE-2026-12345': 'Replaced Windows TemporaryDirectory cleanup with kitten __remove_tree__, using Go >=1.26 handle-relative os.RemoveAll: https://go.dev/cl/661575',
+        'CVE-2026-114583': 'Backported the CPython 3.14 tarfile destination-link rejection: https://github.com/python/cpython/commit/0901ad4',
+        'CVE-2026-115557': (
+            'Built the private _ssl extension from checksum-verified CPython 3.14.10 with the upstream SPKI denylist; '
+            'verified its packaged hash and offline compromised-chain rejection: https://github.com/python/cpython/pull/160569'
+        ),
     }
     vex = {
         '@context': 'https://openvex.dev/ns/v0.2.0',

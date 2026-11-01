@@ -95,7 +95,7 @@ class WindowsDependenciesTest(unittest.TestCase):
             vex: dict[str, Any] = {
                 'statements': [
                     {'vulnerability': {'name': cve}, 'products': [{'@id': product}, {'@id': python_product}], 'status': 'fixed'}
-                    for cve in ('CVE-2025-15367', 'CVE-2026-12345')
+                    for cve in ('CVE-2025-15367', 'CVE-2026-12345', 'CVE-2026-114583', 'CVE-2026-115557')
                 ]
             }
             verify_scan_inputs(archive, runtime, binaries, vex)
@@ -119,6 +119,10 @@ class WindowsDependenciesTest(unittest.TestCase):
             altered = copy.deepcopy(vex)
             altered['statements'][0]['status'] = 'not_affected'
             with self.assertRaisesRegex(ValueError, 'not restricted'):
+                verify_scan_inputs(archive, runtime, binaries, altered)
+            altered = copy.deepcopy(vex)
+            altered['statements'].pop()
+            with self.assertRaisesRegex(ValueError, 'Unexpected Python security attestations'):
                 verify_scan_inputs(archive, runtime, binaries, altered)
             archive.write_bytes(b'a different package')
             with self.assertRaisesRegex(ValueError, 'does not describe this ZIP'):
