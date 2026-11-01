@@ -6,7 +6,10 @@ from pathlib import Path
 from unittest.mock import patch
 from zipfile import ZipFile
 
-from python_runtime import POP_COMMAND, TEMP_CLEANUP, TEMP_CLEANUP_SIGNATURES, harden_python, verify_archive, verify_python
+from python_runtime import (
+    POP_COMMAND, TAR_DATA_DESTINATION, TAR_DESTINATION, TAR_DESTINATION_FIXED, TEMP_CLEANUP, TEMP_CLEANUP_SIGNATURES,
+    checked_tarfile, harden_python, verify_archive, verify_python,
+)
 
 
 class PythonRuntimePatchTest(unittest.TestCase):
@@ -109,7 +112,7 @@ class PythonRuntimePatchTest(unittest.TestCase):
                 stdlib / 'poplib.py',
                 stdlib / 'tempfile.py',
                 stdlib / 'tarfile.py',
-                extensions / '_ssl-build.json',
+                package / 'bin/libpython3.14.dll',
                 extensions / '_ssl.test.pyd',
             ):
                 path.write_bytes(b'tested')
@@ -134,6 +137,24 @@ class PythonRuntimePatchTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'tarfile source changed'):
                 harden_python(stdlib)
             self.assertEqual((stdlib / 'poplib.py').read_bytes(), before)
+
+    def test_reviewed_tar_sources_and_unknown_changes(self) -> None:
+        source = (Path(sysconfig.get_path('stdlib')) / 'tarfile.py').read_text(encoding='utf-8')
+        # The upstream-fixed source is already correct and must stay unchanged.
+        self.assertEqual(source.count(TAR_DESTINATION_FIXED), 1)
+        self.assertEqual(checked_tarfile(source), source)
+        anchor = '            normalized = os.path.normpath(member.linkname)\n'
+        self.assertEqual(source.count(anchor), 1)
+        legacy = source.replace(TAR_DESTINATION_FIXED, TAR_DESTINATION).replace(anchor, TAR_DATA_DESTINATION + anchor)
+        self.assertEqual(checked_tarfile(legacy), source)
+        for changed in (
+            source.replace('os.path.normpath(name) == os.curdir', 'False'),
+            source + TAR_DESTINATION_FIXED,
+            source + TAR_DATA_DESTINATION,
+            legacy + TAR_DESTINATION_FIXED,
+        ):
+            with self.subTest(source=changed), self.assertRaisesRegex(ValueError, 'tarfile source changed'):
+                checked_tarfile(changed)
 
 
 if __name__ == '__main__':

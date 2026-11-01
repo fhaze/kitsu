@@ -24,7 +24,7 @@ class WindowsDependenciesTest(unittest.TestCase):
                 (entry / 'files').write_text(f'%FILES%\nucrt64/bin/{filename}\n', encoding='utf-8')
                 (root / 'ucrt64/bin' / filename).write_bytes(content)
 
-            installed('python', '3.14.8-1', 'libpython3.14.dll', b'python')
+            installed('python', '3.14.10-1', 'libpython3.14.dll', b'python')
             installed('openssl', '1:3.6.0-2', 'libssl.dll', b'openssl')
             installed('unshipped', '1.0-1', 'unshipped.exe', b'build tool')
             installed('different', '1.0-1', 'different.dll', b'not shipped')
@@ -35,9 +35,9 @@ class WindowsDependenciesTest(unittest.TestCase):
             components = runtime_components(package, root, 'mingw-w64-ucrt-x86_64')
             by_name = {component['name']: component for component in components}
             self.assertEqual(set(by_name), {'python', 'openssl'})
-            self.assertEqual(by_name['python']['version'], '3.14.8')
+            self.assertEqual(by_name['python']['version'], '3.14.10')
             self.assertEqual(by_name['openssl']['version'], '3.6.0')
-            self.assertEqual(by_name['python']['purl'], 'pkg:generic/python@3.14.8')
+            self.assertEqual(by_name['python']['purl'], 'pkg:generic/python@3.14.10')
             self.assertIn({'name': 'kitty:packaged-file', 'value': 'bin/libpython3.14.dll'}, by_name['python']['properties'])
 
             dll = package / 'bin/libfontconfig-1.dll'
@@ -76,29 +76,41 @@ class WindowsDependenciesTest(unittest.TestCase):
             archive.write_bytes(b'tested package')
             version = hashlib.sha256(archive.read_bytes()).hexdigest()
             product = f'pkg:generic/kitsu-windows@{version}'
-            python_product = f'pkg:generic/python@3.14.8?kitty_package={version}'
+            python_product = f'pkg:generic/python@3.14.10?kitty_package={version}'
             runtime: dict[str, Any] = {
                 'metadata': {'component': {'name': 'kitsu-windows', 'version': version, 'purl': product}},
                 'components': [
                     {
                         'name': 'python',
-                        'version': '3.14.8',
+                        'version': '3.14.10',
                         'purl': python_product,
-                        'properties': [{'name': 'kitty:packaged-file', 'value': 'bin/libpython3.14.dll'}],
+                        'properties': [
+                            {'name': 'kitty:packaged-file', 'value': 'bin/libpython3.14.dll'},
+                            {'name': 'kitty:packaged-file', 'value': 'lib/python3.14/lib-dynload/_ssl.cp314-mingw_x86_64_ucrt_gnu.pyd'},
+                        ],
                     }
                 ],
             }
             binaries: dict[str, Any] = {
                 'source': {'name': 'kitsu-windows', 'version': version},
-                'artifacts': [{'name': 'Python', 'version': '3.14.8', 'locations': [{'path': '/bin/libpython3.14.dll'}]}],
+                'artifacts': [{'name': 'Python', 'version': '3.14.10', 'locations': [{'path': '/bin/libpython3.14.dll'}]}],
             }
             vex: dict[str, Any] = {
                 'statements': [
                     {'vulnerability': {'name': cve}, 'products': [{'@id': product}, {'@id': python_product}], 'status': 'fixed'}
-                    for cve in ('CVE-2025-15367', 'CVE-2026-12345', 'CVE-2026-114583', 'CVE-2026-115557')
+                    for cve in ('CVE-2025-15367', 'CVE-2026-12345')
                 ]
             }
             verify_scan_inputs(archive, runtime, binaries, vex)
+
+            altered_runtime = copy.deepcopy(runtime)
+            altered_runtime['components'][0]['version'] = '3.14.9'
+            with self.assertRaisesRegex(ValueError, 'upstream-fixed MSYS2 Python'):
+                verify_scan_inputs(archive, altered_runtime, binaries, vex)
+            altered_runtime = copy.deepcopy(runtime)
+            altered_runtime['components'][0]['properties'].pop()
+            with self.assertRaisesRegex(ValueError, 'SSL extension was not inventoried'):
+                verify_scan_inputs(archive, altered_runtime, binaries, vex)
 
             altered = copy.deepcopy(binaries)
             altered['artifacts'][0]['version'] = '3.13.0'
@@ -113,7 +125,7 @@ class WindowsDependenciesTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'not identified'):
                 verify_scan_inputs(archive, runtime, altered, vex)
             altered = copy.deepcopy(vex)
-            altered['statements'][0]['products'][0]['@id'] = 'pkg:generic/python@3.14.8'
+            altered['statements'][0]['products'][0]['@id'] = 'pkg:generic/python@3.14.10'
             with self.assertRaisesRegex(ValueError, 'not restricted'):
                 verify_scan_inputs(archive, runtime, binaries, altered)
             altered = copy.deepcopy(vex)

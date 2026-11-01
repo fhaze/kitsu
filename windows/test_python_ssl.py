@@ -1,7 +1,7 @@
-"""Offline CPython SSL regression tests, run during the private module build.
+"""Offline CPython SSL regressions against the vendor and packaged runtime.
 
-The distrusted.zip fixture and ordinary certificates come from the checksum-
-verified CPython source archive. Its public ZIP password is from test_ssl.py.
+The distrusted.zip fixture and ordinary certificates come from MSYS2 Python's
+upstream tests. Its public ZIP password is from CPython's test_ssl.py.
 """
 
 import contextlib

@@ -59,6 +59,16 @@ TAR_DATA_DESTINATION = """            # A link member that resolves to the desti
 """
 
 
+def checked_tarfile(source: str) -> str:
+    # Reviewed upstream fix in Python 3.14.10: preserve it without reapplying.
+    if source.count(TAR_DESTINATION_FIXED) == 1 and TAR_DESTINATION not in source and TAR_DATA_DESTINATION not in source:
+        return source
+    # Retain the exact reviewed older shape for source-level compatibility.
+    if source.count(TAR_DESTINATION) == 1 and source.count(TAR_DATA_DESTINATION) == 1 and TAR_DESTINATION_FIXED not in source:
+        return source.replace(TAR_DESTINATION, TAR_DESTINATION_FIXED).replace(TAR_DATA_DESTINATION, '')
+    raise ValueError('The MSYS2 tarfile source changed; review the CPython security fix')
+
+
 def patched_sources(stdlib: Path) -> dict[str, str]:
     poplib = (stdlib / 'poplib.py').read_text(encoding='utf-8')
     if poplib.count(POP_COMMAND) != 1:
@@ -77,10 +87,7 @@ def patched_sources(stdlib: Path) -> dict[str, str]:
     tempfile = tempfile[:start] + TEMP_CLEANUP + tempfile[end:]
     tempfile = tempfile.replace(import_shutil, import_shutil + 'import subprocess as _subprocess\n', 1)
     # CPython 3.14 backport: https://github.com/python/cpython/commit/0901ad4
-    tarfile = (stdlib / 'tarfile.py').read_text(encoding='utf-8')
-    if tarfile.count(TAR_DESTINATION) != 1 or tarfile.count(TAR_DATA_DESTINATION) != 1:
-        raise ValueError('The MSYS2 tarfile source changed; review the CPython security backport')
-    tarfile = tarfile.replace(TAR_DESTINATION, TAR_DESTINATION_FIXED).replace(TAR_DATA_DESTINATION, '')
+    tarfile = checked_tarfile((stdlib / 'tarfile.py').read_text(encoding='utf-8'))
     return {'poplib.py': poplib, 'tempfile.py': tempfile, 'tarfile.py': tarfile}
 
 
@@ -99,7 +106,7 @@ def verify_python(package: Path, original_stdlib: Path) -> None:
         raise ValueError('The native Windows cleanup helper is missing')
     from windows.python_ssl import verify
 
-    verify(stdlib)
+    verify(stdlib, original_stdlib)
 
 
 def sha256(path: Path) -> str:
@@ -126,7 +133,7 @@ def verify_archive(package: Path, archive: Path) -> None:
             *(
                 f'lib/{stdlib.name}/{name}'
                 for stdlib in (package / 'lib').glob('python*')
-                for name in ('poplib.py', 'tempfile.py', 'tarfile.py', 'lib-dynload/_ssl-build.json')
+                for name in ('poplib.py', 'tempfile.py', 'tarfile.py')
             ),
         ]
         for stdlib in (package / 'lib').glob('python*'):
@@ -134,6 +141,7 @@ def verify_archive(package: Path, archive: Path) -> None:
             if len(extensions) != 1:
                 raise ValueError('Unexpected packaged SSL extension layout')
             required.append(extensions[0].relative_to(package).as_posix())
+            required.append(f'bin/lib{stdlib.name}.dll')
         for name in required:
             if f'{package.name}/{name}' not in z.namelist():
                 raise ValueError(f'The ZIP is missing a security-patched runtime file: {name}')
