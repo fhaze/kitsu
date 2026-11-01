@@ -33,6 +33,8 @@ Registration alone never changes the selected terminal. `status` prints the
 current delegation pair, `restore` restores the previous pair, and `unregister`
 restores it and removes the current user's package registration. Restore leaves
 the selection alone if another terminal has since been chosen.
+Restore and unregister also leave a newer or different Kitsu installation alone:
+they act only when the registered external package location matches this copy.
 
 Keep portable extractions at their registered location; unregister before moving
 or deleting them. Unsigned development builds do not contain the sparse MSIX

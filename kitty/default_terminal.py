@@ -97,7 +97,7 @@ def restore() -> None:
         pass
 
 
-def package_command(action: str, root: Path) -> None:
+def package_command(action: str, root: Path) -> bool:
     exe = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
     # All paths are environment data, not interpolated PowerShell source.
     script = "$ErrorActionPreference='Stop'; "
@@ -105,9 +105,25 @@ def package_command(action: str, root: Path) -> None:
         if not (root / 'terminal-identity.msix').is_file():
             raise ValueError('This build has no signed terminal-identity.msix; use an official signed Windows package')
         script += 'Add-AppxPackage -Path (Join-Path $env:KITSU_TERMINAL_ROOT terminal-identity.msix) -ExternalLocation $env:KITSU_TERMINAL_ROOT'
+    elif action in ('registered', 'unregister'):
+        # InstallLocation is the sparse package's manifest/assets directory,
+        # not the external installation that owns its COM servers.
+        script += (
+            '$null=[Windows.Management.Deployment.PackageManager,Windows.Management.Deployment,ContentType=WindowsRuntime]; '
+            '$manager=New-Object Windows.Management.Deployment.PackageManager; '
+            '$owned=@(Get-AppxPackage -Name FHaze.Kitsu.Terminal | Where-Object { '
+            '$location=$manager.FindPackageForUser("", $_.PackageFullName).EffectiveExternalLocation; '
+            '$location -and [string]::Equals([IO.Path]::GetFullPath($location.Path).TrimEnd("\\"), '
+            '$env:KITSU_TERMINAL_ROOT.TrimEnd("\\"), [StringComparison]::OrdinalIgnoreCase) }); '
+        )
+        script += '$owned | Remove-AppxPackage' if action == 'unregister' else 'if ($owned.Count) { "true" } else { "false" }'
     else:
-        script += 'Get-AppxPackage -Name FHaze.Kitsu.Terminal | Remove-AppxPackage'
-    subprocess.run([str(exe), '-NoProfile', '-NonInteractive', '-Command', script], check=True, env=dict(os.environ, KITSU_TERMINAL_ROOT=str(root)))
+        raise ValueError(f'Unknown terminal package action: {action}')
+    result = subprocess.run(
+        [str(exe), '-NoProfile', '-NonInteractive', '-Command', script], check=True,
+        env=dict(os.environ, KITSU_TERMINAL_ROOT=str(root)), stdout=subprocess.PIPE, text=True,
+    )
+    return action == 'register' or result.stdout.strip() == 'true'
 
 
 def main(args: list[str]) -> None:
@@ -124,11 +140,13 @@ def main(args: list[str]) -> None:
             package_command('register', root)
         if action == 'enable':
             enable()
-        elif action == 'restore':
-            restore()
-        elif action == 'unregister':
-            restore()
-            package_command('unregister', root)
+        elif action in ('restore', 'unregister'):
+            # A stale portable copy or older uninstaller must leave a newer
+            # installation's registration and delegation backup alone.
+            if package_command('registered', root):
+                restore()
+                if action == 'unregister':
+                    package_command('unregister', root)
         if action == 'status':
             print(json.dumps(dict(zip(DELEGATION_VALUES, read_delegation())), indent=2))
         elif action == 'register':

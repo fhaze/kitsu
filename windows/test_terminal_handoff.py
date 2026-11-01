@@ -59,14 +59,18 @@ def guid(value: str) -> c.Array[c.c_char]:
 @contextmanager
 def registry(path: str, name: str, value: str) -> Iterator[None]:
     path = 'Software\\Classes\\' + path
-    existed = True
+    created: list[str] = []
     try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_ALL_ACCESS)
-    except FileNotFoundError:
-        existed = False
-        key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, path)
-    try:
-        with key:
+        parts = path.split('\\')
+        for index in range(1, len(parts) + 1):
+            parent = '\\'.join(parts[:index])
+            try:
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, parent)
+            except FileNotFoundError:
+                key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, parent)
+                created.append(parent)
+            key.Close()
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_ALL_ACCESS) as key:
             try:
                 previous = winreg.QueryValueEx(key, name)
             except FileNotFoundError:
@@ -80,8 +84,8 @@ def registry(path: str, name: str, value: str) -> Iterator[None]:
                 else:
                     winreg.SetValueEx(key, name, 0, previous[1], previous[0])
     finally:
-        if not existed:
-            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
+        for parent in reversed(created):
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, parent)
 
 
 def pipe(stack: ExitStack) -> tuple[w.HANDLE, w.HANDLE]:

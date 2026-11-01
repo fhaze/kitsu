@@ -2,6 +2,7 @@
 # License: GPLv3 Copyright: 2026, Kitsu contributors
 
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock as Mock
 from unittest.mock import patch
 
@@ -71,3 +72,17 @@ class DefaultTerminalTest(BaseTest):
             with self.assertRaises(OSError):
                 dt.enable()
             self.ae(write.call_args_list[-1].args, (previous,))
+
+    def test_stale_installation_cannot_restore_or_unregister(self):
+        for action in ('restore', 'unregister'):
+            with patch.object(dt, 'package_command', return_value=False) as package, patch.object(dt, 'restore') as restore:
+                dt.main(['default-terminal', action])
+                package.assert_called_once_with('registered', Path(sys.executable).resolve().parent.parent)
+                restore.assert_not_called()
+
+    def test_owner_can_restore_and_unregister(self):
+        for action in ('restore', 'unregister'):
+            with patch.object(dt, 'package_command', return_value=True) as package, patch.object(dt, 'restore') as restore:
+                dt.main(['default-terminal', action])
+                self.ae([call.args[0] for call in package.call_args_list], ['registered', 'unregister'] if action == 'unregister' else ['registered'])
+                restore.assert_called_once_with()
