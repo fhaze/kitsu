@@ -206,6 +206,9 @@ Detailed list of changes
   or regenerating Wayland window shadows without crashing or invalidating the
   previous buffer
 
+- Update the Go compression dependency to fix CVE-2026-116591, a crash when
+  decoding malformed Zstandard data
+
 - Windows: Add opt-in default-terminal registration for signed packages on
   Windows 11 22H2+, with COM terminal handoff into Kitsu's existing PTY bridge,
   sparse package identity, and explicit delegation backup/restore. :issue:`193`
