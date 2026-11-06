@@ -202,6 +202,10 @@ Detailed list of changes
 0.49.2 [2026-10-01]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+- Handle allocation failures while growing the Windows raw mouse input buffer
+  or regenerating Wayland window shadows without crashing or invalidating the
+  previous buffer
+
 - Windows: Add opt-in default-terminal registration for signed packages on
   Windows 11 22H2+, with COM terminal handoff into Kitsu's existing PTY bridge,
   sparse package identity, and explicit delegation backup/restore. :issue:`193`
