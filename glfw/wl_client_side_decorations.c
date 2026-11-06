@@ -114,16 +114,22 @@ static size_t
 create_shadow_tile(_GLFWwindow *window) {
     const size_t margin = (size_t)round(decs.metrics.width * decs.for_window_state.fscale);
     if (st.data && st.for_decoration_size == margin) return margin;
-    st.for_decoration_size = margin;
-    st.segments = 7;
-    st.stride = st.segments * margin;
-    st.corner_size = margin * (st.segments - 1) / 2;
-    kernel_type *mask = create_shadow_mask(st.stride, st.stride, margin, 2 * margin + 1, (kernel_type)0.7, 32 * margin);
-    free(st.data);
-    st.data = malloc(sizeof(st.data[0]) * st.stride * st.stride);
-    if (st.data)
-        for (size_t i = 0; i < st.stride * st.stride; i++) st.data[i] = ((uint8_t)(mask[i] * 255)) << 24;
+    const size_t segments = 7, stride = segments * margin;
+    kernel_type *mask = create_shadow_mask(stride, stride, margin, 2 * margin + 1, (kernel_type)0.7, 32 * margin);
+    if (!mask) return 0;
+    uint32_t *data = malloc(sizeof(st.data[0]) * stride * stride);
+    if (!data) {
+        free(mask);
+        return 0;
+    }
+    for (size_t i = 0; i < stride * stride; i++) data[i] = ((uint32_t)(uint8_t)(mask[i] * 255)) << 24;
     free(mask);
+    free(st.data);
+    st.data = data;
+    st.for_decoration_size = margin;
+    st.segments = segments;
+    st.stride = stride;
+    st.corner_size = margin * (segments - 1) / 2;
     return margin;
 }
 

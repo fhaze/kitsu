@@ -110,6 +110,7 @@ jobs:
           - name: Test dependency inventory and signing helpers
             run: |
               python -m unittest discover -s .github/workflows -p 'test_windows_dependencies.py'
+              python -m unittest discover -s .github/workflows -p 'test_native_allocations.py' -v
               python -m unittest discover -s windows -p 'test_python_runtime.py'
               python -m unittest discover -s windows -p 'test_python_ssl_vendor.py'
               python -m unittest discover -s windows -p 'test_signing.py'

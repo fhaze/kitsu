@@ -1336,10 +1336,18 @@ windowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
             if (_glfw.win32.disabledCursorWindow != window) break;
             if (!window->rawMouseMotion) break;
 
-            GetRawInputData(ri, RID_INPUT, NULL, &size, sizeof(RAWINPUTHEADER));
+            if (GetRawInputData(ri, RID_INPUT, NULL, &size, sizeof(RAWINPUTHEADER)) == (UINT)-1 || !size) {
+                _glfwInputError(GLFW_PLATFORM_ERROR, "Win32: Failed to query raw input size");
+                break;
+            }
             if (size > (UINT)_glfw.win32.rawInputSize) {
+                RAWINPUT *buffer = calloc(size, 1);
+                if (!buffer) {
+                    _glfwInputError(GLFW_OUT_OF_MEMORY, "Win32: Failed to allocate raw input buffer");
+                    break;
+                }
                 free(_glfw.win32.rawInput);
-                _glfw.win32.rawInput = calloc(size, 1);
+                _glfw.win32.rawInput = buffer;
                 _glfw.win32.rawInputSize = size;
             }
 

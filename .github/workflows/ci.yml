@@ -13,6 +13,18 @@ concurrency:
     cancel-in-progress: true
 
 jobs:
+    native-allocations:
+        name: Native allocation regressions
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v7.0.1
+              with:
+                  persist-credentials: false
+            - name: Test allocation failure paths with sanitizers
+              env:
+                  NATIVE_TEST_CFLAGS: -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -fno-pie -no-pie
+              run: python3 -m unittest discover -s .github/workflows -p 'test_native_allocations.py' -v
+
     windows:
         name: Windows
         uses: ./.github/workflows/windows-build.yml
