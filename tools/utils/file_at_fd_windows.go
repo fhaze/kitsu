@@ -9,6 +9,7 @@ import (
 	"math/bits"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -41,7 +42,18 @@ func joined(dir *os.File, name string) string {
 }
 
 func OpenDir(path string) (*os.File, error) {
-	wide, err := windows.UTF16PtrFromString(path)
+	full, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(full, `\\?\`) && !strings.HasPrefix(full, `\\.\`) {
+		if strings.HasPrefix(full, `\\`) {
+			full = `\\?\UNC\` + full[2:]
+		} else {
+			full = `\\?\` + full
+		}
+	}
+	wide, err := windows.UTF16PtrFromString(full)
 	if err != nil {
 		return nil, err
 	}

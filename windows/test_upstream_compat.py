@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULES = (
     'windows_defaults', 'layout', 'sessions', 'slang', 'graphics', 'keys', 'glfw',
     'parser', 'datatypes', 'notifications', 'open_actions', 'options', 'file_transmission',
+    'docks', 'program_status',
 )
 
 

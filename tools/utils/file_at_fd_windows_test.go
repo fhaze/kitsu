@@ -52,6 +52,24 @@ func TestDirectoryRelativePathsFollowHandle(t *testing.T) {
 	}
 }
 
+func TestOpenDirUnicodeLongPath(t *testing.T) {
+	path := t.TempDir()
+	for range 12 {
+		path = filepath.Join(path, strings.Repeat("日本語", 10))
+	}
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := OpenDir(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	if _, err := StatAt(dir, "."); err != nil {
+		t.Fatalf("Cannot stat the open directory with a Unicode long path: %v", err)
+	}
+}
+
 func setCreationTime(t *testing.T, path string) {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
