@@ -182,6 +182,7 @@ typedef struct {
         struct {
             struct { double width; } metrics;
             struct { double fscale; } for_window_state;
+            bool titlebar_hidden;
             struct { uint32_t *data; size_t for_decoration_size, segments, stride, corner_size; } shadow_tile;
         } decorations;
     } wl;

@@ -21,14 +21,37 @@ var _ = fmt.Print
 // operations are implemented in terms of the directory's path.
 
 func joined(dir *os.File, name string) string {
-	return filepath.Join(dir.Name(), name)
+	// Resolve the open handle before cleaning .. components. Its original
+	// name can contain a junction, or the directory may have been renamed.
+	path := dir.Name()
+	buffer := make([]uint16, 256)
+	for {
+		n, err := windows.GetFinalPathNameByHandle(windows.Handle(dir.Fd()), &buffer[0], uint32(len(buffer)), 0)
+		if err != nil {
+			break
+		}
+		if int(n) >= len(buffer) {
+			buffer = make([]uint16, n+1)
+			continue
+		}
+		path = windows.UTF16ToString(buffer[:n])
+		break
+	}
+	return filepath.Join(path, name)
 }
 
 func OpenDir(path string) (*os.File, error) {
-	f, err := os.Open(path)
+	wide, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
 	}
+	handle, err := windows.CreateFile(wide, windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	f := os.NewFile(uintptr(handle), path)
 	if s, err := f.Stat(); err != nil || !s.IsDir() {
 		f.Close()
 		if err == nil {

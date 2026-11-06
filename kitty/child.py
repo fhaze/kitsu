@@ -5,11 +5,11 @@ import ntpath
 import os
 import sys
 from collections import defaultdict
-from collections.abc import Generator, Iterable, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from itertools import count
 from time import monotonic
-from typing import TYPE_CHECKING, Any, DefaultDict, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, DefaultDict, NamedTuple, Optional, TypedDict
 
 import kitty.fast_data_types as fast_data_types
 
@@ -41,6 +41,9 @@ if is_windows:
         for pid, ppid in fast_data_types.process_group_map():
             ans[ppid].append(pid)
         return ans
+
+    def children_of_process(pid: int) -> list[int]:
+        return process_group_map().get(pid, [])
 
     def _environ_of_process(pid: int) -> str:
         raise OSError(f'Reading the environment of process {pid} is not supported on Windows')
@@ -89,6 +92,14 @@ elif is_macos:
                 result.add(child)
                 stack.extend(children_map.get(child, []))
         return result
+
+    def children_of_process(pid: int) -> list[int]:
+        ans = []
+        for p in fast_data_types.get_all_processes():
+            with suppress(Exception):
+                if _ppid_of_process(p) == pid:
+                    ans.append(p)
+        return ans
 
     def memory_used_by_process_tree_rooted_at(pid: int, check_if_cgroup_root: bool = False) -> int:
         with suppress(Exception):
@@ -149,18 +160,56 @@ else:
     def abspath_of_exe(pid: int) -> str:
         return os.path.realpath(f'/proc/{pid}/exe', strict=True)
 
+    @run_once
+    def proc_children_supported() -> bool:
+        # Needs a kernel built with CONFIG_PROC_CHILDREN
+        pid = os.getpid()
+        return os.path.exists(f'/proc/{pid}/task/{pid}/children')
+
+    def _children_from_task_files(pid: int) -> list[int]:
+        # Each thread has its own list of children, and multi-threaded programs
+        # such as kitten can create children from any thread
+        ans: list[int] = []
+        for tid in os.listdir(f'/proc/{pid}/task'):
+            with suppress(FileNotFoundError):  # thread exited
+                with open(f'/proc/{pid}/task/{tid}/children', 'rb') as f:
+                    ans.extend(map(int, f.read().split()))
+        return ans
+
+    def _children_map() -> DefaultDict[int, list[int]]:
+        ans: DefaultDict[int, list[int]] = defaultdict(list)
+        try:
+            entries = os.listdir('/proc')
+        except OSError:  # no procfs, for example on FreeBSD
+            return ans
+        for x in entries:
+            if not x.isdigit():
+                continue
+            with suppress(OSError, ValueError, IndexError):
+                with open(f'/proc/{x}/stat', 'rb') as f:
+                    raw = f.read()
+                # The process name can contain spaces and parentheses
+                ans[int(raw[raw.rindex(b')') + 2 :].split()[1])].append(int(x))
+        return ans
+
+    def children_of_process(pid: int) -> list[int]:
+        if proc_children_supported():
+            try:
+                return _children_from_task_files(pid)
+            except FileNotFoundError:  # process exited
+                return []
+        return _children_map().get(pid, [])
+
     def _get_descendants_of(pid: int) -> set[int]:
         result: set[int] = set()
+        # Without per thread children files, build the full map only once
+        get_children: Callable[[int], list[int]] = children_of_process if proc_children_supported() else _children_map().__getitem__
         stack = [pid]
         while stack:
-            current = stack.pop()
-            with suppress(OSError):
-                with open(f'/proc/{current}/task/{current}/children') as f:
-                    for child_str in f.read().split():
-                        child = int(child_str)
-                        if child not in result:
-                            result.add(child)
-                            stack.append(child)
+            for child in get_children(stack.pop()):
+                if child not in result:
+                    result.add(child)
+                    stack.append(child)
         return result
 
     def _memory_from_smaps_rollup(pid: int) -> int:
@@ -178,6 +227,7 @@ else:
             cgroup_dir = os.path.join('/sys/fs/cgroup', cgroup_path)
 
             use_cgroup = True
+            descendants: set[int] | None = None
             if check_if_cgroup_root:
                 with suppress(OSError):
                     with open(os.path.join(cgroup_dir, 'cgroup.procs')) as f:
@@ -197,8 +247,9 @@ else:
                 return mem_bytes
 
             # cgroup contains processes outside our tree; sum PSS per process
-            descendants = _get_descendants_of(pid)
-            descendants.add(pid)
+            if descendants is None:
+                descendants = _get_descendants_of(pid)
+                descendants.add(pid)
             mem_bytes = 0
             for p in descendants:
                 with suppress(OSError):
@@ -385,6 +436,14 @@ class ProcessDesc(TypedDict):
     cmdline: Sequence[str] | None
 
 
+class KittyWrapper(NamedTuple):
+    # The argv the wrapper process was started with
+    argv: tuple[str, ...]
+    # True if the wrapper eventually replaces itself (via exec) with
+    # something else, at which point it is no longer a wrapper
+    replaces_itself: bool
+
+
 child_counter = count()
 
 
@@ -395,6 +454,9 @@ class Child:
     pid: int | None = None
     initial_termios_state: list[Any] | None = None
     forked = False
+    # Wrapper processes kitty itself inserted around the command, outermost first
+    kitty_wrappers: tuple[KittyWrapper, ...] = ()
+    resolved_root_pid: int | None = None
 
     def __init__(
         self,
@@ -413,6 +475,9 @@ class Child:
     ):
         self.is_clone_launch = is_clone_launch
         self.id = next(child_counter)
+        # Used to cache the root pid, see root_pid
+        self.wrapper_children: dict[int, int] = {}
+        self.wrappers_seen: set[int] = set()
         self.add_listen_on_env_var = add_listen_on_env_var
         self.argv = list(argv)
         self.pass_fds = pass_fds
@@ -535,6 +600,7 @@ class Child:
         self.final_env, must_run_startup_command_via_kitten = self.get_final_env()
         self.initial_termios_state = None if is_windows else termios.tcgetattr(master)
         argv = list(self.argv)
+        kitty_wrappers: list[KittyWrapper] = []
         cwd = self.cwd
         pass_fds = self.pass_fds
         if self.remote_control_fd > -1:
@@ -576,12 +642,18 @@ class Child:
                 if cwd:
                     argv.append('--cwd=' + cwd)
                     cwd = os.path.expanduser('~')
-                argv = ['/usr/bin/login', '-f', '-l', '-p', user] + argv
+                login_argv = ['/usr/bin/login', '-f', '-l', '-p', user]
+                argv = login_argv + argv
+                kitty_wrappers.insert(0, KittyWrapper(tuple(login_argv), False))
         self.final_exe = final_exe = which(argv[0]) or argv[0]
         self.final_argv0 = argv[0]
         if self.hold:
-            argv = cmdline_for_hold(argv)
+            hold_argv = cmdline_for_hold()
+            argv = hold_argv + argv
             final_exe = argv[0]
+            # run-shell runs the command as a child and then execs the shell
+            kitty_wrappers.insert(0, KittyWrapper(tuple(hold_argv), True))
+        self.kitty_wrappers = tuple(kitty_wrappers)
         env = tuple(f'{k}={v}' for k, v in self.final_env.items())
         pid = fast_data_types.spawn(
             final_exe,
@@ -635,7 +707,7 @@ class Child:
             ans = cmdline_of_pid(pid)
         except Exception:
             ans = []
-        if pid == self.pid and (not ans):
+        if not ans and pid in (self.pid, self.root_pid):
             ans = list(self.argv)
         return ans
 
@@ -690,8 +762,9 @@ class Child:
     @property
     def cmdline(self) -> list[str]:
         try:
-            assert self.pid is not None
-            return self.cmdline_of_pid(self.pid) or list(self.argv)
+            pid = self.root_pid
+            assert pid is not None
+            return self.cmdline_of_pid(pid) or list(self.argv)
         except Exception:
             return list(self.argv)
 
@@ -706,17 +779,67 @@ class Child:
     @property
     def environ(self) -> dict[str, str]:
         try:
-            assert self.pid is not None
-            return environ_of_process(self.pid) or self.final_env.copy()
+            pid = self.root_pid
+            assert pid is not None
+            return environ_of_process(pid) or self.final_env.copy()
         except Exception:
             return self.final_env.copy()
 
     @property
     def current_cwd(self) -> str | None:
         with suppress(Exception):
-            assert self.pid is not None
-            return cwd_of_process(self.pid)
+            pid = self.root_pid
+            assert pid is not None
+            return cwd_of_process(pid)
         return None
+
+    @property
+    def root_pid(self) -> int | None:
+        """
+        The pid of the process originally started when the window was created,
+        skipping over any wrapper processes kitty itself inserted, such as
+        /usr/bin/login on macOS. A wrapper is replaced by its first child.
+        """
+        if self.resolved_root_pid is not None:
+            return self.resolved_root_pid
+        pid = self.pid
+        if pid is None or not self.kitty_wrappers:
+            return pid
+        # Whether the result can never change and so can be cached
+        final = True
+        for i, w in enumerate(self.kitty_wrappers):
+            if w.replaces_itself:
+                try:
+                    cmdline = tuple(cmdline_of_pid(pid))
+                except Exception:
+                    final = False
+                    break
+                if cmdline[: len(w.argv)] != w.argv:
+                    # Either the wrapper has replaced itself, which is
+                    # permanent, or it has not been exec-ed yet and the forked
+                    # process is still running kitty code
+                    final = final and i in self.wrappers_seen
+                    break
+                self.wrappers_seen.add(i)
+                final = False  # it will replace itself later
+            # A wrapper only ever runs a single child, so cache it
+            child = self.wrapper_children.get(pid)
+            if child is None:
+                try:
+                    children = children_of_process(pid)
+                except Exception as err:
+                    log_error(f'Failed to get children of process {pid} with error: {err}')
+                    final = False
+                    break
+                if not children:
+                    final = False  # the wrapper has not started its child yet
+                    break
+                child = self.wrapper_children[pid] = min(children)
+            pid = child
+        if final:
+            self.resolved_root_pid = pid
+            self.wrapper_children.clear()
+        return pid
 
     def get_pid_for_cwd(self, oldest: bool = False) -> int | None:
         with suppress(Exception):
@@ -735,7 +858,7 @@ class Child:
                 # With this script , the foreground process group will contain
                 # both the bash instance running the script and vim.
                 return min(foreground_processes) if oldest else max(foreground_processes)
-        return self.pid
+        return self.root_pid
 
     @property
     def pid_for_cwd(self) -> int | None:
@@ -767,7 +890,7 @@ class Child:
         if pid is not None:
             with suppress(Exception):
                 return environ_of_process(pid)
-        pid = self.pid
+        pid = self.root_pid
         if pid is not None:
             with suppress(Exception):
                 return environ_of_process(pid)

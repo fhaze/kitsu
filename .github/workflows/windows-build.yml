@@ -192,6 +192,14 @@ jobs:
               go test ./tools/tty ./tools/tui/loop ./tools/tui/readline ./kittens/choose_files
               go vet ./tools/tty ./tools/tui/loop ./tools/tui/readline ./kittens/choose_files
 
+          - name: Test all Go packages on Windows
+            env:
+              KITTY_PATH_TO_KITTY_EXE: ${{ github.workspace }}/windows-package/kitsu/bin/kitsu.exe
+            run: go test -tags testing ./...
+
+          - name: Test upstream features with the packaged Windows runtime
+            run: python windows/test_upstream_compat.py windows-package/kitsu
+
           - name: Test Windows command-line splitting and shell resolution
             run: |
               go test ./tools/utils/shlex ./tools/tui

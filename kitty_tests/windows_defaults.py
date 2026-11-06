@@ -29,6 +29,34 @@ from .base import BaseTest
 
 @unittest.skipUnless(is_windows, 'Native Windows defaults')
 class WindowsDefaultsTest(BaseTest):
+    def test_logout_restore_is_unavailable(self):
+        from kitty.main import logout_snapshot_to_restore
+
+        opts = SimpleNamespace(restore_session_after_logout=True)
+        with (
+            patch('kitty.main.log_error') as log,
+            patch('kitty.main.restore_snapshots') as restore,
+            patch('kitty.main.remove_all_snapshots') as remove,
+            patch('kitty.boss.get_options') as get_options,
+        ):
+            self.assertIsNone(logout_snapshot_to_restore(opts, SimpleNamespace()))
+            restore.assert_not_called()
+            remove.assert_not_called()
+            log.assert_called_once()
+            Boss.monitor_desktop_session_if_needed(SimpleNamespace())
+            Boss.save_session_if_logging_out(SimpleNamespace())
+            self.ae(Boss.save_session_at_logout(SimpleNamespace()), '')
+            get_options.assert_not_called()
+
+    def test_windows_mime_fallback(self):
+        from kitty.fast_data_types import mime_type_aliases, mime_type_for_filename
+        from kitty.guess_mime_type import guess_type
+
+        self.assertIsNone(mime_type_for_filename('example.txt'))
+        self.ae(mime_type_aliases('image/png'), ('image/png',))
+        self.ae(guess_type('example.png'), 'image/png')
+        self.ae(guess_type('example.txt'), 'text/plain')
+
     def test_windows_debug_config(self):
         from kitty.debug_config import IssueData, compositor_name, debug_config
 

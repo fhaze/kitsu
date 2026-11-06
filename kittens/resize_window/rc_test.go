@@ -14,7 +14,7 @@ import (
 
 func TestResizeCommandEscapeCode(t *testing.T) {
 	t.Setenv("KITTY_DCS_CHANNEL", "")
-	ec, err := resize_command_escape_code(-4, "vertical")
+	ec, err := resize_command_escape_code(-4, "vertical", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +42,25 @@ func TestResizeCommandEscapeCode(t *testing.T) {
 	}
 }
 
+func TestResizeResetUsesEntrySnapshotOnlyWhenRequested(t *testing.T) {
+	for _, axis := range []string{"restore", "reset"} {
+		ec, err := resize_command_escape_code(2, axis, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cmd struct {
+			Payload resize_payload `json:"payload"`
+		}
+		body := strings.TrimSuffix(strings.TrimPrefix(ec, "\x1bP@kitty-cmd"), "\x1b\\")
+		if err := json.Unmarshal([]byte(body), &cmd); err != nil {
+			t.Fatal(err)
+		}
+		if cmd.Payload.Axis != "reset" || cmd.Payload.Restore != (axis == "restore") {
+			t.Fatalf("reset source was not preserved: %+v", cmd.Payload)
+		}
+	}
+}
+
 func TestResizeCommandDCSChannel(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -51,7 +70,7 @@ func TestResizeCommandDCSChannel(t *testing.T) {
 	t.Setenv("KITTY_DCS_CHANNEL", "tcp:"+ln.Addr().String())
 	t.Setenv("KITTY_DCS_CHANNEL_TOKEN", "test-token")
 	t.Setenv("KITTY_WINDOW_ID", "42")
-	ec, err := resize_command_escape_code(2, "horizontal")
+	ec, err := resize_command_escape_code(2, "horizontal", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

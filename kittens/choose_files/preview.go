@@ -440,7 +440,7 @@ func (pm *PreviewManager) preview_for(abspath string, ftype fs.FileMode) (ans Pr
 	if s.IsDir() {
 		return NewAsyncPreview(loading_preview(abspath, s), false, pm.WakeupMainThread, func() Preview { return NewDirectoryPreview(abspath, s) })
 	}
-	if ftype&fs.ModeSymlink != 0 && ftype&SymlinkToDir != 0 {
+	if is_symlink_to_dir(ftype) {
 		s, err = os.Stat(abspath)
 		if err != nil {
 			return NewErrorPreview(err)
