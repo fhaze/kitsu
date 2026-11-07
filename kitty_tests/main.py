@@ -424,7 +424,7 @@ def fork_test_workers(tests: list[unittest.TestCase]) -> tuple[list[int], list[i
     return pids, read_fds
 
 
-def worker_main(write_fd: int, ids_fd: int, verbosity: Optional[int] = None) -> None:
+def worker_main(write_fd: int, ids_fd: int | str, verbosity: Optional[int] = None) -> None:
     import warnings
 
     warnings.simplefilter('error')
@@ -490,10 +490,41 @@ def spawn_test_workers(tests: list[unittest.TestCase]) -> tuple[list[subprocess.
     return procs, read_fds
 
 
+def run_windows_test_worker(tests: list[unittest.TestCase], verbosity: int) -> tuple[int, bytes]:
+    """Windows cannot inherit POSIX file descriptors or fork. Exchange worker
+    records through temporary files while keeping its terminal output live."""
+    from kitty.constants import kitty_exe
+
+    test_ids = [{'module': t.__class__.__module__, 'cls': t.__class__.__name__, 'method': t._testMethodName} for t in tests]
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with TemporaryDirectory() as tdir:
+        ids_path, result_path = (os.path.join(tdir, name) for name in ('tests.json', 'results.jsonl'))
+        with open(ids_path, 'w', encoding='utf-8') as f:
+            json.dump(test_ids, f)
+        with open(result_path, 'wb'):
+            pass
+        code = (
+            f'import os,sys; sys.path.insert(0, {root!r}); '
+            'from kitty_tests.main import worker_main; '
+            f'worker_main(os.open({result_path!r}, os.O_WRONLY | os.O_APPEND), {ids_path!r}, {verbosity!r})'
+        )
+        proc = subprocess.Popen([kitty_exe(), '+runpy', code], stdout=sys.stdout, stderr=sys.stderr)
+        try:
+            status = proc.wait()
+        except BaseException:
+            proc.kill()
+            proc.wait()
+            raise
+        with open(result_path, 'rb') as f:
+            return status, f.read()
+
+
 def run_serial_tests(tests: list[unittest.TestCase], verbosity: int) -> bool:
     """Run tests in a single child process that shares our terminal, printing
     results as they happen. The child is used so that it exiting before all
     tests have run is detected."""
+    if sys.platform == 'win32':
+        return serial_worker_succeeded(*run_windows_test_worker(tests, verbosity))
     if sys.platform == 'darwin':
         proc, r = spawn_test_worker(tests, verbosity)
         pids: list[int] = []
@@ -518,6 +549,10 @@ def run_serial_tests(tests: list[unittest.TestCase], verbosity: int) -> bool:
     except BaseException:
         terminate_workers(pids, procs, None)
         raise
+    return serial_worker_succeeded(status, data)
+
+
+def serial_worker_succeeded(status: int, data: bytes) -> bool:
     done = False
     worker_errors: list[str] = []
     for line in data.splitlines():
