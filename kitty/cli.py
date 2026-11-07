@@ -323,11 +323,13 @@ def version(add_rev: bool = False) -> str:
     rev = ''
     from . import fast_data_types
 
-    if add_rev:
+    suffix = fast_data_types.KITTY_VERSION_SUFFIX
+    # nightly builds already include the revision in the version suffix
+    if add_rev and not suffix:
         if getattr(fast_data_types, 'KITTY_VCS_REV', ''):
             rev = f' ({fast_data_types.KITTY_VCS_REV[:10]})'
     credit = 'Windows fork by FHaze, based on kitty by Kovid Goyal' if is_windows else 'created by Kovid Goyal'
-    return '{} {}{} {}'.format(italic(display_name), green(str_version), rev, title(credit))
+    return '{} {}{} {}'.format(italic(display_name), green(str_version + suffix), rev, title(credit))
 
 
 def wrap(text: str, limit: int = 80) -> Iterator[str]:

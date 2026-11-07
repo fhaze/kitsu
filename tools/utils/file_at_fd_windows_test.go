@@ -16,6 +16,60 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func TestDirectoryRelativePathsFollowHandle(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "parent")
+	child := filepath.Join(parent, "child")
+	if err := os.MkdirAll(child, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(child, alias); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := OpenDir(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	want, err := os.Stat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := StatAt(dir, "..")
+	if err != nil || !os.SameFile(want, got) {
+		t.Fatalf("Parent lookup did not follow the open directory: %v", err)
+	}
+	moved := filepath.Join(parent, "moved")
+	if err := os.Rename(child, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(moved, "marker"), []byte("moved"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StatAt(dir, "marker"); err != nil {
+		t.Fatalf("Directory-relative lookup used the old name after rename: %v", err)
+	}
+}
+
+func TestOpenDirUnicodeLongPath(t *testing.T) {
+	path := t.TempDir()
+	for range 12 {
+		path = filepath.Join(path, strings.Repeat("日本語", 10))
+	}
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := OpenDir(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	if _, err := StatAt(dir, "."); err != nil {
+		t.Fatalf("Cannot stat the open directory with a Unicode long path: %v", err)
+	}
+}
+
 func setCreationTime(t *testing.T, path string) {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
