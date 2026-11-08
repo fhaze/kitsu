@@ -3,12 +3,15 @@ package utils
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -316,4 +319,153 @@ func TestTarExtractUnsearchableParentDirectory(t *testing.T) {
 	if st.Mode().Perm() != 0555 {
 		t.Fatalf("Permissions of child directory not preserved: %v", st.Mode())
 	}
+}
+
+func require_tar_symlinks(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Symlink(dir, filepath.Join(dir, "probe")); err != nil {
+		if errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.Errno(1314)) {
+			t.Skipf("symlink creation privilege unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+}
+
+func TestTarExtractContainment(t *testing.T) {
+	for _, name := range []string{"sibling_prefix", "absolute", "nested_symlinks", "hardlink_through_symlinks", "preexisting_parent_symlink", "preexisting_file_symlink", "junction", "hardlink_through_junction", "directory_through_junction"} {
+		t.Run(name, func(t *testing.T) {
+			parent := t.TempDir()
+			dest, outside := filepath.Join(parent, "dest"), filepath.Join(parent, "dest-evil")
+			for _, dir := range []string{dest, outside} {
+				if err := os.Mkdir(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			victim := filepath.Join(outside, "victim")
+			if err := os.WriteFile(victim, []byte("unchanged"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			entries := []tar_entry{{name: "../dest-evil/victim", body: "changed"}}
+			want_error := false
+			switch name {
+			case "absolute":
+				entries[0].name = victim
+			case "nested_symlinks", "hardlink_through_symlinks":
+				require_tar_symlinks(t)
+				entries = []tar_entry{
+					{name: "real/escape", typeflag: tar.TypeSymlink, linkname: outside},
+					{name: "alias", typeflag: tar.TypeSymlink, linkname: "real"},
+					{name: "alias/escape/victim", body: "changed"},
+				}
+				if name == "hardlink_through_symlinks" {
+					entries[2] = tar_entry{name: "link", typeflag: tar.TypeLink, linkname: "alias/escape/victim"}
+					want_error = true
+				}
+			case "preexisting_parent_symlink", "preexisting_file_symlink":
+				require_tar_symlinks(t)
+				target, entry := outside, "existing/victim"
+				if name == "preexisting_file_symlink" {
+					target, entry = victim, "existing"
+				}
+				if err := os.Symlink(target, filepath.Join(dest, "existing")); err != nil {
+					t.Fatal(err)
+				}
+				entries = []tar_entry{{name: entry, body: "changed"}}
+			case "junction", "hardlink_through_junction", "directory_through_junction":
+				if runtime.GOOS != "windows" {
+					t.Skip("Windows directory junctions only")
+				}
+				junction := filepath.Join(dest, "junction")
+				if out, err := exec.Command("cmd.exe", "/d", "/c", "mklink", "/J", junction, outside).CombinedOutput(); err != nil {
+					t.Fatalf("creating directory junction: %v: %s", err, out)
+				}
+				t.Cleanup(func() { _ = os.Remove(junction) })
+				entries = []tar_entry{{name: "junction/victim", body: "changed"}}
+				if name == "hardlink_through_junction" {
+					entries[0] = tar_entry{name: "link", typeflag: tar.TypeLink, linkname: "junction/victim"}
+					want_error = true
+				} else if name == "directory_through_junction" {
+					entries[0] = tar_entry{name: "junction/new", typeflag: tar.TypeDir}
+				}
+			}
+			_, err := ExtractAllFromTar(make_tar(t, entries...), dest)
+			if (err != nil) != want_error {
+				t.Fatalf("extraction error: %v, want error: %v", err, want_error)
+			}
+			assert_file_contents(t, victim, "unchanged")
+			if _, err := os.Lstat(filepath.Join(outside, "new")); !os.IsNotExist(err) {
+				t.Fatalf("outside directory created: %v", err)
+			}
+			if _, err := os.Lstat(filepath.Join(dest, "link")); !os.IsNotExist(err) {
+				t.Fatalf("outside hardlink created: %v", err)
+			}
+			if name == "preexisting_file_symlink" {
+				assert_file_contents(t, filepath.Join(dest, "existing"), "changed")
+				if linked, err := is_symlink_path(filepath.Join(dest, "existing")); err != nil || linked {
+					t.Fatalf("destination symlink was not replaced: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestTarExtractWindowsPaths(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows drive and separator semantics only")
+	}
+	parent := t.TempDir()
+	dest, outside := filepath.Join(parent, "dest"), filepath.Join(parent, "dest-evil")
+	for _, dir := range []string{dest, outside} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	victim := filepath.Join(outside, "victim")
+	if err := os.WriteFile(victim, []byte("unchanged"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	volume := filepath.VolumeName(victim)
+	for name, path := range map[string]string{
+		"drive_relative":   volume + strings.TrimPrefix(victim, volume+`\`),
+		"drive_qualified":  victim,
+		"root_relative":    strings.TrimPrefix(victim, volume),
+		"unc":              `\\localhost\` + strings.TrimSuffix(volume, ":") + "$" + strings.TrimPrefix(victim, volume),
+		"extended_length":  `\\?\` + victim,
+		"mixed_separators": `..\dest-evil/victim`,
+	} {
+		for _, hardlink := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/hardlink=%v", name, hardlink), func(t *testing.T) {
+				dest := t.TempDir()
+				entry := tar_entry{name: path, body: "changed"}
+				if hardlink {
+					entry = tar_entry{name: "link", typeflag: tar.TypeLink, linkname: path}
+				}
+				_, _ = ExtractAllFromTar(make_tar(t, entry), dest)
+				assert_file_contents(t, victim, "unchanged")
+				if _, err := os.Lstat(filepath.Join(dest, "link")); !os.IsNotExist(err) {
+					t.Fatalf("outside hardlink created: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestTarExtractJunctionDestination(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows directory junctions only")
+	}
+	parent := t.TempDir()
+	real, junction := filepath.Join(parent, "real"), filepath.Join(parent, "junction")
+	if err := os.Mkdir(real, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("cmd.exe", "/d", "/c", "mklink", "/J", junction, real).CombinedOutput(); err != nil {
+		t.Fatalf("creating destination junction: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = os.Remove(junction) })
+	if _, err := ExtractAllFromTar(make_tar(t, tar_entry{name: "file", body: "data"}), junction); err != nil {
+		t.Fatal(err)
+	}
+	assert_file_contents(t, filepath.Join(real, "file"), "data")
 }
