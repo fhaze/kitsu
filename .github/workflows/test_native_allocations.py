@@ -9,16 +9,26 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-PREAMBLE = r'''
+PREAMBLE = r"""
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <sys/types.h>
 
+#ifdef NATIVE_TEST_WIN64
+#ifndef _WIN64
+#error Native Windows tests require a Win64 compiler
+#endif
+_Static_assert(sizeof(void *) == 8 && sizeof(size_t) == 8 && sizeof(long) == 4, "Expected LLP64");
+#endif
+"""
+
+ALLOCATORS = r"""
 static int fail_allocation;
 static void *test_malloc(size_t size) {
     if (fail_allocation && !--fail_allocation) return NULL;
@@ -33,29 +43,32 @@ static void *test_calloc(size_t count, size_t size) {
 }
 #define malloc test_malloc
 #define calloc test_calloc
-'''
+"""
 
 
 def source(path: str, start: str, end: str) -> str:
     text = (ROOT / path).read_text()
-    return text[text.index(start):text.index(end, text.index(start))]
+    return text[text.index(start) : text.index(end, text.index(start))]
 
 
 class NativeAllocations(unittest.TestCase):
-    def compile_and_run(self, code: str) -> None:
+    def compile_and_run(self, code: str, *, allocation_stubs: bool = True) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cfile = Path(tmp) / 'test.c'
             exe = Path(tmp) / 'test.exe'
-            cfile.write_text(PREAMBLE + code)
+            cfile.write_text(PREAMBLE + (ALLOCATORS if allocation_stubs else '') + code)
             command = shlex.split(os.environ.get('CC', 'gcc'))
             command += ['-std=gnu11', '-Wall', '-Wextra', '-Werror', '-O1', '-g']
+            if os.name == 'nt':
+                command.append('-DNATIVE_TEST_WIN64')
             command += shlex.split(os.environ.get('NATIVE_TEST_CFLAGS', ''))
             subprocess.run([*command, str(cfile), '-o', str(exe), '-lm'], check=True)
             subprocess.run([str(exe)], check=True, timeout=30)
 
     def test_cli_terminator(self) -> None:
         allocator = source('kitty/launcher/cli-parser.h', 'static void *\nalloc_for_cli(', '\n#define set_err')
-        self.compile_and_run(r'''
+        self.compile_and_run(
+            r"""
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 typedef struct {
     struct {
@@ -63,8 +76,17 @@ typedef struct {
         size_t count, capacity;
     } blocks;
 } CLISpec;
-''' + allocator + r'''
+"""
+            + allocator
+            + r"""
 int main(void) {
+    for (int failure = 1; failure <= 2; failure++) {
+        CLISpec spec = {0};
+        fail_allocation = failure;
+        assert(!alloc_for_cli(&spec, 8));
+        for (size_t i = 0; i < spec.blocks.count; i++) free(spec.blocks.items[i].buf);
+        free(spec.blocks.items);
+    }
     const size_t lengths[] = {0, 1, 7, 8, 8190, 8191, 8192, 8193, 32768};
     for (size_t n = 0; n < sizeof(lengths) / sizeof(lengths[0]); n++) {
         CLISpec spec = {0};
@@ -83,13 +105,89 @@ int main(void) {
         free(spec.blocks.items);
         free(arg);
     }
+    CLISpec spec = {0};
+    char *copies[40];
+    for (size_t i = 0; i < sizeof(copies) / sizeof(copies[0]); i++) {
+        copies[i] = alloc_for_cli(&spec, 8191);
+        assert(copies[i] && (uintptr_t)copies[i] % sizeof(void *) == 0);
+        memset(copies[i], 'a' + i % 26, 8191);
+        assert(copies[i][8191] == 0);
+    }
+    assert(spec.blocks.count > 8 && spec.blocks.capacity > 8);
+    for (size_t i = 0; i < sizeof(copies) / sizeof(copies[0]); i++) {
+        for (size_t j = 0; j < 8191; j++) assert(copies[i][j] == 'a' + (int)(i % 26));
+        assert(copies[i][8191] == 0);
+    }
+    for (size_t i = 0; i < spec.blocks.count; i++) free(spec.blocks.items[i].buf);
+    free(spec.blocks.items);
     return 0;
 }
-''')
+"""
+        )
+
+    def test_box_glyph_capacity(self) -> None:
+        checks = source('kitty/fonts.c', '    if (width <= 0 || height <= 0', '    RAII_PyObject(ans,')
+        factor = source('kitty/decorations.h', '#define SUPERSAMPLE_FACTOR ', '\n')
+        self.compile_and_run(
+            factor
+            + r"""
+typedef intptr_t Py_ssize_t;
+#define PY_SSIZE_T_MAX INTPTR_MAX
+typedef struct { size_t pixels, capacity; } PyObject;
+enum { PyExc_ValueError = 1, PyExc_OverflowError };
+static int error;
+static void PyErr_SetString(int exception, const char *message) {
+    (void)message;
+    error = exception;
+}
+static PyObject result;
+static PyObject *glyph_capacity(Py_ssize_t width, Py_ssize_t height, double scale, double dpi_x, double dpi_y) {
+    error = 0;
+"""
+            + checks
+            + r"""
+    result.pixels = pixels;
+    result.capacity = capacity;
+    return &result;
+}
+int main(void) {
+    const Py_ssize_t dimensions[] = {1, 2, 16, 1023, 1024};
+    for (size_t i = 0; i < sizeof(dimensions) / sizeof(dimensions[0]); i++) {
+        for (size_t j = 0; j < sizeof(dimensions) / sizeof(dimensions[0]); j++) {
+            const size_t pixels = (size_t)dimensions[i] * dimensions[j];
+            PyObject *ans = glyph_capacity(dimensions[i], dimensions[j], 1., 96., 96.);
+            assert(ans && !error && ans->pixels == pixels);
+            assert(ans->capacity == pixels + pixels * SUPERSAMPLE_FACTOR * SUPERSAMPLE_FACTOR);
+            assert(ans->capacity <= (size_t)PY_SSIZE_T_MAX);
+        }
+    }
+    const Py_ssize_t invalid[] = {-1, 0, 1025, INTPTR_MAX};
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+        assert(!glyph_capacity(invalid[i], 1, 1., 96., 96.) && error == PyExc_ValueError);
+        assert(!glyph_capacity(1, invalid[i], 1., 96., 96.) && error == PyExc_ValueError);
+    }
+#ifdef NATIVE_TEST_WIN64
+    const Py_ssize_t beyond_ulong = (Py_ssize_t)ULONG_MAX + 1;
+    assert(!glyph_capacity(beyond_ulong, 1, 1., 96., 96.) && error == PyExc_ValueError);
+    assert(!glyph_capacity(1, beyond_ulong, 1., 96., 96.) && error == PyExc_ValueError);
+#endif
+    const double invalid_scale[] = {0., -1., NAN, INFINITY, -INFINITY};
+    for (size_t i = 0; i < sizeof(invalid_scale) / sizeof(invalid_scale[0]); i++) {
+        const double x = invalid_scale[i];
+        assert(!glyph_capacity(1, 1, x, 96., 96.) && error == PyExc_ValueError);
+        assert(!glyph_capacity(1, 1, 1., x, 96.) && error == PyExc_ValueError);
+        assert(!glyph_capacity(1, 1, 1., 96., x) && error == PyExc_ValueError);
+    }
+    return 0;
+}
+""",
+            allocation_stubs=False,
+        )
 
     def test_raw_input(self) -> None:
         handler = source('glfw/win32_window.c', '        case WM_INPUT: {', '\n        case WM_MOUSELEAVE:')
-        self.compile_and_run(r'''
+        self.compile_and_run(
+            r"""
 typedef unsigned int UINT;
 typedef uintptr_t HRAWINPUT;
 typedef struct { int unused; } RAWINPUTHEADER;
@@ -128,7 +226,9 @@ static void _glfwInputCursorPos(_GLFWwindow *window, double x, double y) {
 static void input(_GLFWwindow *window) {
     const uintptr_t lParam = 1;
     switch (WM_INPUT) {
-''' + handler + r'''
+"""
+            + handler
+            + r"""
     }
 }
 int main(void) {
@@ -169,14 +269,22 @@ int main(void) {
     event.data.mouse.lLastY = 40;
     input(&window);
     assert(reads == 5 && moves == 4 && window.win32.lastCursorPosX == 20 && window.win32.lastCursorPosY == 40);
+    old = _glfw.win32.rawInput;
+    required = UINT_MAX;
+    fail_allocation = 1;
+    input(&window);
+    assert(errors == 6 && reads == 5 && moves == 4 && _glfw.win32.rawInput == old);
+    assert(_glfw.win32.rawInputSize == old_size * 2);
     free(_glfw.win32.rawInput);
     return 0;
 }
-''')
+"""
+        )
 
     def test_shadow_tile(self) -> None:
         shadow = source('glfw/wl_client_side_decorations.c', 'typedef float kernel_type;', '\n\n// }}}')
-        self.compile_and_run(r'''
+        self.compile_and_run(
+            r"""
 typedef struct {
     struct {
         struct {
@@ -188,7 +296,9 @@ typedef struct {
     } wl;
 } _GLFWwindow;
 #define decs window->wl.decorations
-''' + shadow + r'''
+"""
+            + shadow
+            + r"""
 int main(void) {
     _GLFWwindow w = {0}, *window = &w;
     decs.metrics.width = 2;
@@ -214,10 +324,24 @@ int main(void) {
     }
     assert(create_shadow_tile(window) == 6);
     assert(st.data && st.stride == 42 && st.corner_size == 18 && st.for_decoration_size == 6);
+    for (int i = 0; i < 10; i++) {
+        decs.metrics.width = 0;
+        assert(create_shadow_tile(window) == 0 && !st.data && !st.for_decoration_size);
+        decs.metrics.width = 2 + i % 3;
+        decs.titlebar_hidden = i % 2;
+        for (int failure = 1; failure <= 2; failure++) {
+            fail_allocation = failure;
+            assert(create_shadow_tile(window) == 0 && !st.data && !st.for_decoration_size);
+        }
+        const size_t margin = (size_t)round(decs.metrics.width * decs.for_window_state.fscale);
+        assert(create_shadow_tile(window) == margin && st.data && st.for_decoration_size == margin);
+        assert(st.stride == 7 * margin && st.corner_size == 3 * margin);
+    }
     free(st.data);
     return 0;
 }
-''')
+"""
+        )
 
 
 if __name__ == '__main__':
