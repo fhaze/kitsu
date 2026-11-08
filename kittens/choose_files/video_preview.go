@@ -28,11 +28,11 @@ func ffmpeg_thumbnail_cmd(path, outpath string) *exec.Cmd {
 }
 
 func parse_preview_integer(key, value string, minimum, maximum int) (int, error) {
-	i, err := strconv.ParseUint(value, 10, strconv.IntSize-1)
-	if err != nil || i < uint64(minimum) || i > uint64(maximum) {
+	i, err := strconv.Atoi(value)
+	if err != nil || i < minimum || i > maximum || strings.HasPrefix(value, "+") || strings.HasPrefix(value, "-") {
 		return 0, fmt.Errorf("invalid %s in video_preview: %s (must be between %d and %d)", key, value, minimum, maximum)
 	}
-	return int(i), nil
+	return i, nil
 }
 
 func parse_video_preview(spec string) error {

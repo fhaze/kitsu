@@ -26,6 +26,7 @@ func TestVideoPreviewValidation(t *testing.T) {
 		{"empty", "", "5.000000", "fps=10,scale=480:-1:flags=lanczos"},
 		{"defaults", "width=480 fps=10 duration=5", "5.000000", "fps=10,scale=480:-1:flags=lanczos"},
 		{"ordinary", "width=640 fps=24 duration=2.5", "2.500000", "fps=24,scale=640:-1:flags=lanczos"},
+		{"leading_zeroes", "width=000640 fps=024", "5.000000", "fps=24,scale=640:-1:flags=lanczos"},
 		{"minimum", "width=1 fps=1 duration=0.000001", "0.000001", "fps=1,scale=1:-1:flags=lanczos"},
 		{"maximum", "width=4096 fps=60 duration=10", "10.000000", "fps=60,scale=4096:-1:flags=lanczos"},
 		{"input_width", "width=0", "5.000000", "fps=10,scale=0:-1:flags=lanczos"},
@@ -87,6 +88,23 @@ func TestVideoPreviewRejectedSettings(t *testing.T) {
 				t.Fatal("Invalid configuration changed preview settings")
 			}
 		})
+	}
+}
+
+func TestVideoPreviewUnsignedIntegerSyntax(t *testing.T) {
+	for _, setting := range []struct {
+		key              string
+		minimum, maximum int
+	}{{"fps", 1, 60}, {"width", 0, 4096}} {
+		for _, value := range []string{"+1", "+0", "-0", "-00", "-1", " 1", "1 ", "1_0", "0x10", "１", "١", "1\x00"} {
+			t.Run(setting.key+"/"+strconv.Quote(value), func(t *testing.T) {
+				got, err := parse_preview_integer(setting.key, value, setting.minimum, setting.maximum)
+				want := fmt.Sprintf("invalid %s in video_preview: %s (must be between %d and %d)", setting.key, value, setting.minimum, setting.maximum)
+				if got != 0 || err == nil || err.Error() != want {
+					t.Fatalf("parse %q: got (%d, %v), want (0, %q)", value, got, err, want)
+				}
+			})
+		}
 	}
 }
 
