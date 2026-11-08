@@ -1018,6 +1018,9 @@ class Parser:
     def file_transfer_confirmation_bypass(self, val: str, ans: dict[str, typing.Any]) -> None:
         ans['file_transfer_confirmation_bypass'] = str(val)
 
+    def file_transfer_legacy_bypass(self, val: str, ans: dict[str, typing.Any]) -> None:
+        ans['file_transfer_legacy_bypass'] = to_bool(val)
+
     def filter_notification(self, val: str, ans: dict[str, typing.Any]) -> None:
         for k, v in filter_notification(val, ans["filter_notification"]):
             ans["filter_notification"][k] = v

@@ -625,7 +625,7 @@ class DestFile:
                 self.apply_metadata()
 
 
-def check_bypass(password: str, request_id: str, bypass_data: str) -> bool:
+def check_bypass(password: str, request_id: str, bypass_data: str, *, allow_legacy: bool = True) -> bool:
     if not password:
         # No bypass password configured, so bypassing confirmation is never allowed.
         # Note that the remote side knows the request id and can perform ECDH using
@@ -650,7 +650,7 @@ def check_bypass(password: str, request_id: str, bypass_data: str) -> bool:
             log_error(f'Invalid file transmission bypass data received: {err}')
             return False
     elif protocol == 'sha256':
-        return hmac.compare_digest(encode_bypass(request_id, password), f'{protocol}:{bypass_data}')
+        return allow_legacy and hmac.compare_digest(encode_bypass(request_id, password), f'{protocol}:{bypass_data}')
     else:
         log_error(f'Invalid file transmission bypass data received with protocol: {protocol}')
     return False
@@ -665,8 +665,8 @@ class ActiveReceive:
         self.id = request_id
         self.bypass_ok: bool | None = None
         if bypass:
-            byp = get_options().file_transfer_confirmation_bypass
-            self.bypass_ok = check_bypass(byp, request_id, bypass)
+            opts = get_options()
+            self.bypass_ok = check_bypass(opts.file_transfer_confirmation_bypass, request_id, bypass, allow_legacy=opts.file_transfer_legacy_bypass)
         self.files = {}
         self.last_activity_at = monotonic()
         self.send_acknowledgements = quiet < 1
@@ -804,8 +804,8 @@ class ActiveSend:
         self.expected_num_of_args = num_of_args
         self.bypass_ok: bool | None = None
         if bypass:
-            byp = get_options().file_transfer_confirmation_bypass
-            self.bypass_ok = check_bypass(byp, request_id, bypass)
+            opts = get_options()
+            self.bypass_ok = check_bypass(opts.file_transfer_confirmation_bypass, request_id, bypass, allow_legacy=opts.file_transfer_legacy_bypass)
         self.accepted = False
         self.last_activity_at = monotonic()
         self.send_acknowledgements = quiet < 1

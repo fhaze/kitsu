@@ -502,6 +502,36 @@ class TestFileTransmission(BaseTest):
             # Windows normalizes symlink targets
             self.ae(os.path.normpath(received.decode('utf-8')), os.path.normpath(src))
 
+    def test_legacy_bypass_policy(self):
+        from unittest.mock import patch
+
+        from kitty.file_transmission import ActiveReceive, ActiveSend, check_bypass, encode_bypass
+        from kitty.options.parse import parse_conf_item
+        from kitty.options.types import Options, defaults
+
+        self.assertTrue(defaults.file_transfer_legacy_bypass)
+        token = encode_bypass('rid', 'secret')
+        self.assertTrue(check_bypass('secret', 'rid', token))
+        for value, allow_legacy in (('yes', True), ('no', False)):
+            parsed = {}
+            self.assertTrue(parse_conf_item('file_transfer_legacy_bypass', value, parsed))
+            self.assertEqual(parsed, {'file_transfer_legacy_bypass': allow_legacy})
+            for password, request_id, bypass, expected in (
+                ('secret', 'rid', token, allow_legacy),
+                ('wrong', 'rid', token, False),
+                ('secret', 'other', token, False),
+                ('', 'rid', encode_bypass('rid', ''), False),
+            ):
+                with self.subTest(allow_legacy=allow_legacy, password=password, request_id=request_id):
+                    self.assertEqual(check_bypass(password, request_id, bypass, allow_legacy=allow_legacy), expected)
+                    opts = Options({**parsed, 'file_transfer_confirmation_bypass': password})
+                    with patch('kitty.file_transmission.get_options', return_value=opts):
+                        self.assertEqual(ActiveReceive(request_id, 0, bypass).bypass_ok, expected)
+                        self.assertEqual(ActiveSend(request_id, 0, bypass, 0).bypass_ok, expected)
+            with patch('kitty.file_transmission.get_options', return_value=Options(parsed)):
+                self.assertIsNone(ActiveReceive('rid', 0, '').bypass_ok)
+                self.assertIsNone(ActiveSend('rid', 0, '', 0).bypass_ok)
+
     def test_check_bypass(self):
         import json
         from base64 import b85encode
@@ -510,29 +540,43 @@ class TestFileTransmission(BaseTest):
         from unittest.mock import patch
 
         from kitty.fast_data_types import AES256GCMEncrypt, EllipticCurveKey
-        from kitty.file_transmission import check_bypass, encode_bypass
+        from kitty.file_transmission import ActiveReceive, ActiveSend, check_bypass
+        from kitty.options.types import Options
 
         from .crypto import is_rlimit_memlock_too_low
 
         if is_rlimit_memlock_too_low():
             self.skipTest('RLIMIT_MEMLOCK is too low')
         kitty_key, remote_key = EllipticCurveKey(), EllipticCurveKey()
+        now = time_ns()
 
-        def kitty_1(request_id: str, password: str) -> str:
+        def kitty_1(request_id: str, password: str, timestamp: int = now) -> str:
             e = AES256GCMEncrypt(remote_key.derive_secret(kitty_key.public))
-            encrypted = e.add_data_to_be_encrypted(f'{time_ns()}:{request_id};{password}'.encode(), True)
+            encrypted = e.add_data_to_be_encrypted(f'{timestamp}:{request_id};{password}'.encode(), True)
             return 'kitty-1:' + json.dumps(
                 {k: b85encode(v).decode() for k, v in {'pubkey': remote_key.public, 'iv': e.iv, 'tag': e.tag, 'encrypted': encrypted}.items()}
             )
 
-        with patch('kitty.file_transmission.get_boss', return_value=SimpleNamespace(encryption_key=kitty_key)):
-            self.assertTrue(check_bypass('secret', 'rid', kitty_1('rid', 'secret')))
-            self.assertFalse(check_bypass('secret', 'rid', kitty_1('rid', 'wrong')))
-            self.assertFalse(check_bypass('secret', 'rid', kitty_1('other', 'secret')))
-            self.assertTrue(check_bypass('secret', 'rid', encode_bypass('rid', 'secret')))
-            # when no bypass password is configured, bypass must never succeed
-            self.assertFalse(check_bypass('', 'rid', kitty_1('rid', '')))
-            self.assertFalse(check_bypass('', 'rid', encode_bypass('rid', '')))
+        cases = (
+            ('valid', 'secret', kitty_1('rid', 'secret'), True),
+            ('wrong password', 'secret', kitty_1('rid', 'wrong'), False),
+            ('wrong session', 'secret', kitty_1('other', 'secret'), False),
+            ('expired', 'secret', kitty_1('rid', 'secret', now - 301 * 10**9), False),
+            ('future', 'secret', kitty_1('rid', 'secret', now + 301 * 10**9), False),
+            ('empty password', '', kitty_1('rid', ''), False),
+        )
+        with (
+            patch('kitty.file_transmission.get_boss', return_value=SimpleNamespace(encryption_key=kitty_key)),
+            patch('kitty.file_transmission.time_ns', return_value=now),
+        ):
+            for allow_legacy in (True, False):
+                for name, password, token, expected in cases:
+                    with self.subTest(case=name, allow_legacy=allow_legacy):
+                        self.assertEqual(check_bypass(password, 'rid', token, allow_legacy=allow_legacy), expected)
+                        opts = Options({'file_transfer_confirmation_bypass': password, 'file_transfer_legacy_bypass': allow_legacy})
+                        with patch('kitty.file_transmission.get_options', return_value=opts):
+                            self.assertEqual(ActiveReceive('rid', 0, token).bypass_ok, expected)
+                            self.assertEqual(ActiveSend('rid', 0, token, 0).bypass_ok, expected)
 
     def test_parse_ftc(self):
         def t(raw, *expected):
