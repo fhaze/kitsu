@@ -414,40 +414,125 @@ func TestTarExtractWindowsPaths(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows drive and separator semantics only")
 	}
-	parent := t.TempDir()
-	dest, outside := filepath.Join(parent, "dest"), filepath.Join(parent, "dest-evil")
-	for _, dir := range []string{dest, outside} {
-		if err := os.Mkdir(dir, 0700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	victim := filepath.Join(outside, "victim")
-	if err := os.WriteFile(victim, []byte("unchanged"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	volume := filepath.VolumeName(victim)
-	for name, path := range map[string]string{
-		"drive_relative":   volume + strings.TrimPrefix(victim, volume+`\`),
-		"drive_qualified":  victim,
-		"root_relative":    strings.TrimPrefix(victim, volume),
-		"unc":              `\\localhost\` + strings.TrimSuffix(volume, ":") + "$" + strings.TrimPrefix(victim, volume),
-		"extended_length":  `\\?\` + victim,
-		"mixed_separators": `..\dest-evil/victim`,
-	} {
+	for _, name := range []string{"drive_relative", "drive_qualified", "root_relative", "unc", "extended_length", "mixed_separators", "mixed_separators_reverse"} {
 		for _, hardlink := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/hardlink=%v", name, hardlink), func(t *testing.T) {
-				dest := t.TempDir()
+				parent := t.TempDir()
+				dest, outside := filepath.Join(parent, "dest"), filepath.Join(parent, "dest-evil")
+				for _, dir := range []string{dest, outside} {
+					if err := os.Mkdir(dir, 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				victim := filepath.Join(outside, "victim")
+				if err := os.WriteFile(victim, []byte("unchanged"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				volume := filepath.VolumeName(victim)
+				path := map[string]string{
+					"drive_relative":           volume + strings.TrimPrefix(victim, volume+`\`),
+					"drive_qualified":          victim,
+					"root_relative":            strings.TrimPrefix(victim, volume),
+					"unc":                      `\\localhost\` + strings.TrimSuffix(volume, ":") + "$" + strings.TrimPrefix(victim, volume),
+					"extended_length":          `\\?\` + victim,
+					"mixed_separators":         `..\dest-evil/victim`,
+					"mixed_separators_reverse": `../dest-evil\victim`,
+				}[name]
+				mixed := strings.HasPrefix(name, "mixed_separators")
+				if mixed {
+					target := filepath.Clean(filepath.Join(dest, path))
+					if target != victim {
+						t.Fatalf("unsafe extraction would target %q, not victim %q", target, victim)
+					}
+					got, err := os.Stat(target)
+					want, victim_err := os.Stat(victim)
+					if err != nil || victim_err != nil || !os.SameFile(got, want) {
+						t.Fatalf("archive target is not the sentinel file: %v, %v", err, victim_err)
+					}
+				}
 				entry := tar_entry{name: path, body: "changed"}
 				if hardlink {
 					entry = tar_entry{name: "link", typeflag: tar.TypeLink, linkname: path}
 				}
-				_, _ = ExtractAllFromTar(make_tar(t, entry), dest)
-				assert_file_contents(t, victim, "unchanged")
-				if _, err := os.Lstat(filepath.Join(dest, "link")); !os.IsNotExist(err) {
-					t.Fatalf("outside hardlink created: %v", err)
+				count, err := ExtractAllFromTar(make_tar(t, entry), dest)
+				want_count := 0
+				want_paths := map[string]bool{".": true, "dest": true, "dest-evil": true, "dest-evil/victim": true}
+				// A root-relative Windows name is joined beneath dest, not the drive root.
+				if name == "root_relative" && !hardlink {
+					want_count = 1
+					target := filepath.Join(dest, path)
+					if !strings.HasPrefix(target, dest+string(os.PathSeparator)) {
+						t.Fatalf("root-relative name escaped destination: %q", target)
+					}
+					assert_file_contents(t, target, "changed")
+					relative, rel_err := filepath.Rel(parent, target)
+					if rel_err != nil {
+						t.Fatal(rel_err)
+					}
+					for relative != "dest" {
+						want_paths[filepath.ToSlash(relative)] = true
+						relative = filepath.Dir(relative)
+					}
 				}
+				if count != want_count {
+					t.Fatalf("extracted %d entries, want %d", count, want_count)
+				}
+				// Escaping members are skipped; escaping hardlink targets are errors.
+				if mixed && (err != nil) != hardlink {
+					t.Fatalf("extraction error: %v, want error: %v", err, hardlink)
+				}
+				assert_file_contents(t, victim, "unchanged")
+				paths := make(map[string]bool)
+				if err := fs.WalkDir(os.DirFS(parent), ".", func(path string, d fs.DirEntry, err error) error {
+					paths[path] = true
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if diff := cmp.Diff(want_paths, paths); diff != "" {
+					t.Fatalf("unexpected extraction output (-want +got):\n%s", diff)
+				}
+				if count, err := ExtractAllFromTar(make_tar(t, tar_entry{name: "valid/file", body: "valid"}), dest); err != nil || count != 1 {
+					t.Fatalf("valid extraction: count=%d, error=%v", count, err)
+				}
+				assert_file_contents(t, filepath.Join(dest, "valid", "file"), "valid")
+				assert_file_contents(t, victim, "unchanged")
 			})
 		}
+	}
+}
+
+func TestTarExtractBackslashLiterals(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX literal backslashes; Windows separators are covered by TestTarExtractWindowsPaths")
+	}
+	for _, name := range []string{`..\dest-evil/victim`, `..\dest-evil\victim`} {
+		t.Run(name, func(t *testing.T) {
+			parent := t.TempDir()
+			dest, outside := filepath.Join(parent, "dest"), filepath.Join(parent, "dest-evil")
+			for _, dir := range []string{dest, outside} {
+				if err := os.Mkdir(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			victim := filepath.Join(outside, "victim")
+			if err := os.WriteFile(victim, []byte("unchanged"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(dest, name)
+			if target == victim || !strings.HasPrefix(target, dest+string(os.PathSeparator)) {
+				t.Fatalf("POSIX backslash name did not stay inside destination: %q", target)
+			}
+			if count, err := ExtractAllFromTar(make_tar(t, tar_entry{name: name, body: "literal"}), dest); err != nil || count != 1 {
+				t.Fatalf("literal extraction: count=%d, error=%v", count, err)
+			}
+			assert_file_contents(t, target, "literal")
+			if count, err := ExtractAllFromTar(make_tar(t, tar_entry{name: "link", typeflag: tar.TypeLink, linkname: name}), dest); err != nil || count != 1 {
+				t.Fatalf("literal hardlink: count=%d, error=%v", count, err)
+			}
+			assert_file_contents(t, filepath.Join(dest, "link"), "literal")
+			assert_file_contents(t, victim, "unchanged")
+		})
 	}
 }
 
