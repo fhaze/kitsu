@@ -8,7 +8,9 @@ import (
 	"encoding/base32"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -89,6 +91,45 @@ func generateTOTP(secret string, digits, period int64, t time.Time) (string, err
 	return fmt.Sprintf(fmtstr, val), nil
 }
 
+func parse_askpass_response(data []byte, is_confirm, is_fingerprint_check bool) (string, error) {
+	response := ""
+	if is_confirm {
+		var ok bool
+		if err := json.Unmarshal(data, &ok); err != nil {
+			return "", errors.New("Failed to parse askpass response")
+		}
+		if ok {
+			return "yes", nil
+		}
+		return "no", nil
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		// Decoder errors can include sensitive values, not just the raw payload.
+		return "", errors.New("Failed to parse askpass response")
+	}
+	if is_fingerprint_check {
+		response = strings.ToLower(response)
+		switch response {
+		case "y":
+			response = "yes"
+		case "n":
+			response = "no"
+		}
+	}
+	return response, nil
+}
+
+func write_askpass_response(w io.Writer, data []byte, is_confirm, is_fingerprint_check bool) error {
+	response, err := parse_askpass_response(data, is_confirm, is_fingerprint_check)
+	if err != nil {
+		return err
+	}
+	if response != "" {
+		_, err = fmt.Fprintln(w, response)
+	}
+	return err
+}
+
 func RunSSHAskpass() int {
 	msg := os.Args[len(os.Args)-1]
 	prompt := os.Getenv("SSH_ASKPASS_PROMPT")
@@ -160,34 +201,8 @@ func RunSSHAskpass() int {
 	if err != nil {
 		return fatal(fmt.Errorf("Failed to read from SHM file with error: %w", err))
 	}
-	response := ""
-	if is_confirm {
-		var ok bool
-		err = json.Unmarshal(data, &ok)
-		if err != nil {
-			return fatal(fmt.Errorf("Failed to parse response data: %#v with error: %w", string(data), err))
-		}
-		response = "no"
-		if ok {
-			response = "yes"
-		}
-	} else {
-		err = json.Unmarshal(data, &response)
-		if err != nil {
-			return fatal(fmt.Errorf("Failed to parse response data: %#v with error: %w", string(data), err))
-		}
-		if is_fingerprint_check {
-			response = strings.ToLower(response)
-			switch response {
-			case "y":
-				response = "yes"
-			case "n":
-				response = "no"
-			}
-		}
-	}
-	if response != "" {
-		fmt.Println(response)
+	if err = write_askpass_response(os.Stdout, data, is_confirm, is_fingerprint_check); err != nil {
+		return fatal(err)
 	}
 	return 0
 }
