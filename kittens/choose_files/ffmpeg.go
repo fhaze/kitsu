@@ -7,6 +7,7 @@ import (
 	"github.com/kovidgoyal/kitty/tools/utils"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"sync"
