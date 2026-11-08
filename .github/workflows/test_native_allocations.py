@@ -47,7 +47,7 @@ static void *test_calloc(size_t count, size_t size) {
 
 
 def source(path: str, start: str, end: str) -> str:
-    text = (ROOT / path).read_text()
+    text = (ROOT / path).read_text(encoding='utf-8')
     return text[text.index(start) : text.index(end, text.index(start))]
 
 
@@ -56,7 +56,7 @@ class NativeAllocations(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cfile = Path(tmp) / 'test.c'
             exe = Path(tmp) / 'test.exe'
-            cfile.write_text(PREAMBLE + (ALLOCATORS if allocation_stubs else '') + code)
+            cfile.write_text(PREAMBLE + (ALLOCATORS if allocation_stubs else '') + code, encoding='utf-8')
             command = shlex.split(os.environ.get('CC', 'gcc'))
             command += ['-std=gnu11', '-Wall', '-Wextra', '-Werror', '-O1', '-g']
             if os.name == 'nt':
