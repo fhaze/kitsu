@@ -1540,22 +1540,13 @@ def sanitize_url_for_display_to_user(url: str) -> str:
 
 
 def extract_all_from_tarfile_safely(tf: 'tarfile.TarFile', dest: str) -> None:
-    # Ensure that all extracted items are within dest
-
-    def is_within_directory(directory: str, target: str) -> bool:
-        abs_directory = os.path.abspath(directory)
-        abs_target = os.path.abspath(target)
-        prefix = os.path.commonprefix((abs_directory, abs_target))
-        return prefix == abs_directory
-
-    def safe_extract(tar: 'tarfile.TarFile', path: str = '.', numeric_owner: bool = False) -> None:
-        for member in tar.getmembers():
-            member_path = os.path.join(path, member.name)
-            if not is_within_directory(path, member_path):
-                raise ValueError(f'Attempted path traversal in tar file: {member.name}')
-        tar.extractall(path, tar.getmembers(), numeric_owner=numeric_owner)
-
-    safe_extract(tf, dest)
+    # Do not inherit fully_trusted defaults (Python < 3.14) or ignore filter errors.
+    errorlevel = tf.errorlevel
+    try:
+        tf.errorlevel = 2
+        tf.extractall(dest, filter='data')
+    finally:
+        tf.errorlevel = errorlevel
 
 
 def is_png(path: str) -> bool:
