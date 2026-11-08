@@ -11,7 +11,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 )
 
 var _ = fmt.Print
@@ -23,11 +25,53 @@ type TarExtractOptions struct {
 
 // Resolve symlinks in all but the last component of path
 func eval_symlinks_in_parent(path string) (string, error) {
-	parent, err := EvalSymlinksThatExist(filepath.Dir(path))
+	parent, err := eval_tar_path(filepath.Dir(path))
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(parent, filepath.Base(path)), nil
+}
+
+func eval_tar_path(path string) (string, error) {
+	links_walked := 0
+	var resolve func(string) (string, error)
+	resolve = func(path string) (string, error) {
+		parent := filepath.Dir(path)
+		if parent == path {
+			return filepath.EvalSymlinks(path)
+		}
+		parent, err := resolve(parent)
+		if err != nil {
+			return "", err
+		}
+		path = filepath.Join(parent, filepath.Base(path))
+		st, err := os.Lstat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return path, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		// Windows junctions are readable links but do not have ModeSymlink.
+		target, err := os.Readlink(path)
+		if err != nil {
+			if st.Mode()&fs.ModeSymlink == 0 && (errors.Is(err, syscall.EINVAL) ||
+				// ERROR_NOT_A_REPARSE_POINT is returned for ordinary Windows paths.
+				(runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(4390)))) {
+				return path, nil
+			}
+			return "", err
+		}
+		links_walked++
+		if links_walked > 255 {
+			return "", fmt.Errorf("too many links while resolving %s", path)
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(parent, target)
+		}
+		return resolve(filepath.Clean(target))
+	}
+	return resolve(filepath.Clean(path))
 }
 
 func is_symlink_path(path string) (bool, error) {
@@ -93,6 +137,7 @@ func link_or_copy(src, dest string) (is_symlink bool, err error) {
 	return false, nil
 }
 
+// The destination tree must not be concurrently modified by another process.
 func ExtractAllFromTar(tr *tar.Reader, dest_path string, optss ...TarExtractOptions) (count int, err error) {
 	opts := TarExtractOptions{}
 	if len(optss) > 0 {
@@ -104,6 +149,9 @@ func ExtractAllFromTar(tr *tar.Reader, dest_path string, optss ...TarExtractOpti
 		}
 	}
 	if dest_path, err = filepath.EvalSymlinks(dest_path); err != nil {
+		return
+	}
+	if dest_path, err = eval_tar_path(dest_path); err != nil {
 		return
 	}
 	dest_path = filepath.Clean(dest_path)
@@ -146,7 +194,7 @@ func ExtractAllFromTar(tr *tar.Reader, dest_path string, optss ...TarExtractOpti
 			dest = filepath.Join(dest_path, dest)
 		}
 		if hdr.Typeflag == tar.TypeDir {
-			dest, err = EvalSymlinksThatExist(dest)
+			dest, err = eval_tar_path(dest)
 		} else {
 			// Only resolve symlinks in the parent directory so that an
 			// existing entry at this path is replaced rather than written
