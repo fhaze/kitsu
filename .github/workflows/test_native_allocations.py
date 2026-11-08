@@ -128,11 +128,17 @@ int main(void) {
     def test_box_glyph_capacity(self) -> None:
         checks = source('kitty/fonts.c', '    if (width <= 0 || height <= 0', '    RAII_PyObject(ans,')
         factor = source('kitty/decorations.h', '#define SUPERSAMPLE_FACTOR ', '\n')
+        canvas_size = source('kitty/decorations.c', 'bool\nbox_char_canvas_size(', '\nvoid\nrender_box_char(')
         self.compile_and_run(
             factor
+            + '\n'
+            + canvas_size
             + r"""
 typedef intptr_t Py_ssize_t;
 #define PY_SSIZE_T_MAX INTPTR_MAX
+#define arraysz(x) (sizeof(x) / sizeof((x)[0]))
+#define OPT(x) x
+static double box_drawing_scale[] = {0.001, 1., 1.5, 2.};
 typedef struct { size_t pixels, capacity; } PyObject;
 enum { PyExc_ValueError = 1, PyExc_OverflowError };
 static int error;
