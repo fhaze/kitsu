@@ -2898,13 +2898,33 @@ sprite_idx_to_pos(PyObject *self UNUSED, PyObject *args) {
 static PyObject *
 pyrender_box_char(PyObject *self UNUSED, PyObject *args) {
     unsigned int ch;
-    unsigned long width, height;
+    Py_ssize_t width, height;
     double dpi_x = 96., dpi_y = 96., scale = 1.;
-    if (!PyArg_ParseTuple(args, "Ikk|ddd", &ch, &width, &height, &scale, &dpi_x, &dpi_y)) return NULL;
-    RAII_PyObject(ans, PyBytes_FromStringAndSize(NULL, width * 16 * height * 16));
+    if (!PyArg_ParseTuple(args, "Inn|ddd", &ch, &width, &height, &scale, &dpi_x, &dpi_y)) return NULL;
+    // This test/debug binding is for glyphs, not arbitrary image canvases.
+    if (width <= 0 || height <= 0 || width > 1024 || height > 1024) {
+        PyErr_SetString(PyExc_ValueError, "Box glyph dimensions must be between 1 and 1024 pixels");
+        return NULL;
+    }
+    if (!isfinite(scale) || !isfinite(dpi_x) || !isfinite(dpi_y) || scale <= 0 || dpi_x <= 0 || dpi_y <= 0) {
+        PyErr_SetString(PyExc_ValueError, "Box glyph scale and DPI must be finite and positive");
+        return NULL;
+    }
+    const size_t w = (size_t)width, h = (size_t)height, factor = SUPERSAMPLE_FACTOR;
+    if (w > UINT_MAX / factor || h > UINT_MAX / factor || w > SIZE_MAX / h) {
+        PyErr_SetString(PyExc_OverflowError, "Box glyph dimensions are too large");
+        return NULL;
+    }
+    const size_t pixels = w * h;
+    if (pixels > UINT_MAX / factor / factor || pixels > SIZE_MAX / (1 + factor * factor) || pixels > (size_t)PY_SSIZE_T_MAX / (1 + factor * factor)) {
+        PyErr_SetString(PyExc_OverflowError, "Box glyph canvas is too large");
+        return NULL;
+    }
+    const size_t capacity = pixels * (1 + factor * factor);
+    RAII_PyObject(ans, PyBytes_FromStringAndSize(NULL, (Py_ssize_t)capacity));
     if (!ans) return NULL;
-    render_box_char(ch, (uint8_t *)PyBytes_AS_STRING(ans), width, height, dpi_x, dpi_y, scale);
-    if (_PyBytes_Resize(&ans, width * height) != 0) return NULL;
+    render_box_char(ch, (uint8_t *)PyBytes_AS_STRING(ans), (unsigned)w, (unsigned)h, dpi_x, dpi_y, scale);
+    if (_PyBytes_Resize(&ans, (Py_ssize_t)pixels) != 0) return NULL;
     return Py_NewRef(ans);
 }
 

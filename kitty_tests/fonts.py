@@ -46,6 +46,27 @@ def testing_font_data(name):
 
 
 class Selection(BaseTest):
+    def test_box_glyph_dimension_validation(self):
+        import subprocess
+
+        code = """
+from kitty.fast_data_types import render_box_char
+for width, height in [(0, 1), (1, 0), (-1, 1), (1, -1), (65536, 256),
+                      (1025, 1), (1, 1025), (2**32, 1), (2**64, 1),
+                      (2**64 + 8, 16), (2**63 - 1, 2**63 - 1), (1.5, 2)]:
+    try:
+        render_box_char(ord('╭'), width, height)
+    except (ValueError, OverflowError, TypeError):
+        pass
+    else:
+        raise AssertionError((width, height))
+for width, height in [(1, 1), (8, 16), (1024, 1), (1, 1024)]:
+    assert render_box_char(ord('█'), width, height) == b'\\xff' * (width * height)
+assert len(render_box_char(ord(''), 8, 16)) == 128
+"""
+        result = subprocess.run(self.cmd_to_run_python_code(code), capture_output=True, timeout=30)
+        self.ae(result.returncode, 0, result.stderr.decode('utf-8', 'replace'))
+
     def test_font_selection(self):
         self.set_options({'font_features': {'LiberationMono': (ParsedFontFeature('-dlig'),)}})
         opts = Options()

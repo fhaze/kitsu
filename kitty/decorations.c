@@ -840,10 +840,11 @@ draw_parametrized_curve_with_derivative_and_antialiasing(
     const ClipRect *clip_to) {
     line_width = fmax(1., line_width);
     double half_thickness = line_width / 2.0;
-    uint i = 0, larger_dim = MAX(self->height, self->width);
+    size_t i = 0, larger_dim = MAX(self->height, self->width);
     double t = 0;
     double step = 1.0 / larger_dim;
-    uint cap = 2 * larger_dim;
+    if (larger_dim > SIZE_MAX / 2 / sizeof(FloatPoint)) fatal("Box glyph scratch canvas is too large");
+    size_t cap = 2 * larger_dim;
     const double min_step = step / 1000., max_step = step;
     RAII_ALLOC(FloatPoint, samples, malloc(sizeof(FloatPoint) * cap));
     if (!samples) fatal("Out of memory");
@@ -859,12 +860,13 @@ draw_parametrized_curve_with_derivative_and_antialiasing(
         t = fmin(t + step, 1.0);
         i++;
         if (i >= cap) {
+            if (cap > SIZE_MAX / 2 / sizeof(samples[0])) fatal("Box glyph scratch canvas is too large");
             cap *= 2;
             samples = realloc(samples, sizeof(samples[0]) * cap);
             if (!samples) fatal("Out of memory");
         }
     }
-    const uint num_samples = i;
+    const size_t num_samples = i;
     for (uint py = cr.top; py < cr.y_end; py++) {
         uint ypos = self->width * py;
         for (uint px = cr.left; px < cr.x_end; px++) {
@@ -875,7 +877,7 @@ draw_parametrized_curve_with_derivative_and_antialiasing(
             double min_dist_sq = -1.0;
 
             // Find the closest point on the curve to the pixel center by sampling the curve.
-            for (uint i = 0; i < num_samples; ++i) {
+            for (size_t i = 0; i < num_samples; ++i) {
                 double dx = samples[i].x - pixel_center_x;
                 double dy = samples[i].y - pixel_center_y;
                 double dist_sq = dx * dx + dy * dy;

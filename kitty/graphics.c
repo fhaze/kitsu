@@ -2020,9 +2020,12 @@ handle_animation_frame_load_command(GraphicsManager *self, GraphicsCommand *g, I
     img = process_image_data(self, img, g, fmt);
     if (!img || !load_data->loading_completed_successfully) return img;
 
-    const unsigned long bytes_per_pixel = load_data->is_opaque ? 3 : 4;
-    if (load_data->data_sz < bytes_per_pixel * load_data->width * load_data->height)
-        ABRT("ENODATA", "Insufficient image data %zu < %zu", load_data->data_sz, bytes_per_pixel * g->data_width * g->data_height);
+    const size_t bytes_per_pixel = load_data->is_opaque ? 3 : 4;
+    if (!load_data->width || !load_data->height || load_data->width > MAX_IMAGE_DIMENSION || load_data->height > MAX_IMAGE_DIMENSION ||
+        (size_t)load_data->width > SIZE_MAX / bytes_per_pixel / load_data->height)
+        ABRT("EINVAL", "Invalid frame dimensions: %u x %u", load_data->width, load_data->height);
+    const size_t required_size = bytes_per_pixel * (size_t)load_data->width * load_data->height;
+    if (load_data->data_sz < required_size) ABRT("ENODATA", "Insufficient image data %zu < %zu", load_data->data_sz, required_size);
     if (load_data->width > img->width) ABRT("EINVAL", "Frame width %u larger than image width: %u", load_data->width, img->width);
     if (load_data->height > img->height) ABRT("EINVAL", "Frame height %u larger than image height: %u", load_data->height, img->height);
     if (is_new_frame && cache_size(self) + load_data->data_sz > self->storage_limit * 5) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -315,6 +316,46 @@ func load_previewers(cfg *Config) (err error) {
 	return
 }
 
+func parse_preview_integer(key, value string, maximum int) (int, error) {
+	i, err := strconv.ParseUint(value, 10, strconv.IntSize)
+	if err != nil || i == 0 || i > uint64(maximum) {
+		return 0, fmt.Errorf("invalid %s in video_preview: %s (must be between 1 and %d)", key, value, maximum)
+	}
+	return int(i), nil
+}
+
+func parse_video_preview(spec string) error {
+	parts, err := shlex.Split(spec)
+	if err != nil {
+		return err
+	}
+	duration, fps, width := video_duration, video_fps, video_width
+	for _, x := range parts {
+		k, v, found := strings.Cut(x, "=")
+		if !found {
+			return fmt.Errorf("invalid value %s in video_preview", x)
+		}
+		switch k {
+		case "duration":
+			duration, err = strconv.ParseFloat(v, 64)
+			if err != nil || math.IsNaN(duration) || math.IsInf(duration, 0) || duration <= 0 {
+				return fmt.Errorf("invalid %s in video_preview: %s", k, v)
+			}
+		case "fps":
+			fps, err = parse_preview_integer(k, v, 60)
+		case "width":
+			width, err = parse_preview_integer(k, v, 4096)
+		default:
+			return fmt.Errorf("unrecognized key in video_preview: %s", k)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	video_duration, video_fps, video_width = duration, fps, width
+	return nil
+}
+
 func load_config(opts *Options) (ans *Config, err error) {
 	ans = NewConfig()
 	p := config.ConfigParser{LineHandler: ans.Parse}
@@ -323,34 +364,8 @@ func load_config(opts *Options) (ans *Config, err error) {
 		return nil, err
 	}
 	ans.KeyboardShortcuts = config.ResolveShortcuts(ans.KeyboardShortcuts)
-	parts, err := shlex.Split(ans.Video_preview)
-	if err != nil {
+	if err = parse_video_preview(ans.Video_preview); err != nil {
 		return nil, err
-	}
-	for _, x := range parts {
-		k, v, found := strings.Cut(x, "=")
-		if !found {
-			return nil, fmt.Errorf("invalid value %s in video_preview", x)
-		}
-		var i uint64
-		switch k {
-		case "duration":
-			if video_duration, err = strconv.ParseFloat(v, 64); err != nil {
-				return nil, fmt.Errorf("invalid %s in video_preview: %s", k, v)
-			}
-		case "fps":
-			if i, err = strconv.ParseUint(v, 10, 0); err != nil {
-				return nil, fmt.Errorf("invalid %s in video_preview: %s", k, v)
-			}
-			video_fps = int(i)
-		case "width":
-			if i, err = strconv.ParseUint(v, 10, 0); err != nil {
-				return nil, fmt.Errorf("invalid %s in video_preview: %s", k, v)
-			}
-			video_width = int(i)
-		default:
-			return nil, fmt.Errorf("unrecognized key in video_preview: %s", k)
-		}
 	}
 	return ans, nil
 }
