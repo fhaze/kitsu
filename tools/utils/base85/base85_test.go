@@ -59,3 +59,13 @@ func TestBase85(t *testing.T) {
 		}
 	}
 }
+
+func TestBase85RejectsIncompleteChunk(t *testing.T) {
+	for _, src := range []string{"0", "~", "000000", "00000~", "00000000000"} {
+		t.Run(src, func(t *testing.T) {
+			if _, err := DecodeString(src); err == nil {
+				t.Fatal("expected an error for incomplete base85 chunk")
+			}
+		})
+	}
+}

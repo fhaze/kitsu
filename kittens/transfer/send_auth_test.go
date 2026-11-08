@@ -11,7 +11,7 @@ import (
 )
 
 func TestSendBypassInitialization(t *testing.T) {
-	for _, key := range []string{"", "invalid", "1:00"} {
+	for _, key := range []string{"", "invalid", "1:00", "1:~"} {
 		t.Run("refuse "+key, func(t *testing.T) {
 			t.Setenv("KITTY_PUBLIC_KEY", key)
 			manager := &SendManager{request_id: "rid", bypass: "secret"}

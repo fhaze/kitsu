@@ -98,6 +98,9 @@ func decodeChunk(decode *[256]byte, dst, src []byte) (int, int) {
 	if len(src) == 0 {
 		return 0, 0
 	}
+	if len(src) == 1 {
+		return 0, 1
+	}
 	var val uint32
 	m := DecodedLen(len(src))
 	buf := [5]byte{84, 84, 84, 84, 84}

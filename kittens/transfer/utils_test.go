@@ -28,7 +28,7 @@ func TestEncodeBypass(t *testing.T) {
 	}
 	for name, key := range map[string]string{
 		"missing key": "", "malformed key": "invalid", "unsupported protocol": "2:" + strings.SplitN(encodedKey, ":", 2)[1],
-		"invalid key data": "1::::::", "short key": "1:00",
+		"invalid key data": "1::::::", "short key": "1:00", "incomplete key data": "1:~",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("KITTY_PUBLIC_KEY", key)
