@@ -532,6 +532,41 @@ class TestFileTransmission(BaseTest):
                 self.assertIsNone(ActiveReceive('rid', 0, '').bypass_ok)
                 self.assertIsNone(ActiveSend('rid', 0, '', 0).bypass_ok)
 
+    def test_legacy_bypass_explicit_opt_in(self):
+        from unittest.mock import patch
+
+        from kitty.config import load_config
+        from kitty.file_transmission import ActiveReceive, ActiveSend, encode_bypass
+        from kitty.file_transmission import FileTransmission as ProductionFileTransmission
+        from kitty.options.types import defaults
+
+        self.assertTrue(defaults.file_transfer_legacy_bypass)
+        token = encode_bypass('test', 'secret')
+        for opt_in in (False, True):
+            lines = ['file_transfer_confirmation_bypass secret', 'file_transfer_legacy_bypass no']
+            if opt_in:
+                lines.append('file_transfer_legacy_bypass yes')
+            opts = load_config(overrides=lines)
+            self.assertEqual(opts.file_transfer_legacy_bypass, opt_in)
+            with (
+                patch('kitty.file_transmission.get_options', return_value=opts),
+                patch('kitty.file_transmission.get_boss', side_effect=AssertionError('must not prompt for a supplied token')),
+            ):
+                for receiving in (False, True):
+                    with self.subTest(opt_in=opt_in, receiving=receiving):
+                        ft = FileTransmission()
+                        active: ActiveReceive | ActiveSend
+                        if receiving:
+                            ft.active_receives['test'] = active = ActiveReceive('test', 0, token)
+                            ProductionFileTransmission.start_receive(ft, 'test')
+                        else:
+                            ft.active_sends['test'] = active = ActiveSend('test', 0, token, 1)
+                            ProductionFileTransmission.start_send(ft, 'test')
+                        self.assertEqual(active.accepted, opt_in)
+                        self.assertEqual(ft.test_responses[0]['status'], 'OK' if opt_in else 'EPERM:User refused the transfer')
+                        self.assertEqual('test' in (ft.active_receives if receiving else ft.active_sends), opt_in)
+        self.assertTrue(defaults.file_transfer_legacy_bypass)
+
     def test_check_bypass(self):
         import json
         from base64 import b85encode

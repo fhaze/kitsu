@@ -265,6 +265,41 @@ func TestTarExtractHardlinks(t *testing.T) {
 	})
 }
 
+func TestTarExtractPreexistingHardlink(t *testing.T) {
+	parent := t.TempDir()
+	dest, victim := filepath.Join(parent, "dest"), filepath.Join(parent, "victim")
+	if err := os.Mkdir(dest, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(victim, []byte("unchanged"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(dest, "file")
+	if err := os.Link(victim, output); err != nil {
+		t.Fatal(err)
+	}
+	assert_same_file(t, output, victim)
+	before, err := os.Stat(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := ExtractAllFromTar(make_tar(t, tar_entry{name: "file", body: "changed", mode: 0400}), dest)
+	if count != 1 || err != nil {
+		t.Fatalf("extraction: count=%d error=%v", count, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(output, 0600) })
+	assert_file_contents(t, victim, "unchanged")
+	assert_file_contents(t, output, "changed")
+	after, err := os.Stat(victim)
+	if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() {
+		t.Fatalf("outside sentinel identity or metadata changed: %v", err)
+	}
+	inside, err := os.Stat(output)
+	if err != nil || os.SameFile(inside, after) {
+		t.Fatalf("output was not detached from the outside hardlink: %v", err)
+	}
+}
+
 func TestTarExtractReadOnlyDirectory(t *testing.T) {
 	dest := t.TempDir()
 	ro := filepath.Join(dest, "ro")
@@ -407,6 +442,123 @@ func TestTarExtractContainment(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTarExtractJunctionChains(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows directory junctions only")
+	}
+	for _, target := range []string{"outside", "inside", "missing", "cycle"} {
+		for _, kind := range []byte{tar.TypeReg, tar.TypeLink, tar.TypeDir} {
+			t.Run(fmt.Sprintf("%s/%c", target, kind), func(t *testing.T) {
+				parent := t.TempDir()
+				dest, outside := filepath.Join(parent, "dest"), filepath.Join(parent, "dest-evil")
+				for _, dir := range []string{dest, outside} {
+					if err := os.Mkdir(dir, 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				victim := filepath.Join(outside, "victim")
+				if err := os.WriteFile(victim, []byte("unchanged"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				before, err := os.Stat(victim)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := map[string]bool{".": true, "dest": true, "dest/alias": true, "dest/hop": true, "dest-evil": true, "dest-evil/victim": true}
+				link_target := outside
+				if target == "inside" {
+					link_target = filepath.Join(dest, "real")
+					if err := os.Mkdir(link_target, 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(link_target, "victim"), []byte("inside"), 0600); err != nil {
+						t.Fatal(err)
+					}
+					want["dest/real"], want["dest/real/victim"] = true, true
+				} else if target == "missing" {
+					link_target = filepath.Join(outside, "missing")
+				}
+				junction := func(name, to string) {
+					t.Helper()
+					if out, err := exec.Command("cmd.exe", "/d", "/c", "mklink", "/J", name, to).CombinedOutput(); err != nil {
+						t.Fatalf("creating junction: %v: %s", err, out)
+					}
+					t.Cleanup(func() { _ = os.Remove(name) })
+				}
+				alias, hop := filepath.Join(dest, "alias"), filepath.Join(dest, "hop")
+				junction(hop, link_target)
+				junction(alias, hop)
+				if target == "cycle" {
+					if err := os.Remove(hop); err != nil {
+						t.Fatal(err)
+					}
+					junction(hop, alias)
+				} else if target != "missing" {
+					assert_same_file(t, filepath.Join(alias, "victim"), filepath.Join(link_target, "victim"))
+				}
+				entry := tar_entry{name: "alias/child/../victim", body: "changed"}
+				if kind == tar.TypeLink {
+					entry = tar_entry{name: "result", typeflag: kind, linkname: entry.name}
+				} else if kind == tar.TypeDir {
+					entry = tar_entry{name: "alias/child/../new", typeflag: kind, mode: 0700}
+				}
+				count, err := ExtractAllFromTar(make_tar(t, entry), dest)
+				assert_file_contents(t, victim, "unchanged")
+				if target == "outside" && kind == tar.TypeLink {
+					if st, err := os.Stat(filepath.Join(dest, "result")); err == nil && os.SameFile(before, st) {
+						t.Fatal("archive created a hardlink to the outside sentinel")
+					}
+				}
+				want_count := 0
+				if target == "inside" {
+					want_count = 1
+					if kind == tar.TypeLink {
+						want["dest/result"] = true
+						assert_same_file(t, filepath.Join(dest, "result"), filepath.Join(link_target, "victim"))
+					} else if kind == tar.TypeDir {
+						want["dest/real/new"] = true
+					} else {
+						assert_file_contents(t, filepath.Join(link_target, "victim"), "changed")
+					}
+				}
+				want_error := target == "cycle" || (kind == tar.TypeLink && target != "inside")
+				if count != want_count || (err != nil) != want_error {
+					t.Fatalf("extraction: count=%d error=%v, want count=%d error=%v", count, err, want_count, want_error)
+				}
+				if target == "cycle" && !strings.Contains(err.Error(), "too many links") {
+					t.Fatalf("junction cycle did not reach the link traversal guard: %v", err)
+				}
+				after, err := os.Stat(victim)
+				if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() {
+					t.Fatalf("outside sentinel identity or metadata changed: %v", err)
+				}
+				paths := make(map[string]bool)
+				if err := filepath.WalkDir(parent, func(path string, d fs.DirEntry, err error) error {
+					if err != nil {
+						return err
+					}
+					rel, err := filepath.Rel(parent, path)
+					if err != nil {
+						return err
+					}
+					paths[filepath.ToSlash(rel)] = true
+					if d.IsDir() {
+						if _, err := os.Readlink(path); err == nil {
+							return filepath.SkipDir
+						}
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if diff := cmp.Diff(want, paths); diff != "" {
+					t.Fatalf("unexpected extraction output (-want +got):\n%s", diff)
+				}
+			})
+		}
 	}
 }
 
