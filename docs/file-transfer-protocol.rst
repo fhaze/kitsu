@@ -525,48 +525,21 @@ and compares the session id and password in constant time. For implementation
 details, see ``encode_bypass()`` in ``kittens/transfer/utils.go`` and
 ``check_bypass()`` in ``kitty/file_transmission.py``.
 
-Legacy clients can instead send a hash of the password and the session id::
+Only encrypted ``kitty-1`` authentication is supported. Legacy ``sha256:``
+bypass tokens are rejected for both transfer directions and cannot be enabled
+by configuration. The former ``file_transfer_legacy_bypass`` option has been
+removed. Older clients must upgrade to encrypted authentication or omit the
+bypass token and use normal interactive confirmation. Clients sending a rejected
+token must not assume they will get an interactive confirmation prompt.
 
-    → action=send id=someid bypass=sha256:hash_value
-
-For example, suppose that the session id is ``mysession`` and the
-shared secret is ``mypassword``. Then the value of the ``bypass``
-key above is ``sha256:SHA256("mysession" + ";" + "mypassword")``, which
-is::
-
-    → action=send id=mysession bypass=sha256:192bd215915eeaa8c2b2a4c0f8f851826497d12b30036d8b5b1b4fc4411caf2c
-
-The legacy value of ``bypass`` is of the form
-``hash_function_name:hash_value`` (without spaces). Only SHA256 is supported for
-this legacy form. It is part of the protocol for compatibility with older and
-third-party clients; it is not used by the current transfer kitten. The Python
-``encode_bypass()`` helper produces this legacy form for checking tokens and
-for tests, not for the current Go client's encrypted authentication.
-
-Legacy acceptance is controlled by :opt:`file_transfer_legacy_bypass`, which
-defaults to ``yes`` to preserve compatibility. Set it to ``no`` when all clients
-support encrypted authentication, as the current transfer kitten does. This
-rejects legacy bypass tokens for both transfer directions; it does not change
-encrypted authentication or the normal confirmation prompt for requests without
-a bypass token. Clients sending a rejected token must not assume they will get
-an interactive confirmation prompt.
-
-The value is base64 encoded in the serialized ``pw`` field. For the example
-above, the serialized fields are::
-
-    ac=send;id=mysession;pw=c2hhMjU2OjE5MmJkMjE1OTE1ZWVhYThjMmIyYTRjMGY4Zjg1MTgyNjQ5N2QxMmIzMDAzNmQ4YjViMWI0ZmM0NDExY2FmMmM=
+The complete ``kitty-1:`` value is base64 encoded in the serialized ``pw`` field.
 
 .. warning::
-   An observed legacy SHA256 token permits fast offline guessing of a
-   low-entropy password. If legacy compatibility is necessary, use a
-   high-entropy, randomly generated shared token rather than a human-chosen
-   password. Legacy tokens have no expiry and can be replayed for the same
-   session id. A high-entropy token does not prevent replay or make an untrusted
-   endpoint safe. Use this feature only with trusted computers over trusted
-   networks or encrypted transports. A program that obtains the shared secret
-   can read and write local files without further permission. Encrypted
-   authentication protects the password in transit but still requires a trusted
-   endpoint, and tokens can be replayed within the timestamp window.
+   Use this feature only with trusted computers over trusted networks or
+   encrypted transports. A program that obtains the shared secret can read and
+   write local files without further permission. Encrypted authentication
+   protects the password in transit but still requires a trusted endpoint, and
+   tokens can be replayed within the timestamp window.
 
 Terminal implementations are free to use their own more advanced authentication
 schemes, with prefixes other than those starting with ``sha``, which are

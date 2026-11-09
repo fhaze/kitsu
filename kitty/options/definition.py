@@ -3271,29 +3271,8 @@ The password that can be supplied to the :doc:`file transfer kitten
 be used when initiating transfers from trusted computers, over trusted networks
 or encrypted transports, as it allows any programs running on the remote machine
 to read/write to the local filesystem, without permission.
-An empty password never bypasses confirmation. See also
-:opt:`file_transfer_legacy_bypass` for legacy client compatibility.
-""",
-)
-
-opt(
-    'file_transfer_legacy_bypass',
-    'yes',
-    option_type='to_bool',
-    long_text="""
-Allow legacy SHA256 authentication to bypass file transfer confirmation when
-:opt:`file_transfer_confirmation_bypass` is configured. Enabled by default for
-compatibility with legacy clients implementing the :ref:`file transfer protocol
-<bypass_auth>`. Set to :code:`no` to reject legacy bypass tokens. The current
-transfer kitten uses encrypted authentication and does not need this option.
-
-A captured legacy token allows offline guessing of the password. If legacy
-compatibility is needed, use a high-entropy, randomly generated shared token,
-not a human-chosen password, and only use trusted computers over trusted
-networks or encrypted transports. Legacy tokens have no expiry and can be
-replayed for the same session id. Encrypted authentication remains available
-regardless of this option. This option does not enable bypass with an empty
-password or disable interactive confirmation for transfers without a token.
+An empty password never bypasses confirmation. Only encrypted authentication
+from compatible clients is supported; legacy SHA256 bypass tokens are rejected.
 """,
 )
 
