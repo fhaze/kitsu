@@ -2897,14 +2897,41 @@ sprite_idx_to_pos(PyObject *self UNUSED, PyObject *args) {
 
 static PyObject *
 pyrender_box_char(PyObject *self UNUSED, PyObject *args) {
-    unsigned int ch;
-    unsigned long width, height;
+    Py_ssize_t ch, width, height;
     double dpi_x = 96., dpi_y = 96., scale = 1.;
-    if (!PyArg_ParseTuple(args, "Ikk|ddd", &ch, &width, &height, &scale, &dpi_x, &dpi_y)) return NULL;
-    RAII_PyObject(ans, PyBytes_FromStringAndSize(NULL, width * 16 * height * 16));
+    if (!PyArg_ParseTuple(args, "nnn|ddd", &ch, &width, &height, &scale, &dpi_x, &dpi_y)) return NULL;
+    if (ch < 0 || ch > 0x10ffff) {
+        PyErr_SetString(PyExc_ValueError, "Box glyph character must be a Unicode code point");
+        return NULL;
+    }
+    // This test/debug binding is for glyphs, not arbitrary image canvases.
+    if (width <= 0 || height <= 0 || width > 1024 || height > 1024) {
+        PyErr_SetString(PyExc_ValueError, "Box glyph dimensions must be between 1 and 1024 pixels");
+        return NULL;
+    }
+    if (!isfinite(scale) || !isfinite(dpi_x) || !isfinite(dpi_y) || scale <= 0 || dpi_x <= 0 || dpi_y <= 0) {
+        PyErr_SetString(PyExc_ValueError, "Box glyph scale and DPI must be finite and positive");
+        return NULL;
+    }
+    // A stroke wider than the largest supported glyph is not useful here.
+    for (size_t i = 0; i < arraysz(OPT(box_drawing_scale)); i++) {
+        const double pts = OPT(box_drawing_scale)[i];
+        const double tx = scale * pts * dpi_x / 72.0, ty = scale * pts * dpi_y / 72.0;
+        if (!isfinite(pts) || pts < 0 || !isfinite(tx) || !isfinite(ty) || tx > 1024 || ty > 1024) {
+            PyErr_SetString(PyExc_ValueError, "Box glyph stroke width must be finite and at most 1024 pixels");
+            return NULL;
+        }
+    }
+    const unsigned w = (unsigned)width, h = (unsigned)height;
+    size_t pixels, capacity;
+    if (!box_char_canvas_size(w, h, &pixels, &capacity) || capacity > (size_t)PY_SSIZE_T_MAX) {
+        PyErr_SetString(PyExc_OverflowError, "Box glyph canvas is too large");
+        return NULL;
+    }
+    RAII_PyObject(ans, PyBytes_FromStringAndSize(NULL, (Py_ssize_t)capacity));
     if (!ans) return NULL;
-    render_box_char(ch, (uint8_t *)PyBytes_AS_STRING(ans), width, height, dpi_x, dpi_y, scale);
-    if (_PyBytes_Resize(&ans, width * height) != 0) return NULL;
+    render_box_char((char_type)ch, (uint8_t *)PyBytes_AS_STRING(ans), w, h, dpi_x, dpi_y, scale);
+    if (_PyBytes_Resize(&ans, (Py_ssize_t)pixels) != 0) return NULL;
     return Py_NewRef(ans);
 }
 

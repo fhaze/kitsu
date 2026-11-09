@@ -26,22 +26,6 @@ const FFMPEG_METADATA_KEY = "ffmpeg-metadata.json"
 
 type ffmpeg_renderer int
 
-var (
-	video_width            = 480
-	video_fps              = 10
-	video_duration         = 5.0
-	video_encoding_quality = 75
-)
-
-func ffmpeg_thumbnail_cmd(path, outpath string) *exec.Cmd {
-	return utils.Command(
-		"ffmpeg", "-loglevel", "fatal", "-y", "-an", "-sn", "-dn", "-i", path, "-t", fmt.Sprintf("%f", video_duration),
-		"-vf", fmt.Sprintf("fps=%d,scale=%d:-1:flags=lanczos", video_fps, video_width),
-		"-c:v", "libwebp", "-lossless", "0", "-compression_level", "0", "-q:v",
-		fmt.Sprintf("%d", video_encoding_quality), "-loop", "0", "-f", "webp", outpath,
-	)
-}
-
 func ffmpeg_thumbnail(path, tempath string, wg *sync.WaitGroup) (err error) {
 	defer wg.Done()
 	cmd := ffmpeg_thumbnail_cmd(path, tempath)

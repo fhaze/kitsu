@@ -3271,6 +3271,8 @@ The password that can be supplied to the :doc:`file transfer kitten
 be used when initiating transfers from trusted computers, over trusted networks
 or encrypted transports, as it allows any programs running on the remote machine
 to read/write to the local filesystem, without permission.
+An empty password never bypasses confirmation. Only encrypted authentication
+from compatible clients is supported; legacy SHA256 bypass tokens are rejected.
 """,
 )
 

@@ -46,6 +46,93 @@ def testing_font_data(name):
 
 
 class Selection(BaseTest):
+    def test_box_glyph_dimension_validation(self):
+        import subprocess
+
+        code = """
+from kitty.fast_data_types import render_box_char, set_options
+from kitty.options.types import Options
+set_options(Options())
+for value in [0, -1, -2**32, -2**64 + 8, 1025, 65536, 2**31, 2**32,
+              2**32 + 8, 2**63 - 1, 2**64, 2**64 + 8, 2**1000, 1.5, float('nan'), float('inf')]:
+    for width, height in [(value, 256), (256, value)]:
+        try:
+            render_box_char(ord('╭'), width, height)
+        except (ValueError, OverflowError, TypeError):
+            pass
+        else:
+            raise AssertionError((width, height))
+for ch in [-1, -2**32 + ord('█'), 0x110000, 2**32 + ord('█'), 2**64 + ord('█'), 2**1000, 1.5]:
+    try:
+        render_box_char(ch, 8, 16)
+    except (ValueError, OverflowError, TypeError):
+        pass
+    else:
+        raise AssertionError(ch)
+"""
+        result = subprocess.run(self.cmd_to_run_python_code(code), capture_output=True, timeout=30)
+        self.ae(result.returncode, 0, result.stderr.decode('utf-8', 'replace'))
+
+    def test_box_glyph_scale_validation(self):
+        import subprocess
+
+        code = """
+from kitty.fast_data_types import render_box_char, set_options
+from kitty.options.types import Options
+set_options(Options())
+for value in [0, -1, float('nan'), float('inf'), -float('inf'), 1e308, 2**32, 2**1000]:
+    for which in range(3):
+        args = [1., 96., 96.]
+        args[which] = value
+        try:
+            render_box_char(ord('┄'), 8, 16, *args)
+        except (ValueError, OverflowError):
+            pass
+        else:
+            raise AssertionError(args)
+for args in [(1e200, 1e200, 96.), (1e200, 96., 1e200), (385., 96., 96.)]:
+    try:
+        render_box_char(ord('╎'), 8, 16, *args)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(args)
+for value in [-1., float('nan'), float('inf'), 1e308]:
+    opts = Options()
+    opts.box_drawing_scale = (0.001, value, 1.5, 2.)
+    set_options(opts)
+    try:
+        render_box_char(ord('─'), 8, 16)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(value)
+"""
+        result = subprocess.run(self.cmd_to_run_python_code(code), capture_output=True, timeout=30)
+        self.ae(result.returncode, 0, result.stderr.decode('utf-8', 'replace'))
+
+    def test_box_glyph_rendering(self):
+        import subprocess
+
+        code = """
+from kitty.fast_data_types import render_box_char, set_options
+from kitty.options.types import Options
+set_options(Options())
+for width, height in [(1, 1), (8, 16), (1024, 1), (1, 1024), (1024, 1024)]:
+    assert render_box_char(ord('█'), width, height) == b'\\xff' * (width * height)
+assert render_box_char(ord('─'), 4, 8) == b'\\0' * 12 + b'\\xff' * 8 + b'\\0' * 12
+assert render_box_char(ord(''), 4, 4) == bytes.fromhex('af1f0000ffff9f1fffffbf4fbf3f0000')
+assert render_box_char(ord('╲'), 4, 4) == bytes.fromhex('ff9f00005fff9f00005fff9f00005fff')
+assert render_box_char(ord('╲'), 4, 4, 1.5, 144., 144.) == bytes.fromhex('ffff9f00ffffff9f9fffffff009fffff')
+assert render_box_char(ord('█'), 8, 16, 384.) == b'\\xff' * 128
+# Thick dashed strokes must stay inside the canvas, even at the accepted limit.
+for ch in '┄╎╍╏':
+    for width, height in [(1, 1), (1, 16), (8, 1), (8, 16)]:
+        assert len(render_box_char(ord(ch), width, height, 384.)) == width * height
+"""
+        result = subprocess.run(self.cmd_to_run_python_code(code), capture_output=True, timeout=30)
+        self.ae(result.returncode, 0, result.stderr.decode('utf-8', 'replace'))
+
     def test_font_selection(self):
         self.set_options({'font_features': {'LiberationMono': (ParsedFontFeature('-dlig'),)}})
         opts = Options()

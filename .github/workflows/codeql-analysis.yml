@@ -20,6 +20,11 @@ jobs:
           fail-fast: false
           matrix:
             include:
+               # Keep historical matrix identities so PR scans match master.
+               - language: c
+                 os: ubuntu-latest
+               - language: c
+                 os: macos-latest
                - language: python
                  os: ubuntu-latest
                - language: go
@@ -27,7 +32,8 @@ jobs:
                - language: actions
                  os: ubuntu-latest
 
-        runs-on: ${{ matrix.os }}
+        # ci.py's macOS dependency bundle contains Intel binaries.
+        runs-on: ${{ matrix.os == 'macos-latest' && 'macos-15-intel' || matrix.os }}
         env:
             KITTY_BUNDLE: 1
             KITTY_CODEQL: 1
@@ -43,7 +49,7 @@ jobs:
               persist-credentials: false
 
         - name: Install Go
-          if: matrix.language == 'go'
+          if: matrix.language == 'go' || matrix.language == 'c'
           uses: actions/setup-go@v7.0.0
           with:
               go-version-file: go.mod
@@ -53,10 +59,11 @@ jobs:
           uses: github/codeql-action/init@v4.39.1
           with:
               languages: ${{ matrix.language }}
+              build-mode: ${{ matrix.language == 'c' && 'manual' || '' }}
               trap-caching: false
 
         - name: Build kitty
-          if: matrix.language == 'go'
+          if: matrix.language == 'go' || matrix.language == 'c'
           run: python3 .github/workflows/ci.py build
 
         - name: Perform CodeQL Analysis

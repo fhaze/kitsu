@@ -3,6 +3,7 @@
 
 import os
 import random
+import struct
 import sys
 import tempfile
 import time
@@ -2235,6 +2236,116 @@ class TestGraphics(BaseTest):
         # with q=2 failure is not reported either
         self.assertIsNone(li(payload='8' * 12, m=1, q=2))
         self.assertIsNone(parse_full_response(send_command(s, 'a=f,m=0')))
+
+    def test_raw_image_dimension_limits(self):
+        s = self.create_screen()
+        li = make_send_command(s)
+        with tempfile.TemporaryDirectory() as tdir:
+            path = os.path.join(tdir, 'pixels')
+            with open(path, 'wb') as f:
+                f.write(b'abcd')
+            for fmt in (24, 32):
+                pixel = b'abcd'[: fmt // 8]
+                for action in ('t', 'f'):
+                    with self.subTest(fmt=fmt, action=action):
+                        s.reset()
+                        self.ae(li(a='t', s=1, v=1, f=fmt, payload=pixel).code, 'OK')
+                        for width, height in ((10001, 1), (1, 10001), (10001, 10001), (0xFFFFFFFF, 1), (1, 0xFFFFFFFF)):
+                            res = li(a=action, s=width, v=height, f=fmt, payload=pixel)
+                            self.ae((res.code, res.msg), ('EINVAL', 'Image too large, width or height greater than 10000'))
+                        for width, height in ((0, 1), (1, 0)):
+                            res = li(a=action, s=width, v=height, f=fmt, payload=pixel)
+                            self.ae((res.code, res.msg), ('EINVAL', 'Zero width/height not allowed'))
+                        for edge in (9999, 10000):
+                            # A tiny file exercises square limits without reserving a 400 MB direct buffer.
+                            res = li(a=action, t='f', s=edge, v=edge, f=fmt, payload=path)
+                            self.ae((res.code, res.msg), ('EBADF', 'Failed to read image file'))
+                            for width, height in ((edge, 1), (1, edge)):
+                                res = li(a=action, s=width, v=height, f=fmt, payload=pixel)
+                                self.ae((res.code, res.msg), ('ENODATA', f'Insufficient image data: {len(pixel)} < {edge * len(pixel)}'))
+                for width, height in ((10000, 1), (1, 10000)):
+                    s.reset()
+                    data = pixel * 10000
+                    # Use a file so the protocol's per-command payload limit is not involved.
+                    with open(path, 'wb') as f:
+                        f.write(data)
+                    for action, frame in (('t', 0), ('f', 0), ('f', 1), ('f', 2)):
+                        self.ae(li(a=action, t='f', s=width, v=height, f=fmt, r=frame, payload=path, X=1).code, 'OK')
+                    img = s.grman.image_for_client_id(1)
+                    self.ae(img['data'], data)
+                    self.ae(img['extra_frames'][0]['data'], data)
+                with open(path, 'wb') as f:
+                    f.write(b'abcd')
+
+    def test_png_image_dimension_limits(self):
+        def png(width, height, pixels=b''):
+            def chunk(kind, data):
+                return struct.pack('!I', len(data)) + kind + data + struct.pack('!I', zlib.crc32(kind + data))
+
+            header = struct.pack('!2I5B', width, height, 8, 6, 0, 0, 0)
+            return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', header) + chunk(b'IDAT', zlib.compress(pixels)) + chunk(b'IEND', b'')
+
+        s = self.create_screen()
+        li = make_send_command(s)
+        for action in ('t', 'f'):
+            for width, height in ((10001, 1), (1, 10001)):
+                s.reset()
+                self.ae(li(a='t', s=1, v=1, f=32, payload=b'abcd').code, 'OK')
+                res = li(a=action, s=width, v=height, f=100, payload=png_data)
+                self.ae((res.code, res.msg), ('EINVAL', 'Image too large, width or height greater than 10000'))
+            for width, height in ((10001, 1), (1, 10001), (10001, 10001)):
+                with self.subTest(action=action, width=width, height=height):
+                    s.reset()
+                    self.ae(li(a='t', s=1, v=1, f=32, payload=b'abcd').code, 'OK')
+                    res = li(a=action, s=0, v=0, f=100, payload=png(width, height))
+                    self.ae((res.code, res.msg), ('ENOMEM', 'PNG image is too large'))
+                    self.ae(s.grman.disk_cache.total_size, 4 if action == 'f' else 0)
+        for edge in (9999, 10000):
+            for width, height in ((edge, 1), (1, edge)):
+                with self.subTest(width=width, height=height):
+                    s.reset()
+                    # Only a narrow strip is decoded, never a limit-sized square.
+                    data = png(width, height, (b'\0' + b'\0\xff\xff\xff' * width) * height)
+                    expected = b'\0\xff\xff\xff' * edge
+                    self.ae(li(a='t', s=0, v=0, f=100, payload=data).code, 'OK')
+                    for frame in (0, 1, 2):
+                        # PNG dimensions, not the optional raw size hints, determine the required buffer size.
+                        self.ae(li(s=1, v=1, f=100, r=frame, payload=data).code, 'OK')
+                    img = s.grman.image_for_client_id(1)
+                    self.ae((img['width'], img['height'], img['data']), (width, height, expected))
+                    self.ae(img['extra_frames'][0]['data'], expected)
+
+    def test_animation_frame_chunked_dimension_limits(self):
+        s = self.create_screen()
+        li = make_send_command(s)
+        for fmt, payload, expected in ((24, b'abc', b'abc'), (32, b'abcd', b'abcd'), (100, png_data, b'\x00\xff\xff\x7f')):
+            for continuation in ('', 'a=f,', 'a=f,i=1,'):
+                with self.subTest(fmt=fmt, continuation=continuation):
+                    s.reset()
+                    self.ae(li(a='t', s=1, v=1, f=32, payload=b'abcd').code, 'OK')
+                    for frame in (0, 1, 2):
+                        self.assertIsNone(li(s=1, v=1, f=fmt, r=frame, m=1, payload=payload[:1], X=1))
+                        # Continuation metadata must not replace the already validated start command.
+                        res = parse_full_response(send_command(s, continuation + 'm=0,f=32,s=10001,v=10001', payload[1:]))
+                        self.ae((res.code, res.image_id, res.frame_number), ('OK', 1, frame or 2))
+                    img = s.grman.image_for_client_id(1)
+                    self.ae(img['extra_frames'][0]['data'], expected)
+                    if fmt != 100:
+                        self.assertIsNone(li(s=1, v=1, f=fmt, m=1, payload=payload[:1]))
+                        res = parse_full_response(send_command(s, continuation + 'm=0', payload[1:-1]))
+                        self.ae((res.code, res.msg), ('ENODATA', f'Insufficient image data: {len(payload) - 1} < {len(payload)}'))
+                        for width, height in ((9999, 1), (10000, 1), (1, 10000)):
+                            self.assertIsNone(li(s=width, v=height, f=fmt, m=1, payload=payload[:1]))
+                            res = parse_full_response(send_command(s, continuation + 'm=0,s=1,v=1,f=100', payload[1:]))
+                            self.ae((res.code, res.msg), ('ENODATA', f'Insufficient image data: {len(payload)} < {width * height * len(payload)}'))
+                    else:
+                        oversized = bytearray(png_data)
+                        oversized[16:24] = struct.pack('!2I', 10001, 1)
+                        oversized[29:33] = struct.pack('!I', zlib.crc32(oversized[12:29]))
+                        self.assertIsNone(li(s=0, v=0, f=100, m=1, payload=oversized[:20]))
+                        res = parse_full_response(send_command(s, continuation + 'm=0', oversized[20:]))
+                        self.ae((res.code, res.msg), ('ENOMEM', 'PNG image is too large'))
+                    self.ae(s.grman.image_for_client_id(1)['extra_frames'], img['extra_frames'])
 
     def test_graphics_quota_enforcement(self):
         s = self.create_screen()

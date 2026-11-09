@@ -139,7 +139,7 @@ def find_testable_go_packages() -> tuple[set[str], dict[str, list[str]]]:
             continue
         for f in filenames:
             if f.endswith('_test.go'):
-                q = os.path.relpath(dirpath, base)
+                q = os.path.relpath(dirpath, base).replace(os.sep, '/')
                 ans.add(q)
                 with open(os.path.join(dirpath, f), encoding='utf-8') as s:
                     raw = s.read()

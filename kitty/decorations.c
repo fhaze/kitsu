@@ -258,10 +258,28 @@ typedef struct Canvas {
     } dpi;
     double scale; // used to scale line thickness with font size changes and for multicell rendering
     Range *holes;
-    uint holes_count, holes_capacity;
+    size_t holes_count, holes_capacity;
     Limit *y_limits;
-    uint y_limits_count, y_limits_capacity;
+    size_t y_limits_count, y_limits_capacity;
 } Canvas;
+
+static size_t
+scratch_size(size_t count, size_t item_size) {
+    if (count > SIZE_MAX / item_size) fatal("Box glyph scratch canvas is too large");
+    return count * item_size;
+}
+
+static void *
+grow_canvas_array(void *array, size_t *capacity, size_t count, size_t item_size, size_t initial) {
+    if (count == SIZE_MAX) fatal("Box glyph scratch canvas is too large");
+    if (count + 1 <= *capacity) return array;
+    if (*capacity > SIZE_MAX / 2) fatal("Box glyph scratch canvas is too large");
+    const size_t new_capacity = MAX(initial, MAX(2 * *capacity, count + 1));
+    void *ans = realloc(array, scratch_size(new_capacity, item_size));
+    if (!ans) fatal("Out of memory");
+    *capacity = new_capacity;
+    return ans;
+}
 
 static void
 fill_canvas(Canvas *self, int byte) {
@@ -270,23 +288,23 @@ fill_canvas(Canvas *self, int byte) {
 
 static void
 append_hole(Canvas *self, Range hole) {
-    ensure_space_for(self, holes, self->holes[0], self->holes_count + 1, holes_capacity, self->width, false);
+    self->holes = grow_canvas_array(self->holes, &self->holes_capacity, self->holes_count, sizeof(self->holes[0]), self->width);
     self->holes[self->holes_count++] = hole;
 }
 
 static void
 append_limit(Canvas *self, double upper, double lower) {
-    ensure_space_for(self, y_limits, self->y_limits[0], self->y_limits_count + 1, y_limits_capacity, self->width, false);
+    self->y_limits = grow_canvas_array(self->y_limits, &self->y_limits_capacity, self->y_limits_count, sizeof(self->y_limits[0]), self->width);
     self->y_limits[self->y_limits_count].upper = upper;
     self->y_limits[self->y_limits_count++].lower = lower;
 }
 
 static double
 thickness_as_float(Canvas *self, uint level, bool horizontal) {
-    level = min(level, arraysz(OPT(box_drawing_scale)));
+    level = min(level, arraysz(OPT(box_drawing_scale)) - 1);
     double pts = OPT(box_drawing_scale)[level];
     double dpi = horizontal ? self->dpi.x : self->dpi.y;
-    return self->supersample_factor * self->scale * pts * dpi / 72.0;
+    return self->supersample_factor * (self->scale * pts * dpi / 72.0);
 }
 
 static uint
@@ -312,23 +330,23 @@ get_holes(Canvas *self, uint sz, uint hole_sz, uint num) {
 
 static void
 add_hholes(Canvas *self, uint level, uint num) {
-    uint line_sz = thickness(self, level, true);
+    uint line_sz = min(self->height, thickness(self, level, true));
     uint hole_sz = self->width / hole_factor;
     uint start = minus(self->height / 2, line_sz / 2);
     get_holes(self, self->width, hole_sz, num);
-    for (uint y = 0; y < start + line_sz; y++) {
+    for (uint y = 0; y < min(self->height, start + line_sz); y++) {
         uint offset = y * self->width;
-        for (uint i = 0; i < self->holes_count; i++) memset(self->mask + offset + self->holes[i].start, 0, self->holes[i].end - self->holes[i].start);
+        for (size_t i = 0; i < self->holes_count; i++) memset(self->mask + offset + self->holes[i].start, 0, self->holes[i].end - self->holes[i].start);
     }
 }
 
 static void
 add_vholes(Canvas *self, uint level, uint num) {
-    uint line_sz = thickness(self, level, false);
+    uint line_sz = min(self->width, thickness(self, level, false));
     uint hole_sz = self->height / hole_factor;
     uint start = minus(self->width / 2, line_sz / 2);
     get_holes(self, self->height, hole_sz, num);
-    for (uint i = 0; i < self->holes_count; i++) {
+    for (size_t i = 0; i < self->holes_count; i++) {
         for (uint y = self->holes[i].start; y < self->holes[i].end; y++) {
             uint offset = y * self->width;
             memset(self->mask + offset + start, 0, line_sz);
@@ -339,7 +357,7 @@ add_vholes(Canvas *self, uint level, uint num) {
 static Range
 hline_limits(Canvas *self, uint y, uint level) {
     uint sz = thickness(self, level, false);
-    Range r = {.start = minus(y, sz / 2)};
+    Range r = {.start = min(minus(y, sz / 2), self->height)};
     r.end = min(r.start + sz, self->height);
     return r;
 }
@@ -348,6 +366,7 @@ static void
 draw_hline(Canvas *self, uint x1, uint x2, uint y, uint level) {
     // Draw a horizontal line between [x1, x2) centered at y with the thickness given by level and self->supersample_factor
     Range r = hline_limits(self, y, level);
+    x1 = min(x1, self->width);
     for (uint y = r.start; y < r.end; y++) {
         uint8_t *py = self->mask + y * self->width;
         memset(py + x1, 255, minus(min(x2, self->width), x1));
@@ -357,7 +376,7 @@ draw_hline(Canvas *self, uint x1, uint x2, uint y, uint level) {
 static Range
 vline_limits(Canvas *self, uint x, uint level) {
     uint sz = thickness(self, level, true);
-    Range r = {.start = minus(x, sz / 2)};
+    Range r = {.start = min(minus(x, sz / 2), self->width)};
     r.end = min(r.start + sz, self->width);
     return r;
 }
@@ -537,17 +556,17 @@ line_y(StraightLine l, int x) {
     return l.m * x + l.c;
 }
 
-#define calc_limits(self, lower_y, upper_y)                                            \
-    {                                                                                  \
-        if (!self->y_limits) {                                                         \
-            self->y_limits_count = self->width;                                        \
-            self->y_limits = malloc(sizeof(self->y_limits[0]) * self->y_limits_count); \
-            if (!self->y_limits) fatal("Out of memory");                               \
-        }                                                                              \
-        for (uint x = 0; x < self->width; x++) {                                       \
-            self->y_limits[x].lower = lower_y;                                         \
-            self->y_limits[x].upper = upper_y;                                         \
-        }                                                                              \
+#define calc_limits(self, lower_y, upper_y)                                                         \
+    {                                                                                               \
+        if (!self->y_limits) {                                                                      \
+            self->y_limits_count = self->width;                                                     \
+            self->y_limits = malloc(scratch_size(self->y_limits_count, sizeof(self->y_limits[0]))); \
+            if (!self->y_limits) fatal("Out of memory");                                            \
+        }                                                                                           \
+        for (uint x = 0; x < self->width; x++) {                                                    \
+            self->y_limits[x].lower = lower_y;                                                      \
+            self->y_limits[x].upper = upper_y;                                                      \
+        }                                                                                           \
     }
 
 static void
@@ -596,9 +615,10 @@ thick_line(Canvas *self, uint thickness_in_pixels, Point p1, Point p2) {
 static void
 frame(Canvas *self, uint level, Edge edges) {
     uint h = thickness(self, level, true), v = thickness(self, level, false);
-#define line(x1, x2, y1, y2)                                                                                                               \
-    {                                                                                                                                      \
-        for (uint y = y1; y < min(y2, self->height); y++) memset(self->mask + y * self->width + x1, 255, minus(min(x2, self->width), x1)); \
+#define line(x1, x2, y1, y2)                                                                                                     \
+    {                                                                                                                            \
+        for (uint y = y1; y < min(y2, self->height); y++)                                                                        \
+            memset(self->mask + y * self->width + min(x1, self->width), 255, minus(min(x2, self->width), min(x1, self->width))); \
     }
 #define hline(y1, y2) line(0, self->width, y1, y2)
 #define vline(x1, x2) line(x1, x2, 0, self->height)
@@ -633,6 +653,7 @@ progress_bar(Canvas *self, Segment which, bool filled) {
         case MIDDLE: x2 = self->width; break;
         case RIGHT: x2 = minus(self->width, gap_factor * v); break;
     }
+    x1 = min(x1, self->width);
     for (uint y = y1; y < y2; y++) memset(self->mask + y * self->width + x1, 255, minus(min(x2, self->width), x1));
 }
 
@@ -778,21 +799,21 @@ get_bezier_limits(Canvas *self, const CubicBezier *cb) {
     }
 }
 
-#define mirror_horizontally(expr)                                     \
-    {                                                                 \
-        RAII_ALLOC(uint8_t, mbuf, calloc(self->width, self->height)); \
-        if (!mbuf) fatal("Out of memory");                            \
-        uint8_t *buf = self->mask;                                    \
-        self->mask = mbuf;                                            \
-        expr;                                                         \
-        self->mask = buf;                                             \
-        for (uint y = 0; y < self->height; y++) {                     \
-            uint offset = y * self->width;                            \
-            for (uint src_x = 0; src_x < self->width; src_x++) {      \
-                uint dest_x = self->width - 1 - src_x;                \
-                buf[offset + dest_x] = mbuf[offset + src_x];          \
-            }                                                         \
-        }                                                             \
+#define mirror_horizontally(expr)                                                      \
+    {                                                                                  \
+        RAII_ALLOC(uint8_t, mbuf, calloc(scratch_size(self->width, self->height), 1)); \
+        if (!mbuf) fatal("Out of memory");                                             \
+        uint8_t *buf = self->mask;                                                     \
+        self->mask = mbuf;                                                             \
+        expr;                                                                          \
+        self->mask = buf;                                                              \
+        for (uint y = 0; y < self->height; y++) {                                      \
+            uint offset = y * self->width;                                             \
+            for (uint src_x = 0; src_x < self->width; src_x++) {                       \
+                uint dest_x = self->width - 1 - src_x;                                 \
+                buf[offset + dest_x] = mbuf[offset + src_x];                           \
+            }                                                                          \
+        }                                                                              \
     }
 
 static void
@@ -840,10 +861,11 @@ draw_parametrized_curve_with_derivative_and_antialiasing(
     const ClipRect *clip_to) {
     line_width = fmax(1., line_width);
     double half_thickness = line_width / 2.0;
-    uint i = 0, larger_dim = MAX(self->height, self->width);
+    size_t i = 0, larger_dim = MAX(self->height, self->width);
     double t = 0;
     double step = 1.0 / larger_dim;
-    uint cap = 2 * larger_dim;
+    if (larger_dim > SIZE_MAX / 2 / sizeof(FloatPoint)) fatal("Box glyph scratch canvas is too large");
+    size_t cap = 2 * larger_dim;
     const double min_step = step / 1000., max_step = step;
     RAII_ALLOC(FloatPoint, samples, malloc(sizeof(FloatPoint) * cap));
     if (!samples) fatal("Out of memory");
@@ -859,12 +881,13 @@ draw_parametrized_curve_with_derivative_and_antialiasing(
         t = fmin(t + step, 1.0);
         i++;
         if (i >= cap) {
+            if (cap > SIZE_MAX / 2 / sizeof(samples[0])) fatal("Box glyph scratch canvas is too large");
             cap *= 2;
             samples = realloc(samples, sizeof(samples[0]) * cap);
             if (!samples) fatal("Out of memory");
         }
     }
-    const uint num_samples = i;
+    const size_t num_samples = i;
     for (uint py = cr.top; py < cr.y_end; py++) {
         uint ypos = self->width * py;
         for (uint px = cr.left; px < cr.x_end; px++) {
@@ -875,7 +898,7 @@ draw_parametrized_curve_with_derivative_and_antialiasing(
             double min_dist_sq = -1.0;
 
             // Find the closest point on the curve to the pixel center by sampling the curve.
-            for (uint i = 0; i < num_samples; ++i) {
+            for (size_t i = 0; i < num_samples; ++i) {
                 double dx = samples[i].x - pixel_center_x;
                 double dy = samples[i].y - pixel_center_y;
                 double dist_sq = dx * dx + dy * dy;
@@ -1684,7 +1707,7 @@ get_fading_lines(uint total_length, uint num, Edge fade) {
         dir = -1;
         d1 = total_length;
     }
-    Point *ans = malloc(num * sizeof(Point));
+    Point *ans = malloc(scratch_size(num, sizeof(Point)));
     if (!ans) fatal("Out of memory");
     for (uint i = 0; i < num; i++) {
         uint sz = step * (num - i) / (num + 1);
@@ -2359,10 +2382,24 @@ twelfth_circle(Canvas *self, uint level, uint pos) {
     draw_parametrized_curve_with_derivative_and_antialiasing(self, &e, line_width, ellipse_x, ellipse_y, ellipse_prime_x, ellipse_prime_y, 0, 0, NULL);
 }
 
+bool
+box_char_canvas_size(unsigned width, unsigned height, size_t *pixels, size_t *capacity) {
+    const size_t factor = SUPERSAMPLE_FACTOR, overhead = 1 + factor * factor;
+    // Geometry uses signed points as well as unsigned pixel offsets.
+    if (!width || !height || width > INT_MAX / factor / 4 || height > INT_MAX / factor / 4 || (size_t)width > SIZE_MAX / height) return false;
+    const size_t area = (size_t)width * height;
+    if (area > UINT32_MAX / factor / factor || area > SIZE_MAX / overhead) return false;
+    *pixels = area;
+    *capacity = area * overhead;
+    return true;
+}
+
 void
 render_box_char(char_type ch, uint8_t *buf, unsigned width, unsigned height, double dpi_x, double dpi_y, double scale) {
+    size_t pixels, capacity;
+    if (!box_char_canvas_size(width, height, &pixels, &capacity)) fatal("Box glyph canvas is too large");
     Canvas canvas = {.mask = buf, .width = width, .height = height, .dpi = {.x = dpi_x, .y = dpi_y}, .supersample_factor = 1u, .scale = scale}, ss = canvas;
-    ss.mask = buf + width * height;
+    ss.mask = buf + pixels;
     ss.supersample_factor = SUPERSAMPLE_FACTOR;
     ss.width *= SUPERSAMPLE_FACTOR;
     ss.height *= SUPERSAMPLE_FACTOR;

@@ -15,15 +15,37 @@ concurrency:
 jobs:
     native-allocations:
         name: Native allocation regressions
-        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - os: ubuntu-latest
+                      cflags: -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -fno-pie -no-pie
+                    - os: macos-15-intel
+                      cflags: -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+                    # UCRT64 GCC has no ASan/UBSan runtime; exercise real LLP64 instead.
+                    - os: windows-latest
+                      cflags: ''
+        runs-on: ${{ matrix.os }}
+        env:
+            NATIVE_TEST_CFLAGS: ${{ matrix.cflags }}
         steps:
             - uses: actions/checkout@v7.0.1
               with:
                   persist-credentials: false
+            - name: Set up MSYS2 UCRT64
+              if: runner.os == 'Windows'
+              uses: msys2/setup-msys2@v2.32.0
+              with:
+                  msystem: UCRT64
+                  install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-python
             - name: Test allocation failure paths with sanitizers
-              env:
-                  NATIVE_TEST_CFLAGS: -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -fno-pie -no-pie
+              if: runner.os != 'Windows'
               run: python3 -m unittest discover -s .github/workflows -p 'test_native_allocations.py' -v
+            - name: Test allocation failure paths on native Win64
+              if: runner.os == 'Windows'
+              shell: msys2 {0}
+              run: python -m unittest discover -s .github/workflows -p 'test_native_allocations.py' -v
 
     windows:
         name: Windows

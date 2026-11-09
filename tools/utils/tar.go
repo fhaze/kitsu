@@ -11,7 +11,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 )
 
 var _ = fmt.Print
@@ -23,11 +25,53 @@ type TarExtractOptions struct {
 
 // Resolve symlinks in all but the last component of path
 func eval_symlinks_in_parent(path string) (string, error) {
-	parent, err := EvalSymlinksThatExist(filepath.Dir(path))
+	parent, err := eval_tar_path(filepath.Dir(path))
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(parent, filepath.Base(path)), nil
+}
+
+func eval_tar_path(path string) (string, error) {
+	links_walked := 0
+	var resolve func(string) (string, error)
+	resolve = func(path string) (string, error) {
+		parent := filepath.Dir(path)
+		if parent == path {
+			return filepath.EvalSymlinks(path)
+		}
+		parent, err := resolve(parent)
+		if err != nil {
+			return "", err
+		}
+		path = filepath.Join(parent, filepath.Base(path))
+		st, err := os.Lstat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return path, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		// Windows junctions are readable links but do not have ModeSymlink.
+		target, err := os.Readlink(path)
+		if err != nil {
+			if st.Mode()&fs.ModeSymlink == 0 && (errors.Is(err, syscall.EINVAL) ||
+				// ERROR_NOT_A_REPARSE_POINT is returned for ordinary Windows paths.
+				(runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(4390)))) {
+				return path, nil
+			}
+			return "", err
+		}
+		links_walked++
+		if links_walked > 255 {
+			return "", fmt.Errorf("too many links while resolving %s", path)
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(parent, target)
+		}
+		return resolve(filepath.Clean(target))
+	}
+	return resolve(filepath.Clean(path))
 }
 
 func is_symlink_path(path string) (bool, error) {
@@ -56,7 +100,7 @@ func remove_existing_non_dir(path string) error {
 // created, for example, because the filesystem does not support hardlinks.
 // If src is a symlink, dest becomes a copy of the symlink, since os.Link()
 // follows symlinks on some platforms.
-func link_or_copy(src, dest string) (is_symlink bool, err error) {
+func link_or_copy(src, dest string, strip_special_bits bool) (is_symlink bool, err error) {
 	st, err := os.Lstat(src)
 	if err != nil {
 		return false, err
@@ -74,9 +118,12 @@ func link_or_copy(src, dest string) (is_symlink bool, err error) {
 	if !st.Mode().IsRegular() {
 		return false, fmt.Errorf("cannot hardlink %s to %s as it is not a regular file", dest, src)
 	}
-	link_err := os.Link(src, dest)
-	if link_err == nil {
-		return false, nil
+	var link_err error
+	if !strip_special_bits || st.Mode()&(os.ModeSetuid|os.ModeSetgid) == 0 {
+		link_err = os.Link(src, dest)
+		if link_err == nil {
+			return false, nil
+		}
 	}
 	s, err := os.Open(src)
 	if err != nil {
@@ -93,6 +140,7 @@ func link_or_copy(src, dest string) (is_symlink bool, err error) {
 	return false, nil
 }
 
+// The destination tree must not be concurrently modified by another process.
 func ExtractAllFromTar(tr *tar.Reader, dest_path string, optss ...TarExtractOptions) (count int, err error) {
 	opts := TarExtractOptions{}
 	if len(optss) > 0 {
@@ -104,6 +152,9 @@ func ExtractAllFromTar(tr *tar.Reader, dest_path string, optss ...TarExtractOpti
 		}
 	}
 	if dest_path, err = filepath.EvalSymlinks(dest_path); err != nil {
+		return
+	}
+	if dest_path, err = eval_tar_path(dest_path); err != nil {
 		return
 	}
 	dest_path = filepath.Clean(dest_path)
@@ -146,7 +197,7 @@ func ExtractAllFromTar(tr *tar.Reader, dest_path string, optss ...TarExtractOpti
 			dest = filepath.Join(dest_path, dest)
 		}
 		if hdr.Typeflag == tar.TypeDir {
-			dest, err = EvalSymlinksThatExist(dest)
+			dest, err = eval_tar_path(dest)
 		} else {
 			// Only resolve symlinks in the parent directory so that an
 			// existing entry at this path is replaced rather than written
@@ -209,27 +260,21 @@ func ExtractAllFromTar(tr *tar.Reader, dest_path string, optss ...TarExtractOpti
 			if !strings.HasPrefix(link_target, needed_prefix) {
 				return count, fmt.Errorf("the hardlink %s points to %s which is outside the destination directory", hdr.Name, hdr.Linkname)
 			}
-			var is_symlink bool
 			// GNU tar creates hardlinks to self when the same path is
 			// archived more than once
 			if link_target != dest {
 				if err = remove_existing_non_dir(dest); err != nil {
 					return
 				}
-				if is_symlink, err = link_or_copy(link_target, dest); err != nil {
+				if _, err = link_or_copy(link_target, dest, opts.DontPreserveSuidAndSgid); err != nil {
 					return
 				}
-			} else if is_symlink, err = is_symlink_path(dest); err != nil {
+			} else if _, err = is_symlink_path(dest); err != nil {
 				return
 			}
-			chmod := func(m fs.FileMode) error { return os.Chmod(dest, m) }
-			if is_symlink {
-				// os.Chmod() follows symlinks
-				chmod = nil
-			}
-			if err = set_metadata(chmod, hdr.Mode); err != nil {
-				return
-			}
+			// Hardlinks inherit source metadata. Changing it can affect other
+			// links to the same inode outside the destination directory.
+			count++
 		case tar.TypeSymlink:
 			if err = os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 				return

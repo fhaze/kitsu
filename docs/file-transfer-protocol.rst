@@ -509,38 +509,42 @@ Bypassing explicit user authorization
 
 In order to bypass the requirement of interactive user authentication,
 this protocol has the ability to use a pre-shared secret (password).
-When initiating a transfer session the client sends a hash of the password and
-the session id::
+The terminal must have a non-empty :opt:`file_transfer_confirmation_bypass`
+configured. An empty password never authorizes a bypass.
 
-    → action=send id=someid bypass=sha256:hash_value
+The current transfer kitten uses encrypted ``kitty-1`` authentication, for both
+sending and receiving files. It requires :envvar:`KITTY_PUBLIC_KEY` to encode the
+password and does not fall back to SHA256 if the key is missing or invalid.
+The ``kitty-1:`` prefix is followed by a JSON object with base85-encoded
+``pubkey``, ``iv``, ``tag`` and ``encrypted`` fields. The client generates an
+ephemeral X25519 key pair, hashes the ECDH shared secret with SHA256, and uses
+that key for AES-256-GCM encryption. The plaintext is
+``timestamp_in_nanoseconds:session_id;password``. The terminal authenticates and
+decrypts it, rejects timestamps more than five minutes in the past or future,
+and compares the session id and password in constant time. For implementation
+details, see ``encode_bypass()`` in ``kittens/transfer/utils.go`` and
+``check_bypass()`` in ``kitty/file_transmission.py``.
 
-For example, suppose that the session id is ``mysession`` and the
-shared secret is ``mypassword``. Then the value of the ``bypass``
-key above is ``sha256:SHA256("mysession" + ";" + "mypassword")``, which
-is::
+Only encrypted ``kitty-1`` authentication is supported. Legacy ``sha256:``
+bypass tokens are rejected for both transfer directions and cannot be enabled
+by configuration. The former ``file_transfer_legacy_bypass`` option has been
+removed. Older clients must upgrade to encrypted authentication or omit the
+bypass token and use normal interactive confirmation. Clients sending a rejected
+token must not assume they will get an interactive confirmation prompt.
 
-    → action=send id=mysession bypass=sha256:192bd215915eeaa8c2b2a4c0f8f851826497d12b30036d8b5b1b4fc4411caf2c
-
-The value of ``bypass`` is of the form ``hash_function_name : hash_value``
-(without spaces). Currently, only the SHA256 hash function is supported.
-
-The value is base64 encoded in the serialized ``pw`` field. For the example
-above, the serialized fields are::
-
-    ac=send;id=mysession;pw=c2hhMjU2OjE5MmJkMjE1OTE1ZWVhYThjMmIyYTRjMGY4Zjg1MTgyNjQ5N2QxMmIzMDAzNmQ4YjViMWI0ZmM0NDExY2FmMmM=
+The complete ``kitty-1:`` value is base64 encoded in the serialized ``pw`` field.
 
 .. warning::
-   Hashing does not effectively hide the value of the password. So this
-   functionality should only be used in secure/trusted contexts. While there
-   exist hash functions harder to compute than SHA256, they are unsuitable as
-   they will introduce a lot of latency to starting a session and in any case
-   there is no mathematical proof that **any** hash function is not brute-forceable.
+   Use this feature only with trusted computers over trusted networks or
+   encrypted transports. A program that obtains the shared secret can read and
+   write local files without further permission. Encrypted authentication
+   protects the password in transit but still requires a trusted endpoint, and
+   tokens can be replayed within the timestamp window.
 
-Terminal implementations are free to use their own more advanced hashing
+Terminal implementations are free to use their own more advanced authentication
 schemes, with prefixes other than those starting with ``sha``, which are
-reserved. For instance, kitty uses a scheme based on public key encryption
-via :envvar:`KITTY_PUBLIC_KEY`. For details of this scheme, see the
-``check_bypass()`` function in the kitty source code.
+reserved. Clients must not silently downgrade to legacy authentication if
+encrypted authentication fails.
 
 Encoding of transfer commands as escape codes
 ------------------------------------------------
@@ -569,7 +573,7 @@ the numeralization of the word ``file``.
     transmission_type tt       enum           simple, rsync
     id                id       safe_string    A unique-ish value, to avoid collisions
     file_id           fid      safe_string    Must be unique per file in a session
-    bypass            pw       base64_string  hash of the bypass password and the session id
+    bypass            pw       base64_string  encrypted or legacy hashed bypass password and session id
     quiet             q        integer        0 - verbose, 1 - only errors, 2 - totally silent
     mtime             mod      integer        the modification time of file in nanoseconds since the UNIX epoch
     permissions       prm      integer        the UNIX file permissions bits
