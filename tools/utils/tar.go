@@ -100,7 +100,7 @@ func remove_existing_non_dir(path string) error {
 // created, for example, because the filesystem does not support hardlinks.
 // If src is a symlink, dest becomes a copy of the symlink, since os.Link()
 // follows symlinks on some platforms.
-func link_or_copy(src, dest string) (is_symlink bool, err error) {
+func link_or_copy(src, dest string, strip_special_bits bool) (is_symlink bool, err error) {
 	st, err := os.Lstat(src)
 	if err != nil {
 		return false, err
@@ -118,9 +118,12 @@ func link_or_copy(src, dest string) (is_symlink bool, err error) {
 	if !st.Mode().IsRegular() {
 		return false, fmt.Errorf("cannot hardlink %s to %s as it is not a regular file", dest, src)
 	}
-	link_err := os.Link(src, dest)
-	if link_err == nil {
-		return false, nil
+	var link_err error
+	if !strip_special_bits || st.Mode()&(os.ModeSetuid|os.ModeSetgid) == 0 {
+		link_err = os.Link(src, dest)
+		if link_err == nil {
+			return false, nil
+		}
 	}
 	s, err := os.Open(src)
 	if err != nil {
@@ -257,27 +260,21 @@ func ExtractAllFromTar(tr *tar.Reader, dest_path string, optss ...TarExtractOpti
 			if !strings.HasPrefix(link_target, needed_prefix) {
 				return count, fmt.Errorf("the hardlink %s points to %s which is outside the destination directory", hdr.Name, hdr.Linkname)
 			}
-			var is_symlink bool
 			// GNU tar creates hardlinks to self when the same path is
 			// archived more than once
 			if link_target != dest {
 				if err = remove_existing_non_dir(dest); err != nil {
 					return
 				}
-				if is_symlink, err = link_or_copy(link_target, dest); err != nil {
+				if _, err = link_or_copy(link_target, dest, opts.DontPreserveSuidAndSgid); err != nil {
 					return
 				}
-			} else if is_symlink, err = is_symlink_path(dest); err != nil {
+			} else if _, err = is_symlink_path(dest); err != nil {
 				return
 			}
-			chmod := func(m fs.FileMode) error { return os.Chmod(dest, m) }
-			if is_symlink {
-				// os.Chmod() follows symlinks
-				chmod = nil
-			}
-			if err = set_metadata(chmod, hdr.Mode); err != nil {
-				return
-			}
+			// Hardlinks inherit source metadata. Changing it can affect other
+			// links to the same inode outside the destination directory.
+			count++
 		case tar.TypeSymlink:
 			if err = os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 				return

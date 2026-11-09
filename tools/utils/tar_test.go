@@ -300,6 +300,83 @@ func TestTarExtractPreexistingHardlink(t *testing.T) {
 	}
 }
 
+func TestTarExtractHardlinkMetadata(t *testing.T) {
+	for _, name := range []string{"link", "file"} {
+		t.Run(name, func(t *testing.T) {
+			parent := t.TempDir()
+			dest, victim := filepath.Join(parent, "dest"), filepath.Join(parent, "victim")
+			if err := os.Mkdir(dest, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(victim, []byte("unchanged"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(victim, 0600) })
+			source := filepath.Join(dest, "file")
+			if err := os.Link(victim, source); err != nil {
+				t.Fatal(err)
+			}
+			assert_same_file(t, source, victim)
+			before, err := os.Stat(victim)
+			if err != nil {
+				t.Fatal(err)
+			}
+			count, err := ExtractAllFromTar(make_tar(t, tar_entry{name: name, typeflag: tar.TypeLink, linkname: "file", mode: 0400}), dest)
+			if count != 1 || err != nil {
+				t.Fatalf("extraction: count=%d error=%v", count, err)
+			}
+			assert_file_contents(t, victim, "unchanged")
+			after, err := os.Stat(victim)
+			if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() {
+				t.Fatalf("outside sentinel identity or metadata changed: before=%v after=%v error=%v", before, after, err)
+			}
+			assert_same_file(t, source, filepath.Join(dest, name))
+		})
+	}
+}
+
+func TestTarExtractHardlinkSpecialBits(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix setuid/setgid bits are not supported on Windows")
+	}
+	parent := t.TempDir()
+	dest, victim := filepath.Join(parent, "dest"), filepath.Join(parent, "victim")
+	if err := os.Mkdir(dest, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(victim, []byte("unchanged"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(victim, 0700|os.ModeSetuid|os.ModeSetgid); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(dest, "file")
+	if err := os.Link(victim, source); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := ExtractAllFromTar(make_tar(t, tar_entry{name: "link", typeflag: tar.TypeLink, linkname: "file", mode: 0400}), dest,
+		TarExtractOptions{DontPreserveSuidAndSgid: true})
+	if count != 1 || err != nil {
+		t.Fatalf("extraction: count=%d error=%v", count, err)
+	}
+	after, err := os.Stat(victim)
+	if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() {
+		t.Fatalf("outside sentinel identity or metadata changed: %v", err)
+	}
+	output, err := os.Stat(filepath.Join(dest, "link"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Mode()&(os.ModeSetuid|os.ModeSetgid) != 0 || os.SameFile(output, after) {
+		t.Fatal("special-bit filtering must copy without changing the source inode")
+	}
+	assert_file_contents(t, filepath.Join(dest, "link"), "unchanged")
+}
+
 func TestTarExtractReadOnlyDirectory(t *testing.T) {
 	dest := t.TempDir()
 	ro := filepath.Join(dest, "ro")
