@@ -1,6 +1,8 @@
 import copy
 import hashlib
 import json
+import sys
+import sysconfig
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +12,40 @@ from windows_dependencies import read_fields, runtime_components, verify_scan_in
 
 
 class WindowsDependenciesTest(unittest.TestCase):
+    def test_native_python_backports_are_inventoried_by_verified_hash(self) -> None:
+        from windows import python_security
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = root / 'package'
+            vendor = root / 'ucrt64/bin/libpython3.14.dll'
+            vendor.parent.mkdir(parents=True)
+            vendor.write_bytes(b'vendor runtime')
+            entry = root / 'var/lib/pacman/local/python'
+            entry.mkdir(parents=True)
+            (entry / 'desc').write_text('%NAME%\nmingw-w64-ucrt-x86_64-python\n\n%VERSION%\n3.14.10-4\n', encoding='utf-8')
+            (entry / 'files').write_text('%FILES%\nucrt64/bin/libpython3.14.dll\n', encoding='utf-8')
+            (package / 'bin').mkdir(parents=True)
+            (package / 'bin/libpython3.14.dll').write_bytes(vendor.read_bytes())
+            directory = package / 'lib/python3.14/lib-dynload'
+            directory.mkdir(parents=True)
+            extensions = {name + sysconfig.get_config_var('EXT_SUFFIX'): b'compiled backport' for name in python_security.MODULES}
+            for name, content in extensions.items():
+                (directory / name).write_bytes(content)
+            info = {
+                'source_version': python_security.VERSION, 'source_sha256': python_security.SHA256,
+                'recipe_sha256': python_security.sha256(Path(python_security.__file__)),
+                'python_version': list(sys.version_info[:3]),
+                'extensions': {name: python_security.sha256(directory / name) for name in extensions},
+            }
+            (directory / python_security.METADATA).write_text(json.dumps(info), encoding='utf-8')
+            python = runtime_components(package, root, 'mingw-w64-ucrt-x86_64')[0]
+            paths = {p['value'] for p in python['properties'] if p['name'] == 'kitty:packaged-file'}
+            self.assertTrue({f'lib/python3.14/lib-dynload/{name}' for name in extensions} <= paths)
+            (directory / next(iter(extensions))).write_bytes(b'replaced module')
+            with self.assertRaisesRegex(ValueError, 'do not match'):
+                runtime_components(package, root, 'mingw-w64-ucrt-x86_64')
+
     def test_shipped_versions_and_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -71,6 +107,8 @@ class WindowsDependenciesTest(unittest.TestCase):
             self.assertEqual(read_fields(path), {'NAME': ['python'], 'LICENSE': ['PSF', 'BSD']})
 
     def test_scan_attestations_are_bound_to_zip_and_python_files(self) -> None:
+        from windows import python_security
+
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / 'kitty.zip'
             archive.write_bytes(b'tested package')
@@ -87,6 +125,10 @@ class WindowsDependenciesTest(unittest.TestCase):
                         'properties': [
                             {'name': 'kitty:packaged-file', 'value': 'bin/libpython3.14.dll'},
                             {'name': 'kitty:packaged-file', 'value': 'lib/python3.14/lib-dynload/_ssl.cp314-mingw_x86_64_ucrt_gnu.pyd'},
+                            {'name': 'kitty:packaged-file', 'value': 'lib/python3.14/lib-dynload/_socket.cp314-mingw_x86_64_ucrt_gnu.pyd'},
+                            {'name': 'kitty:packaged-file', 'value': 'lib/python3.14/lib-dynload/_hashlib.cp314-mingw_x86_64_ucrt_gnu.pyd'},
+                            {'name': 'kitty:python-security-source', 'value': python_security.SHA256},
+                            {'name': 'kitty:python-security-recipe', 'value': python_security.sha256(Path(python_security.__file__))},
                         ],
                     }
                 ],
@@ -98,7 +140,7 @@ class WindowsDependenciesTest(unittest.TestCase):
             vex: dict[str, Any] = {
                 'statements': [
                     {'vulnerability': {'name': cve}, 'products': [{'@id': product}, {'@id': python_product}], 'status': 'fixed'}
-                    for cve in ('CVE-2025-15367', 'CVE-2026-12345')
+                    for cve in ('CVE-2025-15367', 'CVE-2026-12345', *python_security.FIXES)
                 ]
             }
             verify_scan_inputs(archive, runtime, binaries, vex)
@@ -108,9 +150,14 @@ class WindowsDependenciesTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'upstream-fixed MSYS2 Python'):
                 verify_scan_inputs(archive, altered_runtime, binaries, vex)
             altered_runtime = copy.deepcopy(runtime)
-            altered_runtime['components'][0]['properties'].pop()
+            altered_runtime['components'][0]['properties'].pop(1)
             with self.assertRaisesRegex(ValueError, 'SSL extension was not inventoried'):
                 verify_scan_inputs(archive, altered_runtime, binaries, vex)
+            for index in range(2, 6):
+                altered_runtime = copy.deepcopy(runtime)
+                altered_runtime['components'][0]['properties'].pop(index)
+                with self.subTest(index=index), self.assertRaisesRegex(ValueError, 'native Python security fixes'):
+                    verify_scan_inputs(archive, altered_runtime, binaries, vex)
 
             altered = copy.deepcopy(binaries)
             altered['artifacts'][0]['version'] = '3.13.0'
