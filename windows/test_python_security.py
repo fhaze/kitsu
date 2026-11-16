@@ -5,13 +5,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.environ['KITSU_SECURITY_TEST_MODULE'])
-import _hashlib  # noqa: E402
-import _socket  # noqa: E402
-import ctypes  # noqa: E402
-import socket  # noqa: E402
-import ssl  # noqa: E402
-import subprocess  # noqa: E402
-import unittest  # noqa: E402
+import _hashlib
+import _socket
+import ctypes
+import socket
+import ssl
+import subprocess
+import unittest
 
 
 class PythonSecurityTest(unittest.TestCase):

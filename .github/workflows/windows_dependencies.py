@@ -84,7 +84,7 @@ def runtime_components(package: Path, msys_root: Path, package_prefix: str) -> l
         )
         python['properties'].extend([
             {'name': 'kitty:python-security-source', 'value': python_security.SHA256},
-            {'name': 'kitty:python-security-recipe', 'value': python_security.sha256(Path(python_security.__file__))},
+            {'name': 'kitty:python-security-recipe', 'value': python_security.recipe_sha256()},
         ])
     fontconfig_info = package / 'bin/fontconfig-build.json'
     if fontconfig_info.is_file():
@@ -137,7 +137,7 @@ def verify_scan_inputs(archive: Path, runtime: dict[str, Any], binaries: dict[st
     properties = {p['name']: p['value'] for p in python['properties'] if p['name'] != 'kitty:packaged-file'}
     if (
         properties.get('kitty:python-security-source') != python_security.SHA256
-        or properties.get('kitty:python-security-recipe') != python_security.sha256(Path(python_security.__file__))
+        or properties.get('kitty:python-security-recipe') != python_security.recipe_sha256()
         or any(not any(p.startswith(f'lib/python3.14/lib-dynload/{name}.') and p.endswith('.pyd') for p in paths) for name in python_security.MODULES)
     ):
         raise ValueError('The native Python security fixes were not inventoried with verified provenance')
@@ -157,8 +157,8 @@ def main() -> None:
         verify_scan_inputs(archive, *(json.loads(p.read_text(encoding='utf-8')) for p in (runtime, binaries, vex)))
         return
     package, output, archive = map(Path, sys.argv[1:])
-    from windows.python_security import FIXES
     from windows.python_runtime import sha256, verify_archive, verify_python
+    from windows.python_security import FIXES
 
     verify_python(package, Path(sysconfig.get_path('stdlib')))
     verify_archive(package, archive)

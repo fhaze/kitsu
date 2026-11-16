@@ -7,8 +7,16 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 from python_runtime import (
-    POP_COMMAND, TAR_DATA_DESTINATION, TAR_DESTINATION, TAR_DESTINATION_FIXED, TEMP_CLEANUP, TEMP_CLEANUP_SIGNATURES,
-    checked_tarfile, harden_python, verify_archive, verify_python,
+    POP_COMMAND,
+    TAR_DATA_DESTINATION,
+    TAR_DESTINATION,
+    TAR_DESTINATION_FIXED,
+    TEMP_CLEANUP,
+    TEMP_CLEANUP_SIGNATURES,
+    checked_tarfile,
+    harden_python,
+    verify_archive,
+    verify_python,
 )
 
 

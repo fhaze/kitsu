@@ -5,11 +5,21 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from python_security import METADATA, MODULES, SHA256, VERSION, prepare_source, replace, sha256, verify
+from python_security import METADATA, MODULES, SHA256, VERSION, prepare_source, recipe_sha256, replace, sha256, verify
 
 
 class PythonSecurityBuildTest(unittest.TestCase):
+    def test_recipe_digest_is_independent_of_checkout_line_endings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recipe = Path(tmp) / 'recipe.py'
+            with patch('python_security.__file__', str(recipe)):
+                recipe.write_bytes(b'reviewed\nrecipe\n')
+                digest = recipe_sha256()
+                recipe.write_bytes(b'reviewed\r\nrecipe\r\n')
+                self.assertEqual(recipe_sha256(), digest)
+
     def test_unreviewed_source_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, 'source changed'):
             replace('missing', 'expected', 'fixed')
@@ -28,8 +38,6 @@ class PythonSecurityBuildTest(unittest.TestCase):
             self.assertFalse((work / f'Python-{VERSION}').exists())
 
     def test_binary_and_recipe_provenance_are_required(self) -> None:
-        import python_security
-
         with tempfile.TemporaryDirectory() as tmp:
             stdlib = Path(tmp)
             directory = stdlib / 'lib-dynload'
@@ -39,7 +47,7 @@ class PythonSecurityBuildTest(unittest.TestCase):
                 (directory / name).write_bytes(b'tested native module')
             info = {
                 'source_version': VERSION, 'source_sha256': SHA256,
-                'recipe_sha256': sha256(Path(python_security.__file__)),
+                'recipe_sha256': recipe_sha256(),
                 'python_version': list(sys.version_info[:3]),
                 'extensions': {name: sha256(directory / name) for name in names},
             }

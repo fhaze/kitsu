@@ -34,7 +34,7 @@ class WindowsDependenciesTest(unittest.TestCase):
                 (directory / name).write_bytes(content)
             info = {
                 'source_version': python_security.VERSION, 'source_sha256': python_security.SHA256,
-                'recipe_sha256': python_security.sha256(Path(python_security.__file__)),
+                'recipe_sha256': python_security.recipe_sha256(),
                 'python_version': list(sys.version_info[:3]),
                 'extensions': {name: python_security.sha256(directory / name) for name in extensions},
             }
@@ -128,7 +128,7 @@ class WindowsDependenciesTest(unittest.TestCase):
                             {'name': 'kitty:packaged-file', 'value': 'lib/python3.14/lib-dynload/_socket.cp314-mingw_x86_64_ucrt_gnu.pyd'},
                             {'name': 'kitty:packaged-file', 'value': 'lib/python3.14/lib-dynload/_hashlib.cp314-mingw_x86_64_ucrt_gnu.pyd'},
                             {'name': 'kitty:python-security-source', 'value': python_security.SHA256},
-                            {'name': 'kitty:python-security-recipe', 'value': python_security.sha256(Path(python_security.__file__))},
+                            {'name': 'kitty:python-security-recipe', 'value': python_security.recipe_sha256()},
                         ],
                     }
                 ],

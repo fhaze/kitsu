@@ -32,6 +32,11 @@ def sha256(path: Path) -> str:
         return hashlib.file_digest(f, 'sha256').hexdigest()
 
 
+def recipe_sha256() -> str:
+    # Windows builds and Linux scan-input validation use different Git EOLs.
+    return hashlib.sha256(Path(__file__).read_text(encoding='utf-8').encode('utf-8')).hexdigest()
+
+
 def replace(source: str, old: str, new: str) -> str:
     if source.count(old) != 1:
         raise ValueError('The CPython security backport source changed; review the upstream fix')
@@ -138,7 +143,7 @@ def build(stdlib: Path) -> None:
     (destination / METADATA).write_text(
         json.dumps(
             {
-                'source_version': VERSION, 'source_sha256': SHA256, 'recipe_sha256': sha256(Path(__file__)),
+                'source_version': VERSION, 'source_sha256': SHA256, 'recipe_sha256': recipe_sha256(),
                 'python_version': list(sys.version_info[:3]), 'extensions': extensions,
             }, indent=2,
         ) + '\n', encoding='utf-8',
@@ -151,7 +156,7 @@ def verify(stdlib: Path) -> list[Path]:
     extensions = {name + sysconfig.get_config_var('EXT_SUFFIX') for name in MODULES}
     if (
         info.get('source_version') != VERSION or info.get('source_sha256') != SHA256
-        or info.get('recipe_sha256') != sha256(Path(__file__)) or info.get('python_version') != list(sys.version_info[:3])
+        or info.get('recipe_sha256') != recipe_sha256() or info.get('python_version') != list(sys.version_info[:3])
         or set(info.get('extensions', {})) != extensions
         or {p.name for name in MODULES for p in directory.glob(name + '*.pyd')} != extensions
         or any(sha256(directory / name) != info['extensions'][name] for name in extensions)
