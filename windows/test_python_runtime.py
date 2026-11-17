@@ -7,8 +7,16 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 from python_runtime import (
-    POP_COMMAND, TAR_DATA_DESTINATION, TAR_DESTINATION, TAR_DESTINATION_FIXED, TEMP_CLEANUP, TEMP_CLEANUP_SIGNATURES,
-    checked_tarfile, harden_python, verify_archive, verify_python,
+    POP_COMMAND,
+    TAR_DATA_DESTINATION,
+    TAR_DESTINATION,
+    TAR_DESTINATION_FIXED,
+    TEMP_CLEANUP,
+    TEMP_CLEANUP_SIGNATURES,
+    checked_tarfile,
+    harden_python,
+    verify_archive,
+    verify_python,
 )
 
 
@@ -18,6 +26,9 @@ class PythonRuntimePatchTest(unittest.TestCase):
         verifier = patch('windows.python_ssl.verify')
         verifier.start()
         self.addCleanup(verifier.stop)
+        native_verifier = patch('windows.python_security.verify')
+        native_verifier.start()
+        self.addCleanup(native_verifier.stop)
 
     def copy_tarfile(self, directory: Path) -> None:
         shutil.copy2(Path(sysconfig.get_path('stdlib')) / 'tarfile.py', directory / 'tarfile.py')
@@ -114,6 +125,9 @@ class PythonRuntimePatchTest(unittest.TestCase):
                 stdlib / 'tarfile.py',
                 package / 'bin/libpython3.14.dll',
                 extensions / '_ssl.test.pyd',
+                extensions / '_socket.test.pyd',
+                extensions / '_hashlib.test.pyd',
+                extensions / '_security-build.json',
             ):
                 path.write_bytes(b'tested')
             archive = Path(tmp) / 'kitty.zip'

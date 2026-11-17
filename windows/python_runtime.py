@@ -107,6 +107,9 @@ def verify_python(package: Path, original_stdlib: Path) -> None:
     from windows.python_ssl import verify
 
     verify(stdlib, original_stdlib)
+    from windows.python_security import verify as verify_native_security
+
+    verify_native_security(stdlib)
 
 
 def sha256(path: Path) -> str:
@@ -141,6 +144,12 @@ def verify_archive(package: Path, archive: Path) -> None:
             if len(extensions) != 1:
                 raise ValueError('Unexpected packaged SSL extension layout')
             required.append(extensions[0].relative_to(package).as_posix())
+            for module in ('_socket', '_hashlib'):
+                extensions = list((stdlib / 'lib-dynload').glob(module + '*.pyd'))
+                if len(extensions) != 1:
+                    raise ValueError(f'Unexpected packaged {module} extension layout')
+                required.append(extensions[0].relative_to(package).as_posix())
+            required.append(f'lib/{stdlib.name}/lib-dynload/_security-build.json')
             required.append(f'bin/lib{stdlib.name}.dll')
         for name in required:
             if f'{package.name}/{name}' not in z.namelist():

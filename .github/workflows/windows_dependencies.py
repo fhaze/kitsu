@@ -73,6 +73,19 @@ def runtime_components(package: Path, msys_root: Path, package_prefix: str) -> l
         )
     if not any(component['name'] == 'python' for component in components):
         raise ValueError('The packaged MSYS2 Python runtime was not identified')
+    from windows import python_security
+
+    stdlib = package / 'lib/python3.14'
+    if (stdlib / 'lib-dynload' / python_security.METADATA).is_file():
+        python = next(c for c in components if c['name'] == 'python')
+        extensions = python_security.verify(stdlib)
+        python['properties'].extend(
+            {'name': 'kitty:packaged-file', 'value': p.relative_to(package).as_posix()} for p in extensions
+        )
+        python['properties'].extend([
+            {'name': 'kitty:python-security-source', 'value': python_security.SHA256},
+            {'name': 'kitty:python-security-recipe', 'value': python_security.recipe_sha256()},
+        ])
     fontconfig_info = package / 'bin/fontconfig-build.json'
     if fontconfig_info.is_file():
         info = json.loads(fontconfig_info.read_text(encoding='utf-8'))
@@ -96,6 +109,8 @@ def runtime_components(package: Path, msys_root: Path, package_prefix: str) -> l
 
 
 def verify_scan_inputs(archive: Path, runtime: dict[str, Any], binaries: dict[str, Any], vex: dict[str, Any]) -> None:
+    from windows import python_security
+
     with archive.open('rb') as f:
         version = hashlib.file_digest(f, 'sha256').hexdigest()
     product = f'pkg:generic/kitsu-windows@{version}'
@@ -104,7 +119,7 @@ def verify_scan_inputs(archive: Path, runtime: dict[str, Any], binaries: dict[st
         raise ValueError('The runtime inventory does not describe this ZIP')
     if binaries['source']['name'] != 'kitsu-windows' or binaries['source']['version'] != version:
         raise ValueError('The binary inventory does not describe this ZIP')
-    if {s['vulnerability']['name'] for s in vex['statements']} != {'CVE-2025-15367', 'CVE-2026-12345'}:
+    if {s['vulnerability']['name'] for s in vex['statements']} != {'CVE-2025-15367', 'CVE-2026-12345', *python_security.FIXES}:
         raise ValueError('Unexpected Python security attestations')
     python = next(c for c in runtime['components'] if c['name'] == 'python')
     vendor_version = re.fullmatch(r'3\.14\.(\d+)', python['version'])
@@ -119,6 +134,13 @@ def verify_scan_inputs(archive: Path, runtime: dict[str, Any], binaries: dict[st
     paths = {p['value'] for p in python['properties'] if p['name'] == 'kitty:packaged-file'}
     if not any(p.startswith('lib/python3.14/lib-dynload/_ssl.') and p.endswith('.pyd') for p in paths):
         raise ValueError('The fixed vendor SSL extension was not inventoried')
+    properties = {p['name']: p['value'] for p in python['properties'] if p['name'] != 'kitty:packaged-file'}
+    if (
+        properties.get('kitty:python-security-source') != python_security.SHA256
+        or properties.get('kitty:python-security-recipe') != python_security.recipe_sha256()
+        or any(not any(p.startswith(f'lib/python3.14/lib-dynload/{name}.') and p.endswith('.pyd') for p in paths) for name in python_security.MODULES)
+    ):
+        raise ValueError('The native Python security fixes were not inventoried with verified provenance')
     python_binaries = [c for c in binaries['artifacts'] if c['name'].lower() in ('python', 'cpython')]
     if not python_binaries:
         raise ValueError('The Python binaries were not identified')
@@ -129,13 +151,14 @@ def verify_scan_inputs(archive: Path, runtime: dict[str, Any], binaries: dict[st
 
 
 def main() -> None:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     if sys.argv[1] == '--verify-scan-inputs':
         archive, runtime, binaries, vex = map(Path, sys.argv[2:])
         verify_scan_inputs(archive, *(json.loads(p.read_text(encoding='utf-8')) for p in (runtime, binaries, vex)))
         return
     package, output, archive = map(Path, sys.argv[1:])
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from windows.python_runtime import sha256, verify_archive, verify_python
+    from windows.python_security import FIXES
 
     verify_python(package, Path(sysconfig.get_path('stdlib')))
     verify_archive(package, archive)
@@ -166,6 +189,7 @@ def main() -> None:
     fixes = {
         'CVE-2025-15367': 'Backported CPython POP3 control-character validation: https://github.com/python/cpython/commit/b234a2b67539f787e191d2ef19a7cbdce32874e7',
         'CVE-2026-12345': 'Replaced Windows TemporaryDirectory cleanup with kitten __remove_tree__, using Go >=1.26 handle-relative os.RemoveAll: https://go.dev/cl/661575',
+        **{cve: f'Compiled and regression-tested the CPython 3.14 native security backport: {url}' for cve, url in FIXES.items()},
     }
     vex = {
         '@context': 'https://openvex.dev/ns/v0.2.0',
