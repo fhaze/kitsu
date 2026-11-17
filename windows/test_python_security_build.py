@@ -1,3 +1,5 @@
+import hashlib
+import io
 import json
 import sys
 import sysconfig
@@ -7,10 +9,36 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from python_security import METADATA, MODULES, SHA256, VERSION, prepare_source, recipe_sha256, replace, sha256, verify
+from python_security import METADATA, MODULES, SHA256, VERSION, download_source, prepare_source, recipe_sha256, replace, sha256, verify
 
 
 class PythonSecurityBuildTest(unittest.TestCase):
+    def test_interrupted_download_can_be_retried(self) -> None:
+        class InterruptedResponse(io.BytesIO):
+            def read(self, size: int | None = -1, /) -> bytes:
+                if self.tell():
+                    raise OSError('interrupted download')
+                return super().read(size)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / 'source.tar.xz'
+            with patch('python_security.urlopen', return_value=InterruptedResponse(b'partial')):
+                with self.assertRaisesRegex(OSError, 'interrupted download'):
+                    download_source(archive)
+            self.assertEqual(list(archive.parent.iterdir()), [])
+            source = b'complete reviewed source'
+            with patch('python_security.urlopen', return_value=io.BytesIO(source)), patch('python_security.SHA256', hashlib.sha256(source).hexdigest()):
+                download_source(archive)
+            self.assertEqual(archive.read_bytes(), source)
+
+    def test_invalid_download_is_not_cached(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / 'source.tar.xz'
+            with patch('python_security.urlopen', return_value=io.BytesIO(b'untrusted source')):
+                with self.assertRaisesRegex(ValueError, 'archive checksum mismatch'):
+                    download_source(archive)
+            self.assertEqual(list(archive.parent.iterdir()), [])
+
     def test_recipe_digest_is_independent_of_checkout_line_endings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recipe = Path(tmp) / 'recipe.py'

@@ -37,6 +37,18 @@ def recipe_sha256() -> str:
     return hashlib.sha256(Path(__file__).read_text(encoding='utf-8').encode('utf-8')).hexdigest()
 
 
+def download_source(archive: Path) -> None:
+    partial = archive.with_suffix('.download')
+    try:
+        with urlopen(URL, timeout=120) as response, partial.open('wb') as out:
+            shutil.copyfileobj(response, out)
+        if sha256(partial) != SHA256:
+            raise ValueError('CPython security source archive checksum mismatch')
+        partial.replace(archive)
+    finally:
+        partial.unlink(missing_ok=True)
+
+
 def replace(source: str, old: str, new: str) -> str:
     if source.count(old) != 1:
         raise ValueError('The CPython security backport source changed; review the upstream fix')
@@ -115,8 +127,7 @@ def build(stdlib: Path) -> None:
     work.mkdir(parents=True, exist_ok=True)
     archive = work / f'Python-{VERSION}.tar.xz'
     if not archive.exists():
-        with urlopen(URL, timeout=120) as response, archive.open('wb') as out:
-            shutil.copyfileobj(response, out)
+        download_source(archive)
     source = prepare_source(archive, work)
     include = Path(sysconfig.get_path('include'))
     destination = stdlib / 'lib-dynload'
