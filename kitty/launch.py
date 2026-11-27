@@ -978,9 +978,11 @@ def _launch(
         elif opts.type == 'os-window-dock':
             if (tm := tab.tab_manager_ref()) is None:
                 raise ValueError('An os-window-dock can only be created in a tab that belongs to an OS window')
-            # The OS window docks are in the active tab, the tab is None only
-            # while the first tab of a session is being created
-            tab = tm.active_tab or tab
+            # Restore dock windows in the target tab so subsequent session
+            # overlays can attach to them. The tab manager moves the docks
+            # to the active tab after restoring the session.
+            if not force_target_tab:
+                tab = tm.active_tab or tab
             tm.host_os_window_docks_in(tab)
             kw['os_window_dock'] = True
         watchers = load_watch_modules(opts.watcher)
