@@ -58,6 +58,11 @@ func eval_tar_path(path string) (string, error) {
 			if st.Mode()&fs.ModeSymlink == 0 && (errors.Is(err, syscall.EINVAL) ||
 				// ERROR_NOT_A_REPARSE_POINT is returned for ordinary Windows paths.
 				(runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(4390)))) {
+				if runtime.GOOS == "windows" {
+					// Junction targets can use DOS short names. Canonicalize existing
+					// components so containment checks compare the actual names.
+					return filepath.EvalSymlinks(path)
+				}
 				return path, nil
 			}
 			return "", err
