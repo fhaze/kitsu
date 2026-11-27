@@ -34,7 +34,15 @@ func CompleteFiles(prefix string, callback func(*FileEntry), cwd string) error {
 	// relative prefixes are resolved against cwd, not the process working directory
 	location := utils.Expanduser(prefix)
 	if !filepath.IsAbs(location) {
-		location = filepath.Join(cwd, location)
+		switch {
+		case filepath.VolumeName(location) != "":
+			// Windows resolves drive-relative paths against that drive's current directory.
+			location = utils.Abspath(location)
+		case len(location) > 0 && os.IsPathSeparator(location[0]):
+			location = filepath.VolumeName(cwd) + location
+		default:
+			location = filepath.Join(cwd, location)
+		}
 	}
 	// Completions use the separator the user typed. Windows accepts both, so
 	// only use the backslash when the prefix itself uses it exclusively.
@@ -52,7 +60,7 @@ func CompleteFiles(prefix string, callback func(*FileEntry), cwd string) error {
 		base_dir = cwd
 		joinable_prefix = "./"
 	case "/":
-		base_dir = "/"
+		base_dir = location
 		joinable_prefix = "/"
 	case "~":
 		base_dir = location
