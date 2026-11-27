@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # License: GPL v3 Copyright: 2026, Kovid Goyal <kovid at kovidgoyal.net>
 
+import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -186,7 +187,8 @@ class TestSessions(BaseTest):
                 )
                 self.id, self.docks = gid, ()
 
-        groups = [Group(1, evil_cwd, evil_cwd), Group(2, '/home')]
+        home = os.path.abspath('/home')
+        groups = [Group(1, evil_cwd, evil_cwd), Group(2, home)]
         tab = SimpleNamespace(
             windows=SimpleNamespace(active_group=groups[0], groups=groups, tab_docks=(), dock_owner=lambda g: None),
             enabled_layouts=['tall'],
@@ -200,8 +202,8 @@ class TestSessions(BaseTest):
         self.ae(sum(1 for x in lines if x.startswith('launch')), 3)
         (s,) = parse_session(text, opts)
         (t,) = s.tabs
-        self.ae(t.cwd, '/home')
-        self.ae([w.launch_spec.opts.cwd for w in t.windows], [evil_cwd, evil_cwd, '/home'])
+        self.ae(t.cwd, home)
+        self.ae([w.launch_spec.opts.cwd for w in t.windows], [evil_cwd, evil_cwd, home])
         self.ae({tuple(w.launch_spec.opts.var) for w in t.windows}, {(evil_var,)})
         self.ae({w.launch_spec.opts.type for w in t.windows}, {'window'})
 

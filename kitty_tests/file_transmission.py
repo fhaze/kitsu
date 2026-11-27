@@ -426,7 +426,7 @@ class TestFileTransmission(BaseTest):
                 ft.handle_serialized_command(serialized_cmd(action='end_data', file_id='x', data=data))
             self.assertIn('EPERM', statuses(ft), ftype)
             self.ae(set(names_in(outside)), set())
-            self.ae(set(names_in(base)), {'dest', 'outside', 'dest/link'})
+            self.ae(set(names_in(base)), {'dest', 'outside', os.path.join('dest', 'link')})
             os.remove(link)
 
         # pre-existing symlinks in the destination path are still followed

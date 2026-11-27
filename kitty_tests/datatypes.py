@@ -990,14 +990,24 @@ class TestDataTypes(BaseTest):
 
     def test_lock_with_file(self):
         def is_locked_by_another_process(path):
-            # flock() locks are per file descriptor, so a non-blocking
-            # acquisition in this process would succeed even while the lock is
-            # held here, hence the check has to happen in a child process.
+            # Check a separate process and distinguish contention from setup failures.
             if sys.platform == 'win32':
-                code = f'import msvcrt, os;fd = os.open({path!r}, os.O_CREAT | os.O_WRONLY);msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)'
+                lock = 'import msvcrt; msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)'
             else:
-                code = f'import fcntl, os;fd = os.open({path!r}, os.O_CREAT | os.O_WRONLY);fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)'
-            return subprocess.run([kitty_exe(), '+runpy', code], capture_output=True).returncode != 0
+                lock = 'import fcntl; fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)'
+            code = f"""\
+import errno, os
+fd = os.open({path!r}, os.O_CREAT | os.O_WRONLY, 0o600)
+try:
+    {lock}
+except OSError as e:
+    if e.errno in (errno.EACCES, errno.EAGAIN):
+        raise SystemExit(42) from None
+    raise
+"""
+            result = subprocess.run([kitty_exe(), '+runpy', code], capture_output=True)
+            self.assertIn(result.returncode, (0, 42), result.stderr)
+            return result.returncode == 42
 
         with tempfile.TemporaryDirectory() as tdir:
             lock_path = os.path.join(tdir, 'test.lock')

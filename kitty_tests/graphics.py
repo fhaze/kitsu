@@ -2576,13 +2576,13 @@ class TestGraphics(BaseTest):
             cache = ImageRenderCacheForTesting(cache_path)
             cache.max_entries = 8
             original_stat = os.stat
-            metadata = dict(st_dev=0, st_ino=0, st_size=5, st_mtime_ns=0)
+            metadata = dict(st_dev=0, st_ino=0, st_size=5, st_mtime_ns=0, st_mode=original_stat(src).st_mode)
 
-            def stat(path, *args, **kwargs):
+            def mock_stat(path, *args, **kwargs):
                 return SimpleNamespace(**metadata) if path == src else original_stat(path, *args, **kwargs)
 
             with (
-                patch('kitty.render_cache.os.stat', side_effect=stat),
+                patch('kitty.render_cache.os.stat', side_effect=mock_stat),
                 patch.object(cache, 'render_image', side_effect=lambda src, dest: Path(dest).write_bytes(b'rgba')) as render,
             ):
                 outputs = {cache.render(src)}

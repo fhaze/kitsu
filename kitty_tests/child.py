@@ -634,13 +634,13 @@ time.sleep(300)
                 self.assertIsNone(c.resolved_root_pid)
                 # The original process properties use the root process
                 c = self._child_for(p.pid, KittyWrapper(('/usr/bin/login',), False))
-                self.ae(c.current_cwd, os.path.realpath(tdir))
+                self.assertTrue(os.path.samefile(c.current_cwd, tdir))
                 self.ae(c.cmdline, cmdline_of_pid(inner))
             finally:
                 self._terminate_tree(p)
 
     def test_descendants_from_threads(self):
-        if is_macos:
+        if is_macos or is_windows:
             self.skipTest('Per thread children lists are Linux only')
         from kitty import child
 
@@ -696,7 +696,7 @@ class LaunchWrapperTest(BaseTest):
             spawned['exe'], spawned['argv'] = exe, argv
             return 1234567
 
-        boss = SimpleNamespace(encryption_public_key='key', listening_on='', window_id_map={})
+        boss = SimpleNamespace(encryption_public_key='key', listening_on='', dcs_channel_address='', window_id_map={})
         c = Child(list(argv), cwd, env={'KITTY_WINDOW_ID': '7', **(env or {})}, hold=hold, launch_request=launch_request)
         with (
             patch.object(child_module.fast_data_types, 'spawn', spawn),
