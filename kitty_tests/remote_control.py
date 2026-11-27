@@ -7,9 +7,10 @@ import subprocess
 import tempfile
 from types import MethodType
 from typing import Any, cast
+from unittest import skipIf
 from unittest.mock import Mock, patch
 
-from kitty.constants import kitty_exe
+from kitty.constants import is_windows, kitty_exe
 from kitty.rc.base import PayloadGetter, all_command_names, command_for_name
 
 from .base import BaseTest
@@ -563,6 +564,7 @@ os._exit(0)
 """
 
 
+@skipIf(is_windows, 'The fixtures pass POSIX socket file descriptors to ChildMonitor')
 class TestTalkThread(BaseTest):
     def test_talk_thread_not_blocked_by_stalled_peer(self):
         p = subprocess.run([kitty_exe(), '+runpy', TALK_THREAD_STALLED_PEER], capture_output=True, text=True, timeout=30)

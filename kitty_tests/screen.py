@@ -5,6 +5,7 @@ import os
 import re
 import tempfile
 
+from kitty.constants import is_windows
 from kitty.fast_data_types import DECAWM, DECCOLM, DECOM, IRM, SCROLL_LINE, VT_PARSER_BUFFER_SIZE, Color, ColorProfile, Cursor
 from kitty.marks import marker_from_function, marker_from_regex, marker_from_text
 from kitty.utils import path_from_osc7_url
@@ -4305,10 +4306,10 @@ class TestScreen(BaseTest):
         self.ae(
             delivered,
             [
-                {'cwd': '/some dir/x', 'host': 'myhost'},
+                {'cwd': '//myhost/some dir/x' if is_windows else '/some dir/x', 'host': 'myhost'},
                 {'cwd': '/a b', 'host': 'otherhost'},
                 {'cwd': '/no/host', 'host': ''},
-                {'cwd': '/bad�', 'host': 'h'},
+                {'cwd': '//h/bad�' if is_windows else '/bad�', 'host': 'h'},
             ],
         )
         del delivered[:]
