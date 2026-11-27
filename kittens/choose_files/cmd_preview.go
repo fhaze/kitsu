@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/kovidgoyal/kitty/tools/utils"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 
 	"github.com/kovidgoyal/kitty/tools/icons"
+	"github.com/kovidgoyal/kitty/tools/utils"
 	"github.com/kovidgoyal/kitty/tools/utils/humanize"
 	"github.com/kovidgoyal/kitty/tools/utils/images"
 )
@@ -26,6 +26,17 @@ type cmd_renderer struct {
 func (c cmd_renderer) String() string {
 	return c.cmdline[0]
 }
+
+// CacheKeyExtra returns the command line, including the path argument exactly
+// as the command receives it. The command may produce different output for a
+// different command line or for different symlinks to the same file.
+func (c cmd_renderer) CacheKeyExtra(path string) string {
+	return fmt.Sprintf("%q", append(slices.Clone(c.cmdline), path))
+}
+
+// NeedsSelectedPath returns true as the command is documented to receive the
+// selected path.
+func (c cmd_renderer) NeedsSelectedPath() bool { return true }
 
 type CmdResult struct {
 	Lines      []string `json:"lines"`
@@ -57,6 +68,8 @@ func (c cmd_renderer) Render(path string) (m map[string][]byte, mi metadata, img
 		if m, mi, img, err = ip.Render(md.Image); err != nil {
 			return
 		}
+	} else {
+		m = make(map[string][]byte, 1)
 	}
 	if m == nil {
 		m = make(map[string][]byte, 1)
@@ -91,13 +104,13 @@ func (c cmd_renderer) ShowMetadata(h *Handler, s ShowData) (offset int) {
 			offset += h.render_wrapped_text_in_region(text, s.x, s.y+offset, s.width, s.height-offset, center)
 		}
 	}
-	ext := filepath.Ext(s.abspath)
+	ext := sanitize_name(filepath.Ext(s.abspath))
 	r := s.custom_metadata.custom.(*CmdResult)
-	text := fmt.Sprintf("%s: %s%s", ext, humanize.Bytes(uint64(s.metadata.Size())), r.TitleExtra)
+	text := fmt.Sprintf("%s: %s%s", ext, humanize.Bytes(uint64(s.metadata.Size())), keep_only_sgr(r.TitleExtra))
 	icon := icons.IconForPath(s.abspath)
 	w(icon+"  "+text, true)
 	for _, line := range r.Lines {
-		w(line, false)
+		w(keep_only_sgr(line), false)
 	}
 	h.lp.QueueWriteString("\x1b[m") // reset SGR attributes
 	return

@@ -2,12 +2,14 @@ package choose_files
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,11 +48,18 @@ type PreviewRenderer interface {
 	Render(string) (map[string][]byte, metadata, *images.ImageData, error)
 	ShowMetadata(h *Handler, s ShowData) int
 	String() string
+	// CacheKeyExtra returns anything other than the contents of the file at
+	// path that the rendered output depends on. It is added to the disk cache
+	// key. Return an empty string if the output depends only on the file contents.
+	CacheKeyExtra(path string) string
+	// NeedsSelectedPath returns true if Render() must be passed the selected
+	// path rather than the file it resolves to, for example, because its
+	// output depends on the name or location of the selected path.
+	NeedsSelectedPath() bool
 }
 
 type render_data struct {
 	cached_data map[string]string
-	img         *images.ImageData
 	metadata    metadata
 	err         error
 }
@@ -213,7 +222,6 @@ func (p *ImagePreview) Render(h *Handler, x, y, width, height int) {
 	case hd := <-p.render_channel:
 		p.render_channel = nil
 		p.cached_data = hd.cached_data
-		p.source_img = hd.img
 		p.custom_metadata = hd.metadata
 		if hd.err != nil {
 			p.render_err = NewFileMetadataPreviewWithError(p.abspath, p.metadata, fmt.Errorf("Failed to render the preview with error: %w", hd.err))
@@ -239,10 +247,21 @@ func (p *ImagePreview) start_rendering(ch chan<- render_data) { // ch, as the UI
 		p.ready.Store(true)
 		p.WakeupMainThread()
 	}()
-	key, ans, err := p.disk_cache.GetPath(p.abspath)
+	result := p.render_with_cache()
+	if errors.Is(result.err, disk_cache.ErrPathChanged) {
+		// The original check in preview_for no longer describes this path.
+		if info, err := os.Stat(p.abspath); err == nil && info.Mode().IsRegular() {
+			result = p.render_with_cache()
+		}
+	}
+	ch <- result
+}
+
+func (p *ImagePreview) render_with_cache() render_data {
+	extra_key := p.renderer.CacheKeyExtra(p.abspath)
+	key, target, ans, err := p.disk_cache.GetPathWithTarget(p.abspath, extra_key)
 	if err != nil {
-		ch <- render_data{err: err}
-		return
+		return render_data{err: err}
 	}
 	if len(ans) > 0 {
 		mi := metadata{}
@@ -257,23 +276,33 @@ func (p *ImagePreview) start_rendering(ch chan<- render_data) { // ch, as the UI
 			}
 		}
 		if mi.custom != nil || mi.image != nil {
-			ch <- render_data{cached_data: ans, metadata: mi}
-			return
+			return render_data{cached_data: ans, metadata: mi}
 		}
 	}
-	rdata, metadata, _, err := p.renderer.Render(p.abspath)
+	rdata, mi, _, err := p.renderer.Render(p.path_to_render(target))
 	if err != nil {
-		ch <- render_data{err: err}
-	} else {
-		ans, err = p.disk_cache.AddPath(p.abspath, key, rdata)
-		if err == nil {
-			// Not the decoded image: it is loaded from the cache only when needed, as
-			// otherwise it stays in memory for as long as this preview does
-			ch <- render_data{cached_data: ans, metadata: metadata}
-		} else {
-			ch <- render_data{err: err}
-		}
+		return render_data{err: err}
 	}
+	ans, err = p.disk_cache.AddPath(p.abspath, extra_key, key, rdata)
+	if err != nil {
+		return render_data{err: err}
+	}
+	// Load the decoded image only when this preview is displayed.
+	return render_data{cached_data: ans, metadata: mi}
+}
+
+// path_to_render returns the path to pass to the renderer. This is target,
+// the file the cache key describes, so that retargeting a symlink while
+// rendering cannot store the preview of one file under the key of another.
+// Renderers may detect the file format from its extension, so the selected
+// path is used if target has a different extension. When the selected path is
+// used, AddPath() detects changes instead, except for a symlink retargeted and
+// then restored while rendering.
+func (p *ImagePreview) path_to_render(target string) string {
+	if p.renderer.NeedsSelectedPath() || !strings.EqualFold(filepath.Ext(target), filepath.Ext(p.abspath)) {
+		return p.abspath
+	}
+	return target
 }
 
 type ImagePreviewRenderer uint
@@ -300,6 +329,8 @@ func (p ImagePreviewRenderer) Render(abspath string) (ans map[string][]byte, m m
 }
 
 func (p ImagePreviewRenderer) Unmarshall(map[string]string) (any, error) { return nil, nil }
+func (p ImagePreviewRenderer) CacheKeyExtra(string) string               { return "" }
+func (p ImagePreviewRenderer) NeedsSelectedPath() bool                   { return false }
 
 func (p ImagePreviewRenderer) ShowMetadata(h *Handler, s ShowData) int {
 	offset := 0

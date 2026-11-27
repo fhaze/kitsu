@@ -58,6 +58,28 @@ class TestConfParsing(BaseTest):
     def test_font_size_clamping(self):
         font_size_clamping(self)
 
+    def test_patch_global_special_colors(self):
+        from kitty.fast_data_types import patch_global_colors
+
+        self.set_options()
+        try:
+            for name, value in (
+                ('wayland_titlebar_color', 0x80000002),
+                ('scrollbar_handle_color', 0xFF000002),
+                ('scrollbar_track_color', 0xFFFFFF02),
+                ('macos_titlebar_color', -1),
+                ('macos_titlebar_color', -2),
+            ):
+                with self.subTest(name=name, value=value):
+                    patch_global_colors({name: value}, False)
+            # These options are decoded as unsigned, so negative values must be
+            # rejected on all platforms, not silently stored.
+            for name in ('wayland_titlebar_color', 'scrollbar_handle_color', 'scrollbar_track_color'):
+                with self.subTest(name=name, value=-1), self.assertRaises(OverflowError):
+                    patch_global_colors({name: -1}, False)
+        finally:
+            self.set_options()
+
     def test_session_launch_option_expansion(self) -> None:
         from kitty.launch import LaunchSpec
         from kitty.options.types import defaults
@@ -367,8 +389,15 @@ def launcher(self):
     t('+open -1 --help', argv=['+open', '-1', '--help'])
     si('+open -1 moose', argv=[kexe, '+open', '-1', 'moose'], open_urls=['moose'])
     si('+open -1 --instance-group=g x y', instance_group='g', open_urls=['x', 'y'])
-    dt('--detach --session=moose --detached-log=xyz', detached_log='xyz', session='moose')
+    dt(
+        '--detach --session=moose --detached-log=xyz',
+        detached_log='xyz',
+        session='moose',
+        detach_exec_argv=[kexe, '--detach', '--session=moose', '--detached-log=xyz'],
+    )
     pn('+kitten panel -1 --edge=left', edge='left')
+    dt('+kitten panel --detach --edge=top', detach_exec_argv=[kexe, '+kitten', 'panel', '--detach', '--edge=top'])
+    dt('+ kitten panel --detach', detach_exec_argv=[kexe, '+', 'kitten', 'panel', '--detach'])
 
     if is_macos:
         with tempfile.TemporaryDirectory() as tdir:
@@ -511,6 +540,11 @@ def conf_parsing(self):
     ka = ac()
     self.ae(ka.func, 'change_font_size')
     self.ae(ka.args, (False, '+', 2.0))
+
+    opts = p('clear_all_shortcuts y', 'map f1 clear_bell_indicators')
+    self.ae((ac().func, ac().args), ('clear_bell_indicators', ()))
+    opts = p('clear_all_shortcuts y', 'map f1 clear_bell_indicators state:parent_active and not id:1')
+    self.ae((ac().func, ac().args), ('clear_bell_indicators', ('state:parent_active and not id:1',)))
 
     opts = p('clear_all_shortcuts y', 'action_alias la launch --moo', 'map f1 combine : new_window : la ')
     self.ae((ac().func, ac(1).func), ('new_window', 'launch'))

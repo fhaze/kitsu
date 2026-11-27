@@ -135,15 +135,19 @@ func CreateExclusiveAt(dirFile *os.File, name string, permissions os.FileMode) (
 
 // Create the specified directory, open it and return the file object. If the
 // directory already exists, it is opened and returned, without changing its
-// permissions, matching the behavior of CreateAt().
+// permissions. Never follow a symlink in the final component.
 func CreateDirAt(parent *os.File, name string, permissions os.FileMode) (*os.File, error) {
-	if err := MkdirAt(parent, name, permissions); err != nil {
-		if errors.Is(err, unix.EEXIST) {
-			return OpenDirAt(parent, name)
-		}
+	if err := MkdirAt(parent, name, permissions); err != nil && !errors.Is(err, unix.EEXIST) {
 		return nil, err
 	}
-	return OpenDirAt(parent, name)
+	return openAt(parent, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+}
+
+func CreateExclusiveDirAt(parent *os.File, name string, permissions os.FileMode) (*os.File, error) {
+	if err := MkdirAt(parent, name, permissions); err != nil {
+		return nil, err
+	}
+	return openAt(parent, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
 }
 
 // Internal helper to wrap the unix.Openat syscall

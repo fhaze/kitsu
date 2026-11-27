@@ -14,15 +14,6 @@ import (
 
 var _ = fmt.Print
 
-func absolutize_path(path string) string {
-	path = utils.Expanduser(path)
-	q, err := filepath.Abs(path)
-	if err == nil {
-		path = q
-	}
-	return path
-}
-
 type FileEntry struct {
 	Name, CompletionCandidate, Abspath string
 	Mode                               os.FileMode
@@ -36,8 +27,15 @@ func CompleteFiles(prefix string, callback func(*FileEntry), cwd string) error {
 		if err != nil {
 			return err
 		}
+	} else {
+		// cwd may be relative, for example, when the config directory comes from a relative XDG_CONFIG_HOME
+		cwd = utils.Abspath(utils.Expanduser(cwd))
 	}
-	location := absolutize_path(prefix)
+	// relative prefixes are resolved against cwd, not the process working directory
+	location := utils.Expanduser(prefix)
+	if !filepath.IsAbs(location) {
+		location = filepath.Join(cwd, location)
+	}
 	// Completions use the separator the user typed. Windows accepts both, so
 	// only use the backslash when the prefix itself uses it exclusively.
 	sep := "/"
@@ -48,10 +46,10 @@ func CompleteFiles(prefix string, callback func(*FileEntry), cwd string) error {
 	joinable_prefix := ""
 	switch prefix {
 	case ".":
-		base_dir = "."
+		base_dir = cwd
 		joinable_prefix = ""
 	case "./":
-		base_dir = "."
+		base_dir = cwd
 		joinable_prefix = "./"
 	case "/":
 		base_dir = "/"
@@ -76,9 +74,6 @@ func CompleteFiles(prefix string, callback func(*FileEntry), cwd string) error {
 	}
 	if base_dir == "" {
 		base_dir = cwd
-	}
-	if !strings.HasPrefix(base_dir, "~") && !filepath.IsAbs(base_dir) {
-		base_dir = filepath.Join(cwd, base_dir)
 	}
 	// fmt.Printf("prefix=%#v base_dir=%#v joinable_prefix=%#v\n", prefix, base_dir, joinable_prefix)
 	entries, err := os.ReadDir(base_dir)

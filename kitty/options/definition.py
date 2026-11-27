@@ -1602,6 +1602,8 @@ if unspecified is to use :code:`ease-in-out` which fades slowly at the start, mi
 You can specify different easing functions for the fade-in and fade-out parts, like this:
 :code:`2.0 ease-in linear`. kitty
 supports all the :link:`CSS easing functions <https://developer.mozilla.org/en-US/docs/Web/CSS/easing-function>`.
+For different effects, such as shaking the screen on a bell, you can instead use :opt:`custom_shaders`, for example,
+:code:`custom_shaders screen-shake`.
 """,
 )
 
@@ -1636,6 +1638,8 @@ Some text or a Unicode symbol to show on the tab if a window in the tab that
 does not have focus has a bell. If you want to use leading or trailing
 spaces, surround the text with quotes. See :opt:`tab_title_template` for how
 this is rendered.
+The bell indicator is cleared when the window is focused or by
+the :ac:`clear_bell_indicators` action.
 
 For backwards compatibility, values of :code:`yes`, :code:`y` and :code:`true`
 are converted to the default bell symbol and :code:`no`, :code:`n`,
@@ -1687,9 +1691,7 @@ opt(
     long_text="""
 The XDG Sound Theme kitty will use to play the bell sound.
 On Wayland, when the compositor supports it, it is asked to play the system default
-bell sound, and this setting has no effect. Note that Hyprland claims to support this
-protocol, but :link:`does not actually play a sound <https://github.com/hyprwm/Hyprland/issues/10488>`.
-This setting defaults to the custom theme name specified in the
+bell sound, and this setting has no effect. This setting defaults to the custom theme name specified in the
 :link:`XDG Sound theme specification <https://specifications.freedesktop.org/sound-theme-spec/latest/sound_lookup.html>,
 falling back to the default freedesktop theme if it does not exist.
 To change your sound theme desktop wide, create :file:`~/.local/share/sounds/__custom/index.theme` with the contents:
@@ -1851,10 +1853,11 @@ opt(
     option_type='optional_edge_width',
     long_text="""
 The window margin to use when only a single window is visible (in pts). Negative
-values will cause the value of :opt:`window_margin_width` to be used instead. A
-single value sets all four sides. Two values set the vertical and horizontal
-sides. Three values set top, horizontal and bottom. Four values set top, right,
-bottom and left.
+values will cause the value of :opt:`window_margin_width` to be used instead.
+A tab that has docks, including the docks of its OS window, never counts as
+showing a single window, see :ref:`docks`. A single value sets all four sides.
+Two values set the vertical and horizontal sides. Three values set top,
+horizontal and bottom. Four values set top, right, bottom and left.
 """,
 )
 
@@ -1890,10 +1893,11 @@ opt(
     option_type='optional_edge_width',
     long_text="""
 The window padding to use when only a single window is visible (in pts). Negative
-values will cause the value of :opt:`window_padding_width` to be used instead. A
-single value sets all four sides. Two values set the vertical and horizontal
-sides. Three values set top, horizontal and bottom. Four values set top, right,
-bottom and left.
+values will cause the value of :opt:`window_padding_width` to be used instead.
+A tab that has docks, including the docks of its OS window, never counts as
+showing a single window, see :ref:`docks`. A single value sets all four sides.
+Two values set the vertical and horizontal sides. Three values set top,
+horizontal and bottom. Four values set top, right, bottom and left.
 """,
 )
 
@@ -2161,7 +2165,12 @@ opt(
 A template to render the window title bar text. Uses the same template syntax as
 :opt:`tab_title_template`. Available variables include: :code:`{title}`,
 :code:`{bell_symbol}`, :code:`{activity_symbol}`, :code:`{progress_percent}`,
-:code:`{custom}`, :code:`{fmt}`, :code:`{is_active}`.
+:code:`{custom}`, :code:`{fmt}`, :code:`{is_active}` and :code:`{window}`, which is the window id and has
+the fields :code:`{window.id}`, :code:`{window.wd}` (working directory of the foreground process
+on the local machine), :code:`{window.columns}` and :code:`{window.lines}`. Note that, as with
+the tab bar, the title bar is only redrawn when something changes, such as the window title or
+the working directory being reported by :ref:`shell_integration`, so :code:`{window.wd}` does not
+follow a change of directory that is not accompanied by one of these.
 You can also provide a custom :code:`draw_window_title(data)` function in
 :file:`window_title_bar.py` in the kitty config directory, exposed as :code:`{custom}`.
 """,
@@ -2929,6 +2938,8 @@ whatever shell is set as the default shell for the current user. Note that on
 macOS if you change this, you might need to add :code:`--login` and
 :code:`--interactive` to ensure that the shell starts in interactive mode and
 reads its startup rc files. Environment variables are expanded in this setting.
+To run every program in new windows, not just the shell, via a wrapper, such as
+inside a container, see :ref:`launch_wrapper`.
 """,
 )
 

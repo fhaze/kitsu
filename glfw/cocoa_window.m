@@ -923,6 +923,7 @@ static void flush_focus_loss_text(_GLFWwindow *window);
 - (void)removeGLFWWindow;
 - (instancetype)initWithGlfwWindow:(_GLFWwindow *)initWindow;
 - (GLFWDraggingSource *)draggingSource;
+- (void)setPreEditCursorInEvent:(GLFWkeyevent *)ev;
 @end
 
 @implementation GLFWContentView
@@ -1229,6 +1230,7 @@ is_ascii_control_char(char x) {
 #define UPDATE_PRE_EDIT_TEXT                               \
     glfw_keyevent.text = [[markedText string] UTF8String]; \
     glfw_keyevent.ime_state = GLFW_IME_PREEDIT_CHANGED;    \
+    [self setPreEditCursorInEvent:&glfw_keyevent];         \
     _glfwInputKeyboard(window, &glfw_keyevent);
 
     const bool previous_has_marked_text = [self hasMarkedText];
@@ -2101,8 +2103,23 @@ glfwCocoaPreserveDroppedFilePromises(GLFWwindow *w) {
     if (!in_key_handler || in_key_handler == 2) {
         debug_input("Updating IME text in kitty from setMarkedText called from %s: %s\n", in_key_handler ? "flagsChanged" : "event loop", _glfw.ns.text);
         GLFWkeyevent glfw_keyevent = {.text = [[markedText string] UTF8String], .ime_state = GLFW_IME_PREEDIT_CHANGED};
+        [self setPreEditCursorInEvent:&glfw_keyevent];
         _glfwInputKeyboard(window, &glfw_keyevent);
         _glfw.ns.text[0] = 0;
+    }
+}
+
+- (void)setPreEditCursorInEvent:(GLFWkeyevent *)ev {
+    // The selection reported by the input method in setMarkedText: is in UTF-16
+    // code units relative to the pre-edit text, convert its start to unicode code points
+    NSString *marked = [markedText string];
+    const NSUInteger marked_len = [marked length], loc = markedTextSelectedRange.location;
+    ev->has_ime_cursor = false;
+    ev->ime_cursor = 0;
+    if (loc == NSNotFound || loc > marked_len) return;
+    ev->has_ime_cursor = true;
+    for (NSUInteger i = 0; i < loc; i++) {
+        if (!CFStringIsSurrogateLowCharacter([marked characterAtIndex:i])) ev->ime_cursor++;
     }
 }
 
@@ -2738,6 +2755,7 @@ _glfwPlatformCreateWindow(
 void
 _glfwPlatformDestroyWindow(_GLFWwindow *window) {
     GLFWWindow *w = window->ns.object;
+    _glfwPlatformSetWindowAttention(window, false);
     if (_glfw.ns.disabledCursorWindow == window) _glfw.ns.disabledCursorWindow = NULL;
     free_drop_data(window);
     if (window->ns.notch_cover_window) {
@@ -3268,8 +3286,10 @@ _glfwPlatformHideWindow(_GLFWwindow *window) {
 }
 
 void
-_glfwPlatformRequestWindowAttention(_GLFWwindow *window UNUSED) {
-    [NSApp requestUserAttention:NSInformationalRequest];
+_glfwPlatformSetWindowAttention(_GLFWwindow *window, bool requested) {
+    if (window->ns.attention_requested) [NSApp cancelUserAttentionRequest:window->ns.attention_request_id];
+    window->ns.attention_requested = requested && ![NSApp isActive];
+    if (window->ns.attention_requested) window->ns.attention_request_id = [NSApp requestUserAttention:NSInformationalRequest];
 }
 
 int

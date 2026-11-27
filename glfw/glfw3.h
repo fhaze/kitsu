@@ -1388,6 +1388,11 @@ typedef struct GLFWkeyevent {
 
     // Original Windows KEY_EVENT_RECORD fields, before VT keyboard normalization.
     uint32_t win32_vk, win32_char, win32_control_state;
+
+    // For GLFW_IME_PREEDIT_CHANGED events: when has_ime_cursor is true, ime_cursor is the
+    // position of the cursor inside the pre-edit text, in unicode code points.
+    bool has_ime_cursor;
+    uint32_t ime_cursor;
 } GLFWkeyevent;
 
 typedef enum { GLFW_LAYER_SHELL_NONE, GLFW_LAYER_SHELL_BACKGROUND, GLFW_LAYER_SHELL_PANEL, GLFW_LAYER_SHELL_TOP, GLFW_LAYER_SHELL_OVERLAY } GLFWLayerShellType;
@@ -3902,6 +3907,12 @@ GLFWAPI void glfwFocusWindow(GLFWwindow *window);
  *  @ingroup window
  */
 GLFWAPI void glfwRequestWindowAttention(GLFWwindow *window);
+
+/*! @brief Cancels the attention request for the specified window.
+ *
+ *  Does nothing on Wayland, where attention requests cannot be withdrawn.
+ */
+GLFWAPI void glfwCancelWindowAttention(GLFWwindow *window);
 
 /*! @brief Sounds an audible bell associated with the window
  *
