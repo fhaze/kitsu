@@ -462,7 +462,7 @@ class ProcessDesc(TypedDict):
 
 def _as_in_cmdline(args: Sequence[str]) -> tuple[str, ...]:
     # cmdline_of_pid() drops empty arguments on Linux
-    return tuple(args) if is_macos else tuple(filter(None, args))
+    return tuple(args) if is_macos or is_windows else tuple(filter(None, args))
 
 
 def _is_program(arg0: str, name: str) -> bool:

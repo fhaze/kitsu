@@ -720,7 +720,7 @@ class LaunchWrapperTest(BaseTest):
     def test_wrapper_matches_cmdline(self):
         def cmdline(*args):
             # cmdline_of_pid() drops empty arguments on Linux
-            return args if is_macos else tuple(filter(None, args))
+            return args if is_macos or is_windows else tuple(filter(None, args))
 
         w = KittyWrapper(('wrapper', '-x'), True, ('-x', 'prog', 'arg'))
         for yes in (
