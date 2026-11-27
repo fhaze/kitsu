@@ -558,6 +558,23 @@ time.sleep(300)
         p.terminate()
         p.wait()
         for c in children:
+            if is_windows:
+                import _winapi
+
+                # Windows termination is asynchronous. Wait for the child to
+                # release its working directory before deleting the fixture.
+                try:
+                    handle = _winapi.OpenProcess(0x00100000 | 1, False, c)  # SYNCHRONIZE | PROCESS_TERMINATE
+                except OSError as err:
+                    if err.winerror != 87:  # ERROR_INVALID_PARAMETER: the process already exited
+                        raise
+                    continue
+                try:
+                    _winapi.TerminateProcess(handle, 1)
+                    self.ae(_winapi.WaitForSingleObject(handle, 10000), _winapi.WAIT_OBJECT_0)
+                finally:
+                    _winapi.CloseHandle(handle)
+                continue
             try:
                 os.kill(c, 15)
             except ProcessLookupError:
@@ -959,7 +976,7 @@ read -r _
         self.ae(c.kitty_wrappers, (KittyWrapper(('/bin/wrapper', '-x'), True, ('-x', '/bin/prog', 'arg')),))
         ctx = self.contexts[-1]
         self.ae(ctx.argv, ('/bin/prog', 'arg'))
-        self.ae(ctx.cwd, '/')
+        self.ae(ctx.cwd, os.path.abspath('/'))
         self.ae(ctx.window_id, 7)
         self.ae(ctx.launch_type, 'tab')
         self.ae(ctx.source_window_id, None)
@@ -1072,16 +1089,20 @@ read -r _
         req = LaunchRequest('tab')
         with tempfile.TemporaryDirectory() as tdir:
             on_path, off_path, alt_path = os.path.join(tdir, 'on'), os.path.join(tdir, 'off'), os.path.join(tdir, 'alt')
+            suffix = '.EXE' if is_windows else ''
             for d, name in ((on_path, 'kitty-test-prog'), (off_path, 'kitty-test-other'), (alt_path, 'kitty-test-prog')):
                 os.makedirs(d, exist_ok=True)
-                exe = os.path.join(d, name)
+                exe = os.path.join(d, name + suffix)
                 with open(exe, 'w') as f:
                     f.write('#!/bin/sh\n')
                 os.chmod(exe, 0o755)
             path = os.pathsep.join((on_path, os.environ.get('PATH', os.defpath)))
             self.set_options({'shell_integration': frozenset({'disabled'}), 'exe_search_path': {off_path: off_path}})
-            prog, other = os.path.join(on_path, 'kitty-test-prog'), os.path.join(off_path, 'kitty-test-other')
-            with patch.dict(os.environ, {'PATH': path}):
+            prog, other = os.path.join(on_path, 'kitty-test-prog' + suffix), os.path.join(off_path, 'kitty-test-other' + suffix)
+            test_env = {'PATH': path}
+            if is_windows:
+                test_env['PATHEXT'] = suffix
+            with patch.dict(os.environ, test_env):
                 wrapper = self._recording(['/bin/wrapper'])
                 # Found in PATH, kept as requested
                 c, exe, argv = self._fork(argv=('kitty-test-prog', 'arg'), launch_request=req, user_func=wrapper)
@@ -1123,8 +1144,8 @@ read -r _
                     self.assertFalse(self.contexts[-1].is_default_shell)
                 # The shell is recognized when it is found via a different
                 # path to the same file
-                link = os.path.join(tdir, 'kitty-test-link')
-                os.symlink(prog, link)
+                link = os.path.join(tdir, 'kitty-test-link' + suffix)
+                (os.link if is_windows else os.symlink)(prog, link)
                 self.set_options({'shell_integration': frozenset({'disabled'}), 'shell': link})
                 with patch.object(child_module, 'shell_path', link):
                     c, exe, argv = self._fork(argv=('kitty-test-prog',), launch_request=req, user_func=wrapper)
