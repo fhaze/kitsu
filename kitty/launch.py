@@ -766,9 +766,10 @@ def _launch(
     use_launch_wrapper: bool = True,
 ) -> Window | None:
     source_window = boss.active_window_for_cwd
+    wrapper_source_window = boss.active_window
     if opts.source_window:
         for qw in boss.match_windows(opts.source_window, rc_from_window):
-            source_window = qw
+            source_window = wrapper_source_window = qw
             break
     source_child = source_window.child if source_window else None
     next_to = boss.active_window
@@ -983,7 +984,11 @@ def _launch(
             tm.host_os_window_docks_in(tab)
             kw['os_window_dock'] = True
         watchers = load_watch_modules(opts.watcher)
-        launch_request = LaunchRequest(opts.type, source_window.id if source_window else None, tuple(parse_var(opts.var))) if use_launch_wrapper else None
+        if kw['cwd_from'] is not None:
+            wrapper_source_window = source_window
+        launch_request = LaunchRequest(
+            opts.type, wrapper_source_window.id if wrapper_source_window else None, tuple(parse_var(opts.var)),
+        ) if use_launch_wrapper else None
         with Window.set_ignore_focus_changes_for_new_windows(opts.keep_focus):
             new_window: Window = tab.new_window(
                 env=env or None,

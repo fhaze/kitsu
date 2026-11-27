@@ -12,7 +12,7 @@ import unittest
 from contextlib import suppress
 from select import select
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from kitty.child import (
     Child,
@@ -773,6 +773,25 @@ class LaunchWrapperTest(BaseTest):
         ):
             self.assertFalse(w.runs_command(no), no)
         self.assertFalse(KittyWrapper(('wrapper', '-x'), True).runs_command(('prog', 'arg')))
+
+    def test_launch_wrapper_source_window(self):
+        from kitty.launch import launch, parse_launch_args
+        from kitty.launch_wrapper import user_launch_request
+
+        pane = SimpleNamespace(id=1, child=None, effective_session_name='')
+        overlay = SimpleNamespace(id=2)
+        boss = SimpleNamespace(active_window=overlay, active_window_for_cwd=pane)
+        tab = MagicMock()
+        tab.active_window = pane
+        tab.new_window.return_value.creation_spec = None
+
+        with patch('kitty.launch_wrapper.get_boss', return_value=boss):
+            self.ae(user_launch_request('window').source_window_id, overlay.id)
+
+        for args, expected in (([], overlay.id), (['--cwd=current'], pane.id)):
+            opts, cmd = parse_launch_args(args)
+            launch(boss, opts, cmd, target_tab=tab, force_target_tab=True)
+            self.ae(tab.new_window.call_args.kwargs['launch_request'].source_window_id, expected)
 
     def _read_line(self, p: subprocess.Popen) -> str:
         self.assertTrue(select([p.stdout], [], [], 5)[0], 'Timed out waiting for output')

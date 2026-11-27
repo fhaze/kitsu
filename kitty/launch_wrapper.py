@@ -213,5 +213,5 @@ def user_launch_request(launch_type: str, cwd_from: 'CwdRequest | None' = None) 
     if cwd_from:
         return LaunchRequest(launch_type, cwd_from.window_id)
     boss = get_boss()
-    w = None if boss is None else boss.active_window_for_cwd
+    w = None if boss is None else boss.active_window
     return LaunchRequest(launch_type, None if w is None else w.id)
