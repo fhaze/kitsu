@@ -33,11 +33,15 @@ func CompleteFiles(prefix string, callback func(*FileEntry), cwd string) error {
 	}
 	// relative prefixes are resolved against cwd, not the process working directory
 	location := utils.Expanduser(prefix)
+	volume := filepath.VolumeName(location)
 	if !filepath.IsAbs(location) {
 		switch {
-		case filepath.VolumeName(location) != "":
-			// Windows resolves drive-relative paths against that drive's current directory.
-			location = utils.Abspath(location)
+		case volume != "":
+			if strings.EqualFold(volume, filepath.VolumeName(cwd)) {
+				location = filepath.Join(cwd, location[len(volume):])
+			} else {
+				location = utils.Abspath(location)
+			}
 		case len(location) > 0 && os.IsPathSeparator(location[0]):
 			location = filepath.VolumeName(cwd) + location
 		default:
@@ -69,13 +73,17 @@ func CompleteFiles(prefix string, callback func(*FileEntry), cwd string) error {
 		base_dir = cwd
 		joinable_prefix = ""
 	default:
-		if strings.HasSuffix(prefix, sep) {
+		idx := strings.LastIndexFunc(prefix, func(c rune) bool { return c == '/' || (utils.Sep != "/" && c == '\\') })
+		if idx == len(prefix)-1 || prefix == volume {
 			base_dir = location
 			joinable_prefix = prefix
+		} else if idx > -1 {
+			joinable_prefix = prefix[:idx+1]
+			base_dir = filepath.Dir(location)
 		} else {
-			idx := strings.LastIndex(prefix, sep)
-			if idx > -1 {
-				joinable_prefix = prefix[:idx+1]
+			// Drive-relative paths can have an incomplete filename immediately after the colon.
+			if volume != "" && strings.HasPrefix(prefix, volume) {
+				joinable_prefix = volume
 				base_dir = filepath.Dir(location)
 			}
 		}
