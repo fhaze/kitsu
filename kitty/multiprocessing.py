@@ -53,20 +53,6 @@ def unmonkey_patch_multiprocessing() -> None:
     spawn.get_command_line = orig_get_command_line
 
 
-def get_process_pool_executor(
-    prefer_fork: bool = False, max_workers: int | None = None, initializer: Callable[..., None] | None = None, initargs: tuple[Any, ...] = ()
-) -> ProcessPoolExecutor:
-    if prefer_fork and 'fork' in get_all_start_methods():
-        ctx: context.DefaultContext | context.ForkContext = get_context('fork')
-    else:
-        monkey_patch_multiprocessing()
-        ctx = get_context()
-    try:
-        return ProcessPoolExecutor(max_workers=max_workers, initializer=initializer, initargs=initargs, mp_context=ctx)
-    except TypeError:
-        return ProcessPoolExecutor(max_workers=max_workers, initializer=initializer, initargs=initargs)
-
-
 def test_spawn() -> None:
     monkey_patch_multiprocessing()
     import shutil

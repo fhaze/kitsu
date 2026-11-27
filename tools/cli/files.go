@@ -14,19 +14,26 @@ import (
 
 var _ = fmt.Print
 
-func absolutize_path(path string) string {
-	path = utils.Expanduser(path)
-	q, err := filepath.Abs(path)
-	if err == nil {
-		path = q
-	}
-	return path
-}
-
 type FileEntry struct {
 	Name, CompletionCandidate, Abspath string
 	Mode                               os.FileMode
 	IsDir, IsSymlink, IsEmptyDir       bool
+}
+
+func split_completion_prefix(prefix, sep string) (directory, joinable_prefix string) {
+	switch prefix {
+	case ".":
+		return "", ""
+	case "~":
+		return "~", "~" + sep
+	}
+	directory, _ = filepath.Split(prefix)
+	joinable_prefix = directory
+	if directory == prefix && filepath.IsAbs(directory) && len(filepath.VolumeName(directory)) == len(directory) {
+		// UNC share names are absolute volumes and need a separator before their entries.
+		joinable_prefix += sep
+	}
+	return
 }
 
 func CompleteFiles(prefix string, callback func(*FileEntry), cwd string) error {
@@ -36,50 +43,35 @@ func CompleteFiles(prefix string, callback func(*FileEntry), cwd string) error {
 		if err != nil {
 			return err
 		}
+	} else {
+		// cwd may be relative, for example, when the config directory comes from a relative XDG_CONFIG_HOME
+		cwd = utils.Abspath(utils.Expanduser(cwd))
 	}
-	location := absolutize_path(prefix)
 	// Completions use the separator the user typed. Windows accepts both, so
 	// only use the backslash when the prefix itself uses it exclusively.
 	sep := "/"
 	if utils.Sep != "/" && strings.Contains(prefix, utils.Sep) && !strings.Contains(prefix, "/") {
 		sep = utils.Sep
 	}
-	base_dir := ""
-	joinable_prefix := ""
-	switch prefix {
-	case ".":
-		base_dir = "."
-		joinable_prefix = ""
-	case "./":
-		base_dir = "."
-		joinable_prefix = "./"
-	case "/":
-		base_dir = "/"
-		joinable_prefix = "/"
-	case "~":
-		base_dir = location
-		joinable_prefix = "~/"
-	case "":
-		base_dir = cwd
-		joinable_prefix = ""
-	default:
-		if strings.HasSuffix(prefix, sep) {
-			base_dir = location
-			joinable_prefix = prefix
-		} else {
-			idx := strings.LastIndex(prefix, sep)
-			if idx > -1 {
-				joinable_prefix = prefix[:idx+1]
-				base_dir = filepath.Dir(location)
+	directory, joinable_prefix := split_completion_prefix(prefix, sep)
+	// Resolve only the directory so a trailing dot stays part of the filename filter.
+	base_dir := utils.Expanduser(directory)
+	volume := filepath.VolumeName(base_dir)
+	if !filepath.IsAbs(base_dir) {
+		switch {
+		case volume != "":
+			if strings.EqualFold(volume, filepath.VolumeName(cwd)) {
+				base_dir = filepath.Join(cwd, base_dir[len(volume):])
+			} else {
+				base_dir = utils.Abspath(base_dir)
 			}
+		case len(base_dir) > 0 && os.IsPathSeparator(base_dir[0]):
+			base_dir = filepath.VolumeName(cwd) + base_dir
+		default:
+			base_dir = filepath.Join(cwd, base_dir)
 		}
 	}
-	if base_dir == "" {
-		base_dir = cwd
-	}
-	if !strings.HasPrefix(base_dir, "~") && !filepath.IsAbs(base_dir) {
-		base_dir = filepath.Join(cwd, base_dir)
-	}
+	base_dir = filepath.Clean(base_dir)
 	// fmt.Printf("prefix=%#v base_dir=%#v joinable_prefix=%#v\n", prefix, base_dir, joinable_prefix)
 	entries, err := os.ReadDir(base_dir)
 	if err != nil {

@@ -3,6 +3,7 @@
 package dnd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -1227,6 +1228,37 @@ func TestUniqifyChildNamesNormalization(t *testing.T) {
 	}
 }
 
+func TestUniqifyChildNamesCaseSensitive(t *testing.T) {
+	got := uniqify_child_names([]string{"x", "X", "x", "x"}, true)
+	want := []string{"x", "X", fmt.Sprintf(case_conflict_template, 1, "x"), fmt.Sprintf(case_conflict_template, 2, "x")}
+	if !equalStringSlices(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// A remote directory entry must never be created through a symlink staged
+// earlier by the remote source under the same name.
+func TestRemoteDirDoesNotFollowStagedSymlink(t *testing.T) {
+	staging, outside := t.TempDir(), t.TempDir()
+	h := new_dir_handle(openDir(t, staging))
+	defer h.unref()
+	buf := make([]byte, 4096)
+	link := &remote_dir_entry{base_dir: h.newref(), name: "x", item_type: 1, dest: &bufferWriteCloser{bytes.NewBufferString(outside)}}
+	if err := link.add_remote_data(nil, buf, false, true); err != nil {
+		t.Fatalf("staging symlink: %v", err)
+	}
+	dir := &remote_dir_entry{base_dir: h.newref(), name: "x", item_type: 2, dest: &bufferWriteCloser{bytes.NewBufferString("pwned")}}
+	if err := dir.add_remote_data(nil, buf, false, true); err == nil {
+		t.Fatal("creating a directory over a staged symlink unexpectedly succeeded")
+	}
+	if len(dir.children) != 0 {
+		t.Errorf("directory entry got children: %d", len(dir.children))
+	}
+	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 0 {
+		t.Errorf("outside directory was modified: %v %v", entries, err)
+	}
+}
+
 // TestRenameContents_SimpleFiles verifies that plain files are moved from src
 // to dst.
 func TestRenameContents_SimpleFiles(t *testing.T) {
@@ -1418,7 +1450,7 @@ func equalStringSlices(a, b []string) bool {
 	return true
 }
 
-// TestSetupBaseDirDetectsNameAliases verifies that setup_base_dir detects
+// TestSetupBaseDirDetectsNameAliases verifies that ensure_base_tempdir detects
 // whether the filesystem treats names differing in case or Unicode
 // normalization as aliases and leaves no probe files behind.
 func TestSetupBaseDirDetectsNameAliases(t *testing.T) {
@@ -1436,6 +1468,12 @@ func TestSetupBaseDirDetectsNameAliases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if d.base_tempdir != nil {
+		t.Fatal("base temporary directory created before it was needed")
+	}
+	if err = d.ensure_base_tempdir(); err != nil {
+		t.Fatal(err)
+	}
 	if d.is_case_sensitive_filesystem != want {
 		t.Errorf("is_case_sensitive_filesystem: got %v, want %v", d.is_case_sensitive_filesystem, want)
 	}
@@ -1445,5 +1483,33 @@ func TestSetupBaseDirDetectsNameAliases(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("probe files left in the base temporary directory: %v", entries)
+	}
+}
+
+// TestSetupBaseDirInUnwritableDir verifies that the kitten can start in a
+// directory that is not writable, failing only if a drop is attempted.
+func TestSetupBaseDirInUnwritableDir(t *testing.T) {
+	dest := t.TempDir()
+	if err := os.Chmod(dest, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dest, 0o700) })
+	if f, err := os.Create(filepath.Join(dest, "probe")); err == nil {
+		f.Close()
+		t.Skip("directory permissions are not enforced, probably running as root")
+	}
+	d := &dnd{}
+	if err := d.setup_base_dir(dest); err != nil {
+		t.Fatalf("setup_base_dir failed for unwritable directory: %v", err)
+	}
+	defer d.drop_output_dir.Close()
+	if d.base_tempdir != nil {
+		t.Fatal("base temporary directory created eagerly")
+	}
+	if _, err := d.new_tdir(); err == nil {
+		t.Fatal("creating a staging directory in an unwritable directory unexpectedly succeeded")
+	}
+	if err := d.remove_tdir(); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -2046,8 +2046,12 @@ flashWindow(_GLFWwindow *window) {
 }
 
 void
-_glfwPlatformRequestWindowAttention(_GLFWwindow *window) {
-    flashWindow(window);
+_glfwPlatformSetWindowAttention(_GLFWwindow *window, bool attention) {
+    if (attention) flashWindow(window);
+    else {
+        FLASHWINFO fi = {.cbSize = sizeof(fi), .hwnd = window->win32.handle, .dwFlags = FLASHW_STOP};
+        FlashWindowEx(&fi);
+    }
 }
 
 void

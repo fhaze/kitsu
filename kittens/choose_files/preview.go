@@ -67,11 +67,10 @@ func preview_memory_cost(p Preview) int {
 	return 1024
 }
 
-func NewPreviewManager(err_chan chan error, settings Settings, WakeupMainThread func() bool) (ans *PreviewManager) {
-	defer func() { sanitize = ans.highlighter.Sanitize }()
+func NewPreviewManager(err_chan chan error, settings Settings, WakeupMainThread func() bool) *PreviewManager {
 	return &PreviewManager{
 		report_errors: err_chan, settings: settings, WakeupMainThread: WakeupMainThread,
-		cache: make(map[string]*cached_preview), highlighter: highlight.NewHighlighter(nil),
+		cache: make(map[string]*cached_preview), highlighter: highlight.NewHighlighter(sanitize),
 	}
 }
 
@@ -229,11 +228,9 @@ func (p MessagePreview) Render(h *Handler, x, y, width, height int) {
 
 func NewErrorPreview(err error) Preview {
 	sctx := style.Context{AllowEscapeCodes: true}
-	text := fmt.Sprintf("%s: %s", sctx.SprintFunc("fg=red")("Error"), err)
+	text := fmt.Sprintf("%s: %s", sctx.SprintFunc("fg=red")("Error"), sanitize(err.Error()))
 	return &MessagePreview{msg: text}
 }
-
-var sanitize func(string) string
 
 func write_file_metadata(abspath string, metadata fs.FileInfo, entries []fs.DirEntry) (header string, trailers []string) {
 	buf := strings.Builder{}
@@ -241,15 +238,15 @@ func write_file_metadata(abspath string, metadata fs.FileInfo, entries []fs.DirE
 	add := func(key, val string) { fmt.Fprintf(&buf, "%s: %s\n", key, val) }
 	ftype := metadata.Mode().Type()
 	const file_icon = " "
-	fmt.Fprintln(&buf, filepath.Base(abspath))
+	fmt.Fprintln(&buf, sanitize_name(filepath.Base(abspath)))
 	switch ftype {
 	case 0:
 		add("Size", humanize.Bytes(uint64(metadata.Size())))
 	case fs.ModeSymlink:
 		if tgt, err := os.Readlink(abspath); err == nil {
-			add("Target", sanitize(tgt))
+			add("Target", sanitize_name(tgt))
 		} else {
-			add("Target", err.Error())
+			add("Target", sanitize(err.Error()))
 		}
 	case fs.ModeDir:
 		num_files, num_dirs := 0, 0
@@ -277,7 +274,7 @@ func write_file_metadata(abspath string, metadata fs.FileInfo, entries []fs.DirE
 		slices.SortFunc(names, func(a, b string) int { return strings.Compare(type_map[a].lname, type_map[b].lname) })
 		fmt.Fprintln(&buf, "Contents:")
 		for _, n := range names {
-			trailers = append(trailers, icons.IconForFileWithMode(n, type_map[n].ftype, false)+"  "+sanitize(n))
+			trailers = append(trailers, icons.IconForFileWithMode(n, type_map[n].ftype, false)+"  "+sanitize_name(n))
 		}
 	}
 	return buf.String(), trailers
@@ -294,7 +291,7 @@ func NewDirectoryPreview(abspath string, metadata fs.FileInfo) Preview {
 }
 
 func NewFileMetadataPreview(abspath string, metadata fs.FileInfo) *MessagePreview {
-	ext := filepath.Ext(abspath)
+	ext := sanitize_name(filepath.Ext(abspath))
 	if ext == "" {
 		ext = "File"
 	}
@@ -304,14 +301,14 @@ func NewFileMetadataPreview(abspath string, metadata fs.FileInfo) *MessagePrevie
 }
 
 func NewFileMetadataPreviewWithError(abspath string, metadata fs.FileInfo, err error) *MessagePreview {
-	ext := filepath.Ext(abspath)
+	ext := sanitize_name(filepath.Ext(abspath))
 	if ext == "" {
 		ext = "File"
 	}
 	title := icons.IconForFileWithMode(filepath.Base(abspath), metadata.Mode().Type(), false) + "  " + ext
 	h, t := write_file_metadata(abspath, metadata, nil)
 	ans := &MessagePreview{title: title, msg: h, trailers: t}
-	lines := style.WrapTextAsLines(err.Error(), 30, style.WrapOptions{})
+	lines := style.WrapTextAsLines(sanitize(err.Error()), 30, style.WrapOptions{})
 	ans.trailers = append(ans.trailers, "")
 	ans.trailers = append(ans.trailers, lines...)
 	return ans
@@ -359,7 +356,7 @@ func (p *TextFilePreview) Render(h *Handler, x, y, width, height int) {
 	s := utils.NewLineScanner(text)
 	buf := strings.Builder{}
 	buf.Grow(1024 * height)
-	title := icons.IconForPath(p.path) + "  " + filepath.Base(p.path) + fmt.Sprintf(" %s", humanize.Bytes(uint64(p.metadata.Size())))
+	title := icons.IconForPath(p.path) + "  " + sanitize_name(filepath.Base(p.path)) + fmt.Sprintf(" %s", humanize.Bytes(uint64(p.metadata.Size())))
 	for num := 1 + h.render_wrapped_text_in_region(title, x, y, width, height, true); s.Scan() && num < height; num++ {
 		line := s.Text()
 		truncated := wcswidth.TruncateToVisualLength(line, width)
@@ -383,6 +380,60 @@ func (p MessagePreview) memory_cost() (ans int) {
 	return
 }
 
+// The maximum size of a file that will be read for a text preview
+const MAX_TEXT_FILE_SIZE = 16 * 1024 * 1024
+
+// Read the contents of path, failing if it is not a regular file or if it is
+// larger than max_size bytes. A negative max_size means no limit. The file is
+// opened in non-blocking mode and its type is checked on the opened
+// descriptor, as opening a FIFO can otherwise block indefinitely and the path
+// can be replaced by a special file after any earlier stat() calls.
+func open_regular_file(path string) (*os.File, fs.FileInfo, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|open_nonblock, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	if !info.Mode().IsRegular() {
+		f.Close()
+		return nil, nil, fmt.Errorf("%q is not a regular file", path)
+	}
+	return f, info, nil
+}
+
+func read_regular_file(path string, max_size int64) ([]byte, error) {
+	f, info, err := open_regular_file(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	too_large := func(size int64) error {
+		return fmt.Errorf("%q is too large (%s > %s)", path, humanize.Bytes(uint64(size)), humanize.Bytes(uint64(max_size)))
+	}
+	var r io.Reader = f
+	if max_size > -1 {
+		if info.Size() > max_size {
+			return nil, too_large(info.Size())
+		}
+		// Guard against the file growing after the fstat() above
+		r = io.LimitReader(f, max_size+1)
+	}
+	// Pre-allocate based on the size, with some slack so that a file that is
+	// read completely does not need a final re-allocation to detect EOF.
+	buf := bytes.NewBuffer(make([]byte, 0, max(0, info.Size())+bytes.MinRead))
+	if _, err = buf.ReadFrom(r); err != nil {
+		return nil, err
+	}
+	if max_size > -1 && int64(buf.Len()) > max_size {
+		return nil, too_large(int64(buf.Len()))
+	}
+	return buf.Bytes(), nil
+}
+
 type style_resolver struct {
 	light                   bool
 	light_style, dark_style string
@@ -399,7 +450,7 @@ func (s style_resolver) TextForPath(path string) (string, error) {
 	if s.text != "" {
 		return s.text, nil
 	}
-	ans, err := os.ReadFile(path)
+	ans, err := read_regular_file(path, MAX_TEXT_FILE_SIZE)
 	if err == nil {
 		return utils.UnsafeBytesToString(ans), nil
 	}
@@ -447,6 +498,18 @@ func (pm *PreviewManager) preview_for(abspath string, ftype fs.FileMode) (ans Pr
 		}
 		return NewAsyncPreview(loading_preview(abspath, s), false, pm.WakeupMainThread, func() Preview { return NewDirectoryPreview(abspath, s) })
 	}
+	// Only regular files (or symlinks to them) have previewable contents.
+	// Bail out before any previewer opens the file, as opening special files
+	// such as FIFOs can block or have side effects on other processes.
+	target := s
+	if s.Mode()&fs.ModeSymlink != 0 {
+		if target, err = os.Stat(abspath); err != nil {
+			return NewFileMetadataPreview(abspath, s)
+		}
+	}
+	if !target.Mode().IsRegular() {
+		return NewFileMetadataPreview(abspath, s)
+	}
 	fname := filepath.Base(abspath)
 	mt := utils.GuessMimeType(fname)
 	for _, q := range previewers {
@@ -454,8 +517,7 @@ func (pm *PreviewManager) preview_for(abspath string, ftype fs.FileMode) (ans Pr
 			return NewCmdPreview(abspath, s, pm.settings, pm.WakeupMainThread, q)
 		}
 	}
-	const MAX_TEXT_FILE_SIZE = 16 * 1024 * 1024
-	could_be_text := s.Size() <= MAX_TEXT_FILE_SIZE
+	could_be_text := target.Size() <= MAX_TEXT_FILE_SIZE
 	if could_be_text && (utils.KnownTextualMimes[mt] || strings.HasPrefix(mt, "text/") || (ambiguous_mimes[mt] && looks_like_text(abspath))) {
 		return pm.text_preview(abspath, s)
 	}
@@ -491,7 +553,7 @@ var ambiguous_mimes = map[string]bool{"video/mp2t": true, "video/vnd.dlna.mpeg-t
 
 // Whether the start of the file looks like UTF-8 text, rather than binary data
 func looks_like_text(path string) bool {
-	f, err := os.Open(path)
+	f, _, err := open_regular_file(path)
 	if err != nil {
 		return false
 	}
@@ -524,7 +586,7 @@ func (pm *PreviewManager) text_preview(abspath string, metadata fs.FileInfo) Pre
 	sr := style_resolver{light: use_light_colors, syntax_aliases: pm.settings.SyntaxAliases()}
 	sr.light_style, sr.dark_style = pm.settings.HighlightStyles()
 	return NewAsyncPreview(loading_preview(abspath, metadata), true, pm.WakeupMainThread, func() Preview {
-		data, err := os.ReadFile(abspath)
+		data, err := read_regular_file(abspath, MAX_TEXT_FILE_SIZE)
 		if err != nil {
 			return NewFileMetadataPreview(abspath, metadata)
 		}

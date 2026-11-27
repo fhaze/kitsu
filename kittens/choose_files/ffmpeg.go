@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/kovidgoyal/kitty/tools/utils"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -16,6 +15,7 @@ import (
 	"github.com/hako/durafmt"
 	"github.com/kovidgoyal/imaging/magick"
 	"github.com/kovidgoyal/kitty/tools/icons"
+	"github.com/kovidgoyal/kitty/tools/utils"
 	"github.com/kovidgoyal/kitty/tools/utils/humanize"
 	"github.com/kovidgoyal/kitty/tools/utils/images"
 )
@@ -26,8 +26,7 @@ const FFMPEG_METADATA_KEY = "ffmpeg-metadata.json"
 
 type ffmpeg_renderer int
 
-func ffmpeg_thumbnail(path, tempath string, wg *sync.WaitGroup) (err error) {
-	defer wg.Done()
+func ffmpeg_thumbnail(path, tempath string) (err error) {
 	cmd := ffmpeg_thumbnail_cmd(path, tempath)
 	cmd.Stdin = nil
 	utils.DetachCommand(cmd)
@@ -74,8 +73,7 @@ func ffmpeg_metadata_cmd(path string) *exec.Cmd {
 	)
 }
 
-func ffmpeg_metadata(path string, wg *sync.WaitGroup) (ans FFMpegMetadata, err error) {
-	defer wg.Done()
+func ffmpeg_metadata(path string) (ans FFMpegMetadata, err error) {
 	cmd := ffmpeg_metadata_cmd(path)
 	cmd.Stdin = nil
 	utils.DetachCommand(cmd)
@@ -102,9 +100,8 @@ func (c ffmpeg_renderer) Render(path string) (m map[string][]byte, mi metadata, 
 	defer func() { _ = os.Remove(tempfile.Name()) }()
 	var metadata FFMpegMetadata
 	var metadata_error, thumbnail_error error
-	wg.Add(2)
-	go func() { metadata, metadata_error = ffmpeg_metadata(path, &wg) }()
-	go func() { thumbnail_error = ffmpeg_thumbnail(path, tempfile.Name(), &wg) }()
+	wg.Go(func() { metadata, metadata_error = ffmpeg_metadata(path) })
+	wg.Go(func() { thumbnail_error = ffmpeg_thumbnail(path, tempfile.Name()) })
 	wg.Wait()
 	if metadata_error != nil {
 		return nil, mi, nil, metadata_error
@@ -123,6 +120,13 @@ func (c ffmpeg_renderer) Render(path string) (m map[string][]byte, mi metadata, 
 	mi.custom = &metadata
 	return
 }
+
+// CacheKeyExtra returns the video_preview settings the thumbnail is rendered with.
+func (c ffmpeg_renderer) CacheKeyExtra(string) string {
+	return fmt.Sprintf("%d:%d:%g:%d", video_width, video_fps, video_duration, video_encoding_quality)
+}
+
+func (c ffmpeg_renderer) NeedsSelectedPath() bool { return false }
 
 func (c ffmpeg_renderer) Unmarshall(m map[string]string) (any, error) {
 	data, err := os.ReadFile(m[FFMPEG_METADATA_KEY])
@@ -145,7 +149,7 @@ func (c ffmpeg_renderer) ShowMetadata(h *Handler, s ShowData) (offset int) {
 			offset += h.render_wrapped_text_in_region(text, s.x, s.y+offset, s.width, s.height-offset, center)
 		}
 	}
-	ext := filepath.Ext(s.abspath)
+	ext := sanitize_name(filepath.Ext(s.abspath))
 	text := fmt.Sprintf("%s: %s", ext, humanize.Bytes(uint64(s.metadata.Size())))
 	r := s.custom_metadata.custom.(*FFMpegMetadata)
 	icon := icons.IconForPath(s.abspath)

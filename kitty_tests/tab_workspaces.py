@@ -142,6 +142,27 @@ class TestTabWorkspaces(BaseTest):
         o, _ = parse_launch_args(['--type=tab', '--tab-title=y', '--focus-existing=@title'])
         self.assertIsNone(find_existing(boss, o, None, boss.active_tab_manager))  # type: ignore[arg-type]
 
+    def test_restore_os_window_dock_overlay_in_session_tab(self):
+        old_pane, new_pane, dock = fake_window(1), fake_window(2), fake_window(3)
+        old_tab = FakeTab(1, 'old', (old_pane,))
+        new_tab = FakeTab(2, 'restoring', (new_pane,))
+        manager = SimpleNamespace(active_tab=old_tab, host_os_window_docks_in=Mock())
+        new_tab.tab_manager_ref.return_value = manager
+        old_tab.new_window = Mock()
+        new_tab.new_window = Mock(return_value=dock)
+        boss = FakeBoss([old_tab, new_tab], old_pane)
+
+        def restore(window_type):
+            opts, args = parse_launch_args(['--type=' + window_type])
+            return launch(boss, opts, args, target_tab=new_tab, force_target_tab=True)
+
+        self.assertIs(restore('os-window-dock'), dock)
+        manager.host_os_window_docks_in.assert_called_once_with(new_tab)
+        old_tab.new_window.assert_not_called()
+        new_tab.active_window = dock
+        restore('overlay')
+        self.ae(new_tab.new_window.call_args.kwargs['overlay_for'], dock.id)
+
     def test_detach_window_parse(self):
         self.ae(detach_window_parse('detach_window', 'new-tab'), ('detach_window', ('new-tab',)))
         self.ae(

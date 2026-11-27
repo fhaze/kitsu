@@ -106,6 +106,20 @@ _report_params_with_first(PyObject *dump_callback, id_type window_id, const char
     PyErr_Clear();
 }
 
+static PyObject *
+_decode_hyperlink_field(const char *x) {
+    // OSC 8 fields are raw bytes from the child and may be invalid UTF-8
+    return x ? PyUnicode_DecodeUTF8(x, strlen(x), "replace") : Py_NewRef(Py_None);
+}
+
+static void
+_report_hyperlink(PyObject *dump_callback, id_type window_id, const char *id, const char *url) {
+    RAII_PyObject(pid, _decode_hyperlink_field(id));
+    RAII_PyObject(purl, _decode_hyperlink_field(url));
+    if (pid && purl) Py_XDECREF(PyObject_CallFunction(dump_callback, "KsOO", window_id, "set_active_hyperlink", pid, purl));
+    PyErr_Clear();
+}
+
 
 #define DUMP_UNUSED
 
@@ -165,9 +179,7 @@ _report_params_with_first(PyObject *dump_callback, id_type window_id, const char
     Py_XDECREF(PyObject_CallFunction(self->dump_callback, "KsiO", self->window_id, #name, code, string)); \
     PyErr_Clear();
 
-#define REPORT_HYPERLINK(id, url)                                                                                     \
-    Py_XDECREF(PyObject_CallFunction(self->dump_callback, "Kszz", self->window_id, "set_active_hyperlink", id, url)); \
-    PyErr_Clear();
+#define REPORT_HYPERLINK(id, url) _report_hyperlink(self->dump_callback, self->window_id, id, url)
 
 #else
 #define REPORT_ERROR(...) log_error(ERROR_PREFIX " " __VA_ARGS__);
@@ -589,6 +601,18 @@ dispatch_osc(PS *self, uint8_t *buf, size_t limit, bool is_extended_osc) {
             break;
         case 8: dispatch_hyperlink(self, (char *)buf + i); break;
         case 9:
+            if (limit - i >= 2 && buf[i] == '9' && buf[i + 1] == ';') {
+                // ConEmu cwd reporting: OSC 9;9;path
+                i += 2;
+#ifdef DUMP_COMMANDS
+                START_DISPATCH
+                REPORT_OSC2(process_cwd_notification, code, mv);
+                END_DISPATCH_WITHOUT_BREAK
+#endif
+                process_cwd_notification(self->screen, code, (char *)buf + i, limit - i);
+                break;
+            }
+            /* fallthrough */
         case 99:
         case 777:
         case 1337:

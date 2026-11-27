@@ -10,6 +10,8 @@ from typing import Any
 
 from windows_dependencies import read_fields, runtime_components, verify_scan_inputs
 
+from windows.python_runtime import STDLIB_FIXES
+
 
 class WindowsDependenciesTest(unittest.TestCase):
     def test_native_python_backports_are_inventoried_by_verified_hash(self) -> None:
@@ -140,7 +142,7 @@ class WindowsDependenciesTest(unittest.TestCase):
             vex: dict[str, Any] = {
                 'statements': [
                     {'vulnerability': {'name': cve}, 'products': [{'@id': product}, {'@id': python_product}], 'status': 'fixed'}
-                    for cve in ('CVE-2025-15367', 'CVE-2026-12345', *python_security.FIXES)
+                    for cve in (*STDLIB_FIXES, *python_security.FIXES)
                 ]
             }
             verify_scan_inputs(archive, runtime, binaries, vex)

@@ -543,7 +543,9 @@ static void
 write_hyperlink(hyperlink_id_type hid, ANSIBuf *output) {
 #define W(c) output->buf[output->len++] = c
     const char *key = hid ? get_hyperlink_for_id(output->hyperlink_pool, hid, false) : NULL;
-    if (!key) hid = 0;
+    // keys are of the form id:url, are valid UTF-8 and id cannot contain a colon
+    const char *partition = key ? strchr(key, ':') : NULL;
+    if (!partition) hid = 0;
     output->active_hyperlink_id = hid;
     W(0x1b);
     W(']');
@@ -552,16 +554,16 @@ write_hyperlink(hyperlink_id_type hid, ANSIBuf *output) {
         W(';');
         W(';');
     } else {
-        const char *partition = strstr(key, ":");
         W(';');
         if (partition != key) {
             W('i');
             W('d');
             W('=');
-            while (key != partition) W(*(key++));
+            output->len += decode_utf8_string(key, (size_t)(partition - key), output->buf + output->len);
         }
         W(';');
-        while (*(++partition)) W(*partition);
+        const char *url = partition + 1;
+        output->len += decode_utf8_string(url, strlen(url), output->buf + output->len);
     }
     W(0x1b);
     W('\\');
@@ -1249,4 +1251,29 @@ copy_char(Line *self, PyObject *args) {
     }
     COPY_CELL(self, src, to, dest);
     Py_RETURN_NONE;
+}
+
+bool
+cells_have_multiline_chars(const CPUCell *cells, index_type count) {
+    // Returns true if any cell has scale > 1. Hot path, so treat the cells as an
+    // array of uint32 and AND with a mask selecting the bits of scale that are
+    // set only when scale >= 2. Blocks of BLOCK cells are a whole number of
+    // words with a repeating mask pattern, so the inner loop has contiguous
+    // loads the compiler vectorizes. The mask is derived from the CPUCell
+    // layout and is constant folded.
+    enum { WORDS_PER_CELL = sizeof(CPUCell) / sizeof(uint32_t), BLOCK = 8, BLOCK_WORDS = BLOCK * WORDS_PER_CELL };
+    static_assert(sizeof(CPUCell) % sizeof(uint32_t) == 0, "CPUCell size must be a multiple of 4");
+    const CPUCell mask_cell = {.scale = 6};
+    uint32_t cell_mask[WORDS_PER_CELL], mask[BLOCK_WORDS];
+    memcpy(cell_mask, &mask_cell, sizeof(cell_mask));
+    for (unsigned i = 0; i < BLOCK_WORDS; i++) mask[i] = cell_mask[i % WORDS_PER_CELL];
+    uint32_t acc = 0;
+    index_type x = 0;
+    for (; x + BLOCK <= count; x += BLOCK) {
+        uint32_t w[BLOCK_WORDS];
+        memcpy(w, cells + x, sizeof(w));
+        for (unsigned i = 0; i < BLOCK_WORDS; i++) acc |= w[i] & mask[i];
+    }
+    for (; x < count; x++) acc |= cells[x].scale & 6u;
+    return acc != 0;
 }

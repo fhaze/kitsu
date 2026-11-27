@@ -42,6 +42,10 @@ func joined(dir *os.File, name string) string {
 }
 
 func OpenDir(path string) (*os.File, error) {
+	return openDir(path, 0)
+}
+
+func openDir(path string, extraFlags uint32) (*os.File, error) {
 	full, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -59,7 +63,7 @@ func OpenDir(path string) (*os.File, error) {
 	}
 	handle, err := windows.CreateFile(wide, windows.GENERIC_READ,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|extraFlags, 0)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
@@ -70,6 +74,17 @@ func OpenDir(path string) (*os.File, error) {
 			err = &os.PathError{Op: "open", Path: path, Err: syscall.ENOTDIR}
 		}
 		return nil, err
+	}
+	if extraFlags&windows.FILE_FLAG_OPEN_REPARSE_POINT != 0 {
+		var info windows.ByHandleFileInformation
+		err = windows.GetFileInformationByHandle(handle, &info)
+		if err != nil || info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+			f.Close()
+			if err == nil {
+				err = syscall.ENOTDIR
+			}
+			return nil, &os.PathError{Op: "open", Path: path, Err: err}
+		}
 	}
 	return f, nil
 }
@@ -144,7 +159,14 @@ func CreateDirAt(parent *os.File, name string, permissions os.FileMode) (*os.Fil
 	if err := MkdirAt(parent, name, permissions); err != nil && !errors.Is(err, fs.ErrExist) {
 		return nil, err
 	}
-	return OpenDirAt(parent, name)
+	return openDir(joined(parent, name), windows.FILE_FLAG_OPEN_REPARSE_POINT)
+}
+
+func CreateExclusiveDirAt(parent *os.File, name string, permissions os.FileMode) (*os.File, error) {
+	if err := MkdirAt(parent, name, permissions); err != nil {
+		return nil, err
+	}
+	return openDir(joined(parent, name), windows.FILE_FLAG_OPEN_REPARSE_POINT)
 }
 
 func StatAt(dirFile *os.File, name string) (os.FileInfo, error) {

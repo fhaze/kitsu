@@ -81,6 +81,12 @@ KITTY_VCS_REV: str
 KITTY_VERSION_SUFFIX: str
 NO_CLOSE_REQUESTED: int
 IMPERATIVE_CLOSE_REQUESTED: int
+QUIT_CAUSE_NONE: int
+QUIT_CAUSE_ACTION: int
+QUIT_CAUSE_OS_REQUEST: int
+QUIT_CAUSE_LOGOUT: int
+QUIT_CAUSE_SIGNAL: int
+QUIT_CAUSE_FATAL_ERROR: int
 CLOSE_BEING_CONFIRMED: int
 ERROR_PREFIX: str
 GLSL_VERSION: int
@@ -300,6 +306,7 @@ CURSOR_HOLLOW: int
 NO_CURSOR_SHAPE: int
 CURSOR_UNDERLINE: int
 DECAWM: int
+EXTEND_CELL: int
 LNM: int
 ANIMATION_SAMPLE_WAIT: int
 BGIMAGE_PROGRAM: int
@@ -889,10 +896,13 @@ def locale_is_valid(name: str) -> bool:
 def mark_os_window_for_close(os_window_id: int, cr_type: int = 2) -> bool:
     pass
 
-def set_application_quit_request(cr_type: int = 2) -> None:
+def set_application_quit_request(cr_type: int = 2, quit_cause: int = -1) -> None:
     pass
 
 def current_application_quit_request() -> int:
+    pass
+
+def current_application_quit_cause() -> int:
     pass
 
 def application_logout_requested_at() -> float:
@@ -990,6 +1000,7 @@ def set_active_window(os_window_id: int, tab_id: int, window_id: int) -> None:
 
 def ring_bell(os_window_id: int = 0) -> None: ...
 def request_attention(os_window_id: int) -> None: ...
+def cancel_bell_attention(os_window_id: int) -> None: ...
 def concat_cells(cell_width: int, cell_height: int, is_32_bit: bool, cells: Tuple[bytes, ...], bgcolor: int = 0) -> bytes:
     pass
 
@@ -1029,6 +1040,9 @@ def detach_window(os_window_id: int, tab_id: int, window_id: int) -> None:
     pass
 
 def attach_window(os_window_id: int, tab_id: int, window_id: int) -> None:
+    pass
+
+def move_window_to_tab(os_window_id: int, src_tab_id: int, dest_tab_id: int, window_id: int) -> bool:
     pass
 
 def add_tab(os_window_id: int) -> int:
@@ -1140,6 +1154,25 @@ class Cursor:
     text_blink: bool
     shape: int
 
+    def reset_display_attrs(self) -> None:
+        pass
+
+class ImageLayerRect(TypedDict):
+    left: float
+    top: float
+    right: float
+    bottom: float
+
+class ImageLayer(TypedDict):
+    src_rect: ImageLayerRect
+    dest_rect: ImageLayerRect
+    group_count: int
+    z_index: int
+    image_id: int
+    ref_id: int
+    indexed_px_sz: int
+    is_unscaled: bool
+
 class Screen:
     color_profile: ColorProfile
     columns: int
@@ -1154,6 +1187,11 @@ class Screen:
     cursor_visible: bool
     scrolled_by: int
     pixel_scroll_offset_y: int
+    command_running: bool
+    command_started_at: int
+    command_finished_at: int
+    alternate_screen_entered_at: int
+    alternate_screen_exited_at: int
     cursor: Cursor
     disable_ligatures: int
     cursor_key_mode: bool
@@ -1180,6 +1218,8 @@ class Screen:
     def test_create_write_buffer(self) -> memoryview: ...
     def test_commit_write_buffer(self, inp: memoryview, output: memoryview) -> int: ...
     def test_parse_written_data(self, dump_callback: None = None) -> None: ...
+    def test_draw_overlay_line(self, text: str, xstart: int, ynum: int, preedit_cursor: int = -1) -> int: ...
+    def test_update_overlay_text(self, text: str, preedit_cursor: int = -1) -> int: ...
     def hyperlink_for_id(self, hyperlink_id: int) -> str: ...
     def erase_last_command(self) -> bool: ...
     def set_progress(self, state: int, percent: int) -> None: ...
@@ -1279,6 +1319,12 @@ class Screen:
     def clear_selection(self) -> None:
         pass
 
+    def start_selection(self, x: int, y: int, rectangle_select: bool = False, extend_mode: int = EXTEND_CELL, in_left_half_of_cell: bool = True) -> None:
+        pass
+
+    def update_selection(self, x: int, y: int, in_left_half_of_cell: bool = False, ended: bool = True, nearest: bool = False) -> None:
+        pass
+
     def set_mode(self, mode: int, private: bool = False) -> None:
         pass
 
@@ -1339,6 +1385,10 @@ class Screen:
     def change_pointer_shape(self, op: str, name: str) -> None: ...
     def bell(self) -> None: ...
     def pause_rendering(self, pause: bool = True, for_how_long_in_ms: int = 100) -> bool: ...
+    def rendered_scroll_state(self) -> Tuple[int, int, int]: ...
+    def scrollbar_geometry(self) -> Tuple[float, float]: ...
+    def has_scrollbar(self, is_hovering: bool) -> bool: ...
+    def update_graphics_layers(self) -> Tuple[ImageLayer, ...]: ...
 
 def set_tab_bar_render_data(os_window_id: int, screen: Screen, left: int, top: int, right: int, bottom: int) -> None:
     pass
@@ -1372,7 +1422,7 @@ def truncate_point_for_length(text: str, num_cells: int, start_pos: int = 0) -> 
 class ChildMonitor:
     def __init__(
         self,
-        death_notify: Callable[[int, bool, int], None],
+        death_notify: Callable[[int, bool, int, bool], None],
         dump_callback: Optional[Callable[[int, str, Any], None]],
         talk_fd: int = -1,
         listen_fd: int = -1,
@@ -1685,7 +1735,6 @@ def base64_decode_into(src: Union[str, ReadableBuffer], output: WriteableBuffer)
 def cocoa_recreate_global_menu() -> None: ...
 def cocoa_clear_global_shortcuts() -> None: ...
 def cocoa_get_machine_id() -> str: ...
-def update_pointer_shape(os_window_id: int) -> None: ...
 def is_layer_shell_supported() -> bool: ...
 def os_window_focus_counters() -> Dict[int, int]: ...
 def find_in_memoryview(buf: Union[bytes, memoryview, bytearray], chr: int) -> int: ...

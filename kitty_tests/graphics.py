@@ -134,11 +134,11 @@ def load_helpers(self):
     return s, g, pl, sl
 
 
-def put_helpers(self, cw, ch, cols=10, lines=5):
+def put_helpers(self, cw, ch, cols=10, lines=5, scrollback=5):
     iid = 0
 
     def create_screen():
-        s = self.create_screen(cols, lines, cell_width=cw, cell_height=ch)
+        s = self.create_screen(cols, lines, scrollback=scrollback, cell_width=cw, cell_height=ch)
         return s, 2 / s.columns, 2 / s.lines
 
     def put_cmd(
@@ -1089,6 +1089,32 @@ class TestGraphics(BaseTest):
         self.ae((s.cursor.x, s.cursor.y), (3, 2))
         rect_eq(layers(s)[0]['dest_rect'], -1, 1, -1 + 3 * dx, 1 - 3 * dy)
 
+    def test_image_put_taller_than_screen(self):
+        # Placing an image that overflows the bottom of the screen by more than
+        # the screen height must scroll the image (and the text above it) by
+        # the full amount so that the image ends at the cursor line.
+        cw, ch = 10, 20
+        s, dx, dy, put_image, put_ref, layers, rect_eq = put_helpers(self, cw, ch, scrollback=100)
+        s.draw('abc')
+        s.carriage_return(), s.linefeed()
+        rows = 4 * s.lines
+        self.ae(put_image(s, cw, ch, num_cols=1, num_lines=rows)[1], 'OK')
+        self.ae((s.cursor.x, s.cursor.y), (1, s.lines - 1))
+        rect_eq(layers(s)[0]['dest_rect'], -1, 1 + (rows - s.lines) * dy, -1 + dx, -1)
+        self.ae(str(s.historybuf.line(rows - s.lines)), 'abc')
+        self.ae(str(s.linebuf.line(s.lines - 1)), '')
+        # The text following the image is drawn below it
+        s.carriage_return(), s.linefeed()
+        s.draw('xyz')
+        self.ae(str(s.linebuf.line(s.lines - 1)), 'xyz')
+        rect_eq(layers(s)[0]['dest_rect'], -1, 1 + (rows - s.lines + 1) * dy, -1 + dx, -1 + dy)
+        # A huge number of rows must not hang
+        s.reset()
+        s.draw('abc')
+        self.ae(put_image(s, cw, ch, num_cols=1, num_lines=2**31)[1], 'OK')
+        self.ae(s.cursor.y, s.lines - 1)
+        self.ae(str(s.historybuf.line(0)), '')
+
     def test_graphics_put_with_pixel_offsets(self):
         cw, ch = 10, 20
         # Image 10x20 placed with 5px X and Y pixel offsets
@@ -1588,6 +1614,153 @@ class TestGraphics(BaseTest):
         s.reverse_index()
         s.update_only_line_graphics_data()
         self.ae(ref_rows(scroll_view(6, True)), before)
+
+    def test_image_layers_with_paused_rendering(self):
+        # While rendering is paused, images are drawn from a frozen copy of the
+        # graphics manager, so they must be positioned using the scroll state
+        # captured with the frozen text, not the live one, otherwise output
+        # received during the pause shifts them relative to the text.
+        cw, ch = 10, 20
+
+        def screen(pixel_scroll=False, lines=5, before=10, after=20):
+            s = self.create_screen(10, lines, scrollback=50, cell_width=cw, cell_height=ch, options={'pixel_scroll': pixel_scroll})
+            for i in range(before):
+                parse_bytes(s, f'row{i:03d}\r\n'.encode())
+            # The image is placed in the cell just after the text IMG
+            s.draw('IMG')
+            send_command(s, 'a=T,f=24,i=1,s=10,v=20,c=1,r=1,C=1,q=2', b'x' * 10 * 20 * 3)
+            s.carriage_return(), s.linefeed()
+            for i in range(after):
+                parse_bytes(s, f'row{i + before:03d}\r\n'.encode())
+            return s
+
+        def dy(s):
+            return 2 / s.lines
+
+        def live_layers(s):
+            offset = s.pixel_scroll_offset_y / ch if s.pixel_scroll_offset_y else 0
+            return s.grman.update_layers(s.scrolled_by, -1, 1, 2 / s.columns, dy(s), s.columns, s.lines, cw, ch, offset)
+
+        def image_rows(s, layers):
+            offset = s.rendered_scroll_state()[1] / ch
+            return [round((1 - r['dest_rect']['top']) / dy(s) - offset) for r in layers]
+
+        def text_row(s):
+            for y in range(s.lines):
+                if str(s.visual_line(y)).startswith('IMG'):
+                    return y
+
+        def assert_layers_close(a, b):
+            # Positions computed from different scroll states differ by float rounding
+            self.ae(len(a), len(b))
+            for x, y in zip(a, b):
+                self.ae({k: v for k, v in x.items() if k != 'dest_rect'}, {k: v for k, v in y.items() if k != 'dest_rect'})
+                for side in ('left', 'top', 'right', 'bottom'):
+                    self.assertAlmostEqual(x['dest_rect'][side], y['dest_rect'][side], places=5)
+
+        def assert_aligned(s, layers, msg=''):
+            row = text_row(s)
+            self.assertIsNotNone(row, msg)
+            self.ae(image_rows(s, layers), [row], msg)
+
+        # Not paused: matches positioning with the live scroll state
+        for scrolled_by in (0, 5, 16, 17, 19, 21, 22):
+            s = screen()
+            s.scroll(scrolled_by, True)
+            self.ae(s.scrolled_by, scrolled_by)
+            layers = s.update_graphics_layers()
+            self.ae(layers, live_layers(s))
+            if 17 <= scrolled_by <= 21:
+                assert_aligned(s, layers, f'not paused, scrolled by {scrolled_by}')
+            else:
+                self.ae(layers, ())  # image is not visible
+
+        # Output arriving while paused and scrolled back
+        for num_new in (1, 3, 4, 10):
+            with self.subTest(num_new=num_new):
+                s = screen()
+                s.scroll(19, True)
+                before = s.update_graphics_layers()
+                self.ae(len(before), 1)
+                assert_aligned(s, before, 'before pause')
+                parse_bytes(s, b'\x1b[?2026h')
+                for i in range(num_new):
+                    parse_bytes(s, f'new{i}\r\n'.encode())
+                self.ae(s.scrolled_by, 19 + num_new)
+                during = s.update_graphics_layers()
+                self.ae(during, before)
+                assert_aligned(s, during, 'during pause')
+                parse_bytes(s, b'\x1b[?2026l')
+                after = s.update_graphics_layers()
+                self.ae(after, live_layers(s))
+                assert_aligned(s, after, 'after pause')
+                assert_layers_close(after, before)  # the view is anchored on the same content
+
+        # Several synchronized updates before the end of the pause
+        s = screen()
+        s.scroll(19, True)
+        before = s.update_graphics_layers()
+        parse_bytes(s, b'\x1b[?2026hnew\r\n\x1b[?2026l\x1b[?2026hmore\r\n')
+        self.ae(s.scrolled_by, 21)
+        assert_layers_close(s.update_graphics_layers(), before)  # the second pause re-snapshots from a different scroll state
+        self.assertTrue(s.pause_rendering(False))
+        assert_aligned(s, s.update_graphics_layers(), 'after consecutive updates')
+
+        # Pixel scrolling: the fractional line offset is also frozen
+        for position in (18.5, 19.25):
+            with self.subTest(position=position):
+                s = screen(pixel_scroll=True)
+                s.scroll_to_absolute(position)
+                self.assertNotEqual(s.pixel_scroll_offset_y, 0)
+                before = s.update_graphics_layers()
+                self.ae(before, live_layers(s))
+                self.ae(len(before), 1)
+                parse_bytes(s, b'\x1b[?2026h')
+                for i in range(3):
+                    parse_bytes(s, f'new{i}\r\n'.encode())
+                self.ae(s.update_graphics_layers(), before)
+                parse_bytes(s, b'\x1b[?2026l')
+                after = s.update_graphics_layers()
+                self.ae(after, live_layers(s))
+                assert_layers_close(after, before)  # the view is anchored on the same content
+
+        # Paused at the bottom: output scrolls the live image up, the frozen one stays
+        s = screen(before=2, after=1)
+        self.ae(s.scrolled_by, 0)
+        before = s.update_graphics_layers()
+        assert_aligned(s, before, 'at bottom')
+        parse_bytes(s, b'\x1b[?2026h')
+        for i in range(2):
+            parse_bytes(s, f'new{i}\r\n'.encode())
+        self.ae(s.scrolled_by, 0)
+        self.ae(s.update_graphics_layers(), before)
+        self.assertNotEqual(live_layers(s), before)
+        parse_bytes(s, b'\x1b[?2026l')
+        after = s.update_graphics_layers()
+        self.ae(image_rows(s, after), [r - 2 for r in image_rows(s, before)])
+        assert_aligned(s, after, 'at bottom after pause')
+
+        # Filling from the scrollback during the pause moves the live view to the bottom
+        s = screen(after=4)
+        s.scroll(1, True)
+        self.ae(s.scrolled_by, 1)
+        before = s.update_graphics_layers()
+        self.ae(len(before), 1)
+        parse_bytes(s, b'\x1b[?2026h\x1b[+T')
+        self.ae(s.scrolled_by, 0)
+        self.ae(s.update_graphics_layers(), before)
+        self.assertTrue(s.pause_rendering(False))
+        self.ae(s.update_graphics_layers(), live_layers(s))
+
+        # Images deleted during the pause remain in the frozen frame
+        s = screen()
+        s.scroll(19, True)
+        before = s.update_graphics_layers()
+        parse_bytes(s, b'\x1b[?2026hnew\r\n')
+        send_command(s, 'a=d,d=I,i=1,q=2')
+        self.ae(s.update_graphics_layers(), before)
+        parse_bytes(s, b'\x1b[?2026l')
+        self.ae(s.update_graphics_layers(), ())
 
     def test_unicode_placeholders_history_fill(self):
         # Lines popped back from the history (CSI + T, or enlarging the window with
@@ -2403,13 +2576,13 @@ class TestGraphics(BaseTest):
             cache = ImageRenderCacheForTesting(cache_path)
             cache.max_entries = 8
             original_stat = os.stat
-            metadata = dict(st_dev=0, st_ino=0, st_size=5, st_mtime_ns=0)
+            metadata = dict(st_dev=0, st_ino=0, st_size=5, st_mtime_ns=0, st_mode=original_stat(src).st_mode)
 
-            def stat(path, *args, **kwargs):
+            def mock_stat(path, *args, **kwargs):
                 return SimpleNamespace(**metadata) if path == src else original_stat(path, *args, **kwargs)
 
             with (
-                patch('kitty.render_cache.os.stat', side_effect=stat),
+                patch('kitty.render_cache.os.stat', side_effect=mock_stat),
                 patch.object(cache, 'render_image', side_effect=lambda src, dest: Path(dest).write_bytes(b'rgba')) as render,
             ):
                 outputs = {cache.render(src)}
@@ -2458,3 +2631,15 @@ class TestGraphics(BaseTest):
                 self.ae((width, height), (w, h))
                 f.seek(8)
                 self.ae(rgba_data, f.read())
+
+            # non-regular files must be rejected rather than streamed into the converter
+            num = irc.num_of_renders
+            fifo = os.path.join(cache_path, 'fifo')
+            os.mkfifo(fifo)
+            for bad in (os.devnull, fifo, cache_path):
+                with self.assertRaises(ValueError, msg=bad):
+                    irc.render(bad)
+                with self.assertRaises(ValueError, msg=bad):
+                    irc.render_image(bad, os.path.join(cache_path, 'out'))
+                self.assertFalse(os.path.exists(os.path.join(cache_path, 'out')))
+            self.ae(irc.num_of_renders, num)

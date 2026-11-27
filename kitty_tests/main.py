@@ -22,21 +22,11 @@ from typing import (
     Optional,
 )
 
+from kitty.constants import list_kitty_resources
+
 from . import is_ci
 
 PARALLEL_THRESHOLD = 20
-
-
-def contents(package: str) -> Iterator[str]:
-    try:
-        if sys.version_info[:2] < (3, 10):
-            raise ImportError("importlib.resources.files() doesn't work with frozen builds on python 3.9")
-        from importlib.resources import files
-    except ImportError:
-        from importlib.resources import contents
-
-        return iter(contents(package))
-    return (path.name for path in files(package).iterdir())
 
 
 def itertests(suite: unittest.TestSuite) -> Generator[unittest.TestCase, None, None]:
@@ -59,7 +49,7 @@ def find_all_tests(package: str = '', excludes: Sequence[str] = ('main', 'gr')) 
     if sys.platform == 'win32':
         # these drive POSIX shells through a pty
         excludes = tuple(excludes) + ('shell_integration', 'ssh')
-    for x in sorted(contents(package)):
+    for x in sorted(list_kitty_resources(package)):
         name, ext = os.path.splitext(x)
         if ext in ('.py', '.pyc') and name not in excludes:
             m = importlib.import_module(package + '.' + x.partition('.')[0])
