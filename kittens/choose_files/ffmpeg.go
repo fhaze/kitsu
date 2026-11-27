@@ -26,8 +26,7 @@ const FFMPEG_METADATA_KEY = "ffmpeg-metadata.json"
 
 type ffmpeg_renderer int
 
-func ffmpeg_thumbnail(path, tempath string, wg *sync.WaitGroup) (err error) {
-	defer wg.Done()
+func ffmpeg_thumbnail(path, tempath string) (err error) {
 	cmd := ffmpeg_thumbnail_cmd(path, tempath)
 	cmd.Stdin = nil
 	utils.DetachCommand(cmd)
@@ -101,9 +100,8 @@ func (c ffmpeg_renderer) Render(path string) (m map[string][]byte, mi metadata, 
 	defer func() { _ = os.Remove(tempfile.Name()) }()
 	var metadata FFMpegMetadata
 	var metadata_error, thumbnail_error error
-	wg.Add(2)
-	go func() { metadata, metadata_error = ffmpeg_metadata(path, &wg) }()
-	go func() { thumbnail_error = ffmpeg_thumbnail(path, tempfile.Name(), &wg) }()
+	wg.Go(func() { metadata, metadata_error = ffmpeg_metadata(path) })
+	wg.Go(func() { thumbnail_error = ffmpeg_thumbnail(path, tempfile.Name()) })
 	wg.Wait()
 	if metadata_error != nil {
 		return nil, mi, nil, metadata_error

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -12,6 +13,9 @@ import (
 var _ = fmt.Print
 
 func TestFileMetadataPreviewSanitizesNames(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filenames cannot contain the control characters in this test")
+	}
 	dir := t.TempDir()
 	evil := "x\x1b]52;c;aGFja2Vk\x07\ny"
 	path := filepath.Join(dir, evil)
