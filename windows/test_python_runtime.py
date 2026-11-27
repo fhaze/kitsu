@@ -3,10 +3,13 @@ import sysconfig
 import tempfile
 import unittest
 from pathlib import Path
+from textwrap import dedent
+from types import SimpleNamespace
 from unittest.mock import patch
 from zipfile import ZipFile
 
 from python_runtime import (
+    ARCHIVE_CLI_SAFE_PATH,
     PATCHED_STDLIB_FILES,
     POP_COMMAND,
     TAR_DATA_DESTINATION,
@@ -113,6 +116,21 @@ class PythonRuntimePatchTest(unittest.TestCase):
             (stdlib / 'poplib.py').write_text('changed upstream source', encoding='utf-8')
             with self.assertRaisesRegex(ValueError, 'source changed'):
                 harden_python(stdlib)
+
+    def test_archive_cli_safe_path(self) -> None:
+        cwd, stdlib = 'C:/work', 'C:/kitsu/lib/python3.14'
+        initial_path = [cwd, '', stdlib, cwd]
+        for safe_path in (False, True):
+            with self.subTest(safe_path=safe_path):
+                # MSYS2 Python omits sys._path0 even when -m adds the cwd.
+                sys = SimpleNamespace(
+                    flags=SimpleNamespace(safe_path=safe_path),
+                    _stdlib_dir=stdlib,
+                    path=initial_path.copy(),
+                )
+                os = SimpleNamespace(getcwd=lambda: cwd)
+                exec(dedent(ARCHIVE_CLI_SAFE_PATH), {'sys': sys, 'os': os})
+                self.assertEqual(sys.path, initial_path if safe_path else [stdlib])
 
     def test_zip_must_match_the_tested_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

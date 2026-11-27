@@ -20,9 +20,13 @@ ARCHIVE_CLI_IMPORTS = {
 }
 ARCHIVE_CLI_SAFE_PATH = """\
     # Prevent files extracted by the CLI from shadowing stdlib modules.
-    path0 = getattr(sys, '_path0', None)
-    if path0 is not None and path0 != sys._stdlib_dir:
-        sys.path[:] = [path for path in sys.path if path != path0]
+    if not sys.flags.safe_path:
+        path0 = getattr(sys, '_path0', None)
+        if path0 is None:
+            # MSYS2 3.14.10 does not expose _path0. For -m it adds the cwd.
+            path0 = os.getcwd()
+        if path0 != sys._stdlib_dir:
+            sys.path[:] = [path for path in sys.path if path not in (path0, '')]
 """
 
 IMAP_STARTTLS = """\
