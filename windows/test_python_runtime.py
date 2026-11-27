@@ -7,6 +7,7 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 from python_runtime import (
+    PATCHED_STDLIB_FILES,
     POP_COMMAND,
     TAR_DATA_DESTINATION,
     TAR_DESTINATION,
@@ -30,8 +31,12 @@ class PythonRuntimePatchTest(unittest.TestCase):
         native_verifier.start()
         self.addCleanup(native_verifier.stop)
 
-    def copy_tarfile(self, directory: Path) -> None:
-        shutil.copy2(Path(sysconfig.get_path('stdlib')) / 'tarfile.py', directory / 'tarfile.py')
+    def copy_runtime_sources(self, directory: Path) -> None:
+        original = Path(sysconfig.get_path('stdlib'))
+        for name in PATCHED_STDLIB_FILES:
+            destination = directory / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(original / name, destination)
 
     def test_supported_cleanup_signatures(self) -> None:
         for signature in TEMP_CLEANUP_SIGNATURES:
@@ -39,7 +44,7 @@ class PythonRuntimePatchTest(unittest.TestCase):
                 package = Path(tmp) / 'kitty'
                 original = Path(tmp) / 'python3.14'
                 original.mkdir()
-                self.copy_tarfile(original)
+                self.copy_runtime_sources(original)
                 (original / 'poplib.py').write_text(POP_COMMAND, encoding='utf-8')
                 cleanup = '    @classmethod\n    def _cleanup(cls, name):\n        cls._rmtree(name)\n'
                 source = 'import shutil as _shutil\n\nclass TemporaryDirectory:\n' + signature + '        pass\n\n' + cleanup
@@ -86,13 +91,12 @@ class PythonRuntimePatchTest(unittest.TestCase):
             stdlib.mkdir(parents=True)
             (package / 'bin').mkdir()
             (package / 'bin/kitten.exe').write_bytes(b'helper')
-            for name in ('poplib.py', 'tempfile.py', 'tarfile.py'):
-                shutil.copy2(original / name, stdlib / name)
+            self.copy_runtime_sources(stdlib)
             with self.assertRaisesRegex(ValueError, 'backport was not verified'):
                 verify_python(package, original)
             harden_python(stdlib)
             verify_python(package, original)
-            for name in ('poplib.py', 'tempfile.py', 'tarfile.py'):
+            for name in PATCHED_STDLIB_FILES:
                 with self.subTest(name=name):
                     patched = (stdlib / name).read_bytes()
                     (stdlib / name).write_bytes(patched + b'\n')
@@ -120,15 +124,14 @@ class PythonRuntimePatchTest(unittest.TestCase):
             extensions.mkdir()
             for path in (
                 package / 'bin/kitten.exe',
-                stdlib / 'poplib.py',
-                stdlib / 'tempfile.py',
-                stdlib / 'tarfile.py',
+                *(stdlib / name for name in PATCHED_STDLIB_FILES),
                 package / 'bin/libpython3.14.dll',
                 extensions / '_ssl.test.pyd',
                 extensions / '_socket.test.pyd',
                 extensions / '_hashlib.test.pyd',
                 extensions / '_security-build.json',
             ):
+                path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b'tested')
             archive = Path(tmp) / 'kitty.zip'
             with ZipFile(archive, 'w') as z:

@@ -110,6 +110,7 @@ def runtime_components(package: Path, msys_root: Path, package_prefix: str) -> l
 
 def verify_scan_inputs(archive: Path, runtime: dict[str, Any], binaries: dict[str, Any], vex: dict[str, Any]) -> None:
     from windows import python_security
+    from windows.python_runtime import STDLIB_FIXES
 
     with archive.open('rb') as f:
         version = hashlib.file_digest(f, 'sha256').hexdigest()
@@ -119,7 +120,7 @@ def verify_scan_inputs(archive: Path, runtime: dict[str, Any], binaries: dict[st
         raise ValueError('The runtime inventory does not describe this ZIP')
     if binaries['source']['name'] != 'kitsu-windows' or binaries['source']['version'] != version:
         raise ValueError('The binary inventory does not describe this ZIP')
-    if {s['vulnerability']['name'] for s in vex['statements']} != {'CVE-2025-15367', 'CVE-2026-12345', *python_security.FIXES}:
+    if {s['vulnerability']['name'] for s in vex['statements']} != {*STDLIB_FIXES, *python_security.FIXES}:
         raise ValueError('Unexpected Python security attestations')
     python = next(c for c in runtime['components'] if c['name'] == 'python')
     vendor_version = re.fullmatch(r'3\.14\.(\d+)', python['version'])
@@ -157,7 +158,7 @@ def main() -> None:
         verify_scan_inputs(archive, *(json.loads(p.read_text(encoding='utf-8')) for p in (runtime, binaries, vex)))
         return
     package, output, archive = map(Path, sys.argv[1:])
-    from windows.python_runtime import sha256, verify_archive, verify_python
+    from windows.python_runtime import STDLIB_FIXES, sha256, verify_archive, verify_python
     from windows.python_security import FIXES
 
     verify_python(package, Path(sysconfig.get_path('stdlib')))
@@ -187,8 +188,7 @@ def main() -> None:
         encoding='utf-8',
     )
     fixes = {
-        'CVE-2025-15367': 'Backported CPython POP3 control-character validation: https://github.com/python/cpython/commit/b234a2b67539f787e191d2ef19a7cbdce32874e7',
-        'CVE-2026-12345': 'Replaced Windows TemporaryDirectory cleanup with kitten __remove_tree__, using Go >=1.26 handle-relative os.RemoveAll: https://go.dev/cl/661575',
+        **STDLIB_FIXES,
         **{cve: f'Compiled and regression-tested the CPython 3.14 native security backport: {url}' for cve, url in FIXES.items()},
     }
     vex = {
